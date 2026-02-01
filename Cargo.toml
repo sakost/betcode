@@ -1,0 +1,8 @@
+[package]
+name = "betcode"
+version = "0.1.0"
+edition = "2024"
+authors = ["Konstantin Sazhenov <me@sakost.dev>"]
+license = "Apache-2.0"
+
+[dependencies]
