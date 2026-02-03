@@ -1,0 +1,123 @@
+// BetCode Version Service
+// Version negotiation and capability discovery.
+//
+// Version: v1
+// See: docs/architecture/PROTOCOL_L2.md
+
+syntax = "proto3";
+
+package betcode.v1;
+
+// VersionService provides version discovery and capability negotiation.
+service VersionService {
+  rpc GetVersion(GetVersionRequest) returns (GetVersionResponse);
+  rpc NegotiateCapabilities(NegotiateRequest) returns (NegotiateResponse);
+}
+
+// =============================================================================
+// Version Discovery
+// =============================================================================
+
+message GetVersionRequest {}
+
+message GetVersionResponse {
+  string api_version = 1;
+  string server_version = 2;
+  repeated string features = 3;
+  ClaudeCodeInfo claude_code = 4;
+  VersionConstraints constraints = 5;
+}
+
+message ClaudeCodeInfo {
+  string version = 1;
+  string api_version = 2;
+  CompatibilityLevel compatibility = 3;
+}
+
+enum CompatibilityLevel {
+  COMPATIBILITY_UNKNOWN = 0;
+  FULLY_COMPATIBLE = 1;
+  LIKELY_COMPATIBLE = 2;
+  DEGRADED = 3;
+  INCOMPATIBLE = 4;
+}
+
+message VersionConstraints {
+  string min_client_version = 1;
+  string recommended_client = 2;
+  repeated string deprecated_features = 3;
+  map<string, string> feature_replacements = 4;
+}
+
+// =============================================================================
+// Capability Negotiation
+// =============================================================================
+
+message NegotiateRequest {
+  string client_version = 1;
+  string client_type = 2;
+  repeated string requested_features = 3;
+  map<string, string> client_capabilities = 4;
+}
+
+message NegotiateResponse {
+  bool accepted = 1;
+  string rejection_reason = 2;
+  string upgrade_url = 3;
+  repeated string granted_features = 4;
+  repeated string warnings = 5;
+  CapabilitySet capabilities = 6;
+}
+
+message CapabilitySet {
+  bool streaming_supported = 1;
+  bool compression_supported = 2;
+  uint32 max_message_size = 3;
+  repeated string available_tools = 4;
+  repeated string available_models = 5;
+  bool subagents_enabled = 6;
+  bool worktrees_enabled = 7;
+  map<string, bool> feature_flags = 8;
+}
+
+// =============================================================================
+// Feature Flags
+// =============================================================================
+
+message FeatureFlag {
+  string name = 1;
+  string description = 2;
+  FeatureStage stage = 3;
+  string introduced_version = 4;
+  string min_client_version = 5;
+  string deprecated_version = 6;
+  string removal_version = 7;
+}
+
+enum FeatureStage {
+  FEATURE_STAGE_UNKNOWN = 0;
+  ALPHA = 1;
+  BETA = 2;
+  STABLE = 3;
+  DEPRECATED = 4;
+  REMOVED = 5;
+}
+
+// =============================================================================
+// Deprecation Warnings
+// =============================================================================
+
+message DeprecationWarning {
+  string feature = 1;
+  string replacement = 2;
+  string removal_version = 3;
+  string migration_url = 4;
+  Severity severity = 5;
+}
+
+enum Severity {
+  SEVERITY_UNKNOWN = 0;
+  INFO = 1;
+  WARNING = 2;
+  URGENT = 3;
+}

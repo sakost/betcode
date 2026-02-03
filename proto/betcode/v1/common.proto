@@ -1,0 +1,78 @@
+// BetCode Common Types
+// Shared message types used across services.
+//
+// Version: v1
+
+syntax = "proto3";
+
+package betcode.v1;
+
+// =============================================================================
+// Permission Types
+// =============================================================================
+
+// PermissionDecision represents possible permission decisions.
+enum PermissionDecision {
+  PERMISSION_DECISION_UNSPECIFIED = 0;
+  PERMISSION_DECISION_ALLOW_ONCE = 1;
+  PERMISSION_DECISION_ALLOW_SESSION = 2;
+  PERMISSION_DECISION_DENY = 3;
+}
+
+// =============================================================================
+// Todo Types
+// =============================================================================
+
+// TodoStatus represents the state of a todo item.
+enum TodoStatus {
+  TODO_STATUS_UNSPECIFIED = 0;
+  TODO_STATUS_PENDING = 1;
+  TODO_STATUS_IN_PROGRESS = 2;
+  TODO_STATUS_COMPLETED = 3;
+}
+
+// TodoItem represents a single task in Claude's todo list.
+message TodoItem {
+  string id = 1;
+  string subject = 2;
+  string description = 3;
+  string active_form = 4;
+  TodoStatus status = 5;
+}
+
+// =============================================================================
+// Agent Status Types
+// =============================================================================
+
+// AgentStatus represents the agent's current state.
+enum AgentStatus {
+  AGENT_STATUS_UNSPECIFIED = 0;
+  AGENT_STATUS_THINKING = 1;
+  AGENT_STATUS_EXECUTING_TOOL = 2;
+  AGENT_STATUS_WAITING_FOR_USER = 3;
+  AGENT_STATUS_IDLE = 4;
+  AGENT_STATUS_COMPACTING = 5;
+  AGENT_STATUS_ERROR = 6;
+}
+
+// =============================================================================
+// Question Types
+// =============================================================================
+
+// QuestionOption represents one possible answer to a UserQuestion.
+message QuestionOption {
+  string value = 1;
+  string label = 2;
+  string description = 3;
+}
+
+// =============================================================================
+// Attachment Types
+// =============================================================================
+
+// Attachment represents a file attached to a message.
+message Attachment {
+  string filename = 1;
+  string mime_type = 2;
+  bytes data = 3;
+}

@@ -1,0 +1,62 @@
+// BetCode Health Service
+// Health checking and status monitoring.
+//
+// Version: v1
+// See: docs/architecture/PROTOCOL_L2.md
+
+syntax = "proto3";
+
+package betcode.v1;
+
+import "google/protobuf/timestamp.proto";
+
+// Standard gRPC health check (compatible with grpc.health.v1).
+service Health {
+  rpc Check(HealthCheckRequest) returns (HealthCheckResponse);
+  rpc Watch(HealthCheckRequest) returns (stream HealthCheckResponse);
+}
+
+// BetCode-specific health details.
+service BetCodeHealth {
+  rpc GetHealthDetails(HealthDetailsRequest) returns (HealthDetailsResponse);
+}
+
+// =============================================================================
+// Health Check Messages
+// =============================================================================
+
+message HealthCheckRequest {
+  string service = 1;
+}
+
+message HealthCheckResponse {
+  ServingStatus status = 1;
+}
+
+enum ServingStatus {
+  UNKNOWN = 0;
+  SERVING = 1;
+  NOT_SERVING = 2;
+  SERVICE_UNKNOWN = 3;
+}
+
+// =============================================================================
+// Detailed Health Messages
+// =============================================================================
+
+message HealthDetailsRequest {}
+
+message HealthDetailsResponse {
+  ServingStatus overall_status = 1;
+  repeated ComponentHealth components = 2;
+  map<string, string> metadata = 3;
+  bool degraded = 4;
+  string degraded_reason = 5;
+}
+
+message ComponentHealth {
+  string name = 1;
+  ServingStatus status = 2;
+  string message = 3;
+  google.protobuf.Timestamp last_check = 4;
+}

@@ -1,12 +1,21 @@
-//! Generated protobuf code for BetCode gRPC API.
+//! BetCode Protocol Buffers
 //!
-//! This crate contains the generated Rust code from the proto definitions
-//! in `proto/betcode/v1/`. The code is generated at build time by tonic-build.
+//! Generated protobuf code for the BetCode gRPC API.
+//!
+//! This crate contains:
+//! - `AgentService` for conversation management
+//! - `VersionService` for capability negotiation
+//! - `ConfigService` for settings management
+//! - `Health` services for health checking
 
-// Include generated code when proto files exist
-// tonic::include_proto!("betcode.v1");
+#![allow(clippy::derive_partial_eq_without_eq)]
 
-/// Placeholder until proto files are created in Sprint 1.1
-pub fn proto_version() -> &'static str {
-    "0.1.0"
+/// BetCode v1 API definitions.
+///
+/// All generated types and services are included here.
+pub mod v1 {
+    tonic::include_proto!("betcode.v1");
 }
+
+// Re-export v1 as the default API version for convenience
+pub use v1::*;

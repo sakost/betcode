@@ -1,0 +1,122 @@
+// BetCode Config Service
+// Settings and configuration management.
+//
+// Version: v1
+// See: docs/architecture/CONFIG_DAEMON.md
+
+syntax = "proto3";
+
+package betcode.v1;
+
+// ConfigService provides configuration management.
+service ConfigService {
+  rpc GetSettings(GetSettingsRequest) returns (Settings);
+  rpc UpdateSettings(UpdateSettingsRequest) returns (Settings);
+  rpc ListMcpServers(ListMcpServersRequest) returns (ListMcpServersResponse);
+  rpc GetPermissions(GetPermissionsRequest) returns (PermissionRules);
+}
+
+// =============================================================================
+// Settings Messages
+// =============================================================================
+
+message GetSettingsRequest {
+  string scope = 1;
+}
+
+message Settings {
+  DaemonSettings daemon = 1;
+  SessionSettings sessions = 2;
+  PermissionSettings permissions = 3;
+  map<string, bool> feature_flags = 4;
+}
+
+message DaemonSettings {
+  uint32 max_subprocesses = 1;
+  string socket_path = 2;
+  uint32 port = 3;
+  string database_path = 4;
+  string log_level = 5;
+  uint32 max_payload_bytes = 6;
+}
+
+message SessionSettings {
+  string default_model = 1;
+  bool auto_compact = 2;
+  uint32 auto_compact_threshold = 3;
+  uint32 max_messages_per_session = 4;
+}
+
+message PermissionSettings {
+  uint32 connected_timeout_secs = 1;
+  uint32 disconnected_timeout_secs = 2;
+  bool enable_auto_approve = 3;
+  repeated string auto_approve_directories = 4;
+  bool activity_refresh_enabled = 5;
+}
+
+message UpdateSettingsRequest {
+  Settings settings = 1;
+  string scope = 2;
+}
+
+// =============================================================================
+// MCP Server Messages
+// =============================================================================
+
+message ListMcpServersRequest {
+  string status_filter = 1;
+}
+
+message ListMcpServersResponse {
+  repeated McpServerInfo servers = 1;
+}
+
+message McpServerInfo {
+  string name = 1;
+  string server_type = 2;
+  string endpoint = 3;
+  McpServerStatus status = 4;
+  repeated string tools = 5;
+  string error_message = 6;
+}
+
+enum McpServerStatus {
+  MCP_SERVER_STATUS_UNSPECIFIED = 0;
+  MCP_SERVER_STATUS_RUNNING = 1;
+  MCP_SERVER_STATUS_STOPPED = 2;
+  MCP_SERVER_STATUS_STARTING = 3;
+  MCP_SERVER_STATUS_ERROR = 4;
+}
+
+// =============================================================================
+// Permission Messages
+// =============================================================================
+
+message GetPermissionsRequest {
+  string session_id = 1;
+}
+
+message PermissionRules {
+  repeated PermissionRule rules = 1;
+  repeated string denied_tools = 2;
+  repeated string require_approval = 3;
+}
+
+message PermissionRule {
+  string id = 1;
+  string tool_pattern = 2;
+  string path_pattern = 3;
+  PermissionAction action = 4;
+  uint32 priority = 5;
+  string description = 6;
+  string source = 7;
+}
+
+enum PermissionAction {
+  PERMISSION_ACTION_UNSPECIFIED = 0;
+  PERMISSION_ACTION_ALLOW = 1;
+  PERMISSION_ACTION_DENY = 2;
+  PERMISSION_ACTION_ASK = 3;
+  PERMISSION_ACTION_ASK_SESSION = 4;
+}
