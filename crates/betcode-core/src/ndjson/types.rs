@@ -48,8 +48,14 @@ pub struct AssistantMessage {
 /// Content block in assistant message.
 #[derive(Debug, Clone, PartialEq)]
 pub enum ContentBlock {
-    Text { text: String },
-    ToolUse { id: String, name: String, input: Value },
+    Text {
+        text: String,
+    },
+    ToolUse {
+        id: String,
+        name: String,
+        input: Value,
+    },
 }
 
 /// Reason the assistant stopped.

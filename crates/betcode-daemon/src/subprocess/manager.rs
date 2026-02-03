@@ -1,0 +1,307 @@
+//! Claude Code subprocess lifecycle manager.
+//!
+//! Manages spawning, monitoring, and graceful shutdown of Claude CLI processes.
+
+use std::collections::HashMap;
+use std::path::PathBuf;
+use std::process::Stdio;
+use std::sync::Arc;
+use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio::process::{Child, Command};
+use tokio::sync::{mpsc, RwLock};
+use tracing::{debug, error, info, warn};
+
+/// Configuration for subprocess spawning.
+#[derive(Debug, Clone)]
+pub struct SpawnConfig {
+    /// Working directory for the Claude process.
+    pub working_directory: PathBuf,
+    /// Initial prompt (for headless mode).
+    pub prompt: Option<String>,
+    /// Session ID to resume (if any).
+    pub resume_session: Option<String>,
+    /// Model to use.
+    pub model: Option<String>,
+    /// Maximum subprocess pool size.
+    pub max_processes: usize,
+}
+
+impl Default for SpawnConfig {
+    fn default() -> Self {
+        Self {
+            working_directory: std::env::current_dir().unwrap_or_default(),
+            prompt: None,
+            resume_session: None,
+            model: None,
+            max_processes: 5,
+        }
+    }
+}
+
+/// Handle to a running Claude subprocess.
+#[derive(Debug)]
+pub struct ProcessHandle {
+    /// Unique identifier for this process.
+    pub id: String,
+    /// Session ID from Claude's system.init message.
+    pub session_id: Option<String>,
+    /// Sender for stdin commands.
+    pub stdin_tx: mpsc::Sender<String>,
+    /// Working directory.
+    pub working_directory: PathBuf,
+}
+
+/// Subprocess manager for Claude Code processes.
+pub struct SubprocessManager {
+    /// Active processes keyed by process ID.
+    processes: Arc<RwLock<HashMap<String, ProcessState>>>,
+    /// Maximum concurrent processes.
+    max_processes: usize,
+}
+
+struct ProcessState {
+    child: Child,
+    session_id: Option<String>,
+    stdin_tx: mpsc::Sender<String>,
+    #[allow(dead_code)] // Used for future process info queries
+    working_directory: PathBuf,
+}
+
+impl SubprocessManager {
+    /// Create a new subprocess manager.
+    pub fn new(max_processes: usize) -> Self {
+        Self {
+            processes: Arc::new(RwLock::new(HashMap::new())),
+            max_processes,
+        }
+    }
+
+    /// Spawn a new Claude subprocess.
+    pub async fn spawn(
+        &self,
+        config: SpawnConfig,
+        stdout_tx: mpsc::Sender<String>,
+    ) -> Result<ProcessHandle, SubprocessError> {
+        // Check pool capacity
+        let processes = self.processes.read().await;
+        if processes.len() >= self.max_processes {
+            return Err(SubprocessError::PoolExhausted {
+                current: processes.len(),
+                max: self.max_processes,
+            });
+        }
+        drop(processes);
+
+        // Build command
+        let mut cmd = Command::new("claude");
+        cmd.current_dir(&config.working_directory)
+            .arg("--output-format")
+            .arg("stream-json")
+            .arg("--input-format")
+            .arg("stream-json")
+            .arg("--permission-prompt-tool")
+            .arg("stdio")
+            .arg("--include-partial-messages")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+
+        if let Some(ref prompt) = config.prompt {
+            cmd.arg("-p").arg(prompt);
+        }
+
+        if let Some(ref session) = config.resume_session {
+            cmd.arg("--resume").arg(session);
+        }
+
+        if let Some(ref model) = config.model {
+            cmd.arg("--model").arg(model);
+        }
+
+        // Spawn process
+        let mut child = cmd.spawn().map_err(|e| SubprocessError::SpawnFailed {
+            reason: e.to_string(),
+        })?;
+
+        let process_id = uuid::Uuid::new_v4().to_string();
+
+        // Set up stdin channel
+        let stdin = child.stdin.take().ok_or(SubprocessError::SpawnFailed {
+            reason: "Failed to capture stdin".to_string(),
+        })?;
+
+        let (stdin_tx, mut stdin_rx) = mpsc::channel::<String>(32);
+
+        // Spawn stdin writer task
+        tokio::spawn(async move {
+            let mut stdin = stdin;
+            while let Some(line) = stdin_rx.recv().await {
+                if let Err(e) = stdin.write_all(line.as_bytes()).await {
+                    error!("Failed to write to stdin: {}", e);
+                    break;
+                }
+                if let Err(e) = stdin.write_all(b"\n").await {
+                    error!("Failed to write newline: {}", e);
+                    break;
+                }
+                if let Err(e) = stdin.flush().await {
+                    error!("Failed to flush stdin: {}", e);
+                    break;
+                }
+            }
+        });
+
+        // Set up stdout reader
+        let stdout = child.stdout.take().ok_or(SubprocessError::SpawnFailed {
+            reason: "Failed to capture stdout".to_string(),
+        })?;
+
+        let pid = process_id.clone();
+        tokio::spawn(async move {
+            let reader = BufReader::new(stdout);
+            let mut lines = reader.lines();
+
+            while let Ok(Some(line)) = lines.next_line().await {
+                debug!(process_id = %pid, "stdout: {}", line);
+                if stdout_tx.send(line).await.is_err() {
+                    warn!(process_id = %pid, "stdout channel closed");
+                    break;
+                }
+            }
+            info!(process_id = %pid, "stdout reader finished");
+        });
+
+        // Store process state
+        let handle = ProcessHandle {
+            id: process_id.clone(),
+            session_id: None,
+            stdin_tx: stdin_tx.clone(),
+            working_directory: config.working_directory.clone(),
+        };
+
+        let state = ProcessState {
+            child,
+            session_id: None,
+            stdin_tx,
+            working_directory: config.working_directory,
+        };
+
+        self.processes.write().await.insert(process_id, state);
+
+        Ok(handle)
+    }
+
+    /// Send a command to a process's stdin.
+    pub async fn send(&self, process_id: &str, message: &str) -> Result<(), SubprocessError> {
+        let processes = self.processes.read().await;
+        let state = processes
+            .get(process_id)
+            .ok_or_else(|| SubprocessError::ProcessNotFound {
+                id: process_id.to_string(),
+            })?;
+
+        state
+            .stdin_tx
+            .send(message.to_string())
+            .await
+            .map_err(|_| SubprocessError::ProcessExited {
+                id: process_id.to_string(),
+            })
+    }
+
+    /// Terminate a process gracefully.
+    pub async fn terminate(&self, process_id: &str) -> Result<(), SubprocessError> {
+        let mut processes = self.processes.write().await;
+        let mut state =
+            processes
+                .remove(process_id)
+                .ok_or_else(|| SubprocessError::ProcessNotFound {
+                    id: process_id.to_string(),
+                })?;
+
+        // Try graceful shutdown first
+        #[cfg(unix)]
+        {
+            if let Some(pid) = state.child.id() {
+                unsafe {
+                    libc::kill(pid as i32, libc::SIGINT);
+                }
+            }
+        }
+
+        // Wait with timeout
+        match tokio::time::timeout(std::time::Duration::from_secs(5), state.child.wait()).await {
+            Ok(Ok(status)) => {
+                info!(process_id, ?status, "Process exited gracefully");
+                Ok(())
+            }
+            Ok(Err(e)) => {
+                warn!(process_id, error = %e, "Error waiting for process");
+                state.child.kill().await.ok();
+                Ok(())
+            }
+            Err(_) => {
+                warn!(process_id, "Timeout waiting for graceful shutdown, killing");
+                state.child.kill().await.ok();
+                Ok(())
+            }
+        }
+    }
+
+    /// Get count of active processes.
+    pub async fn active_count(&self) -> usize {
+        self.processes.read().await.len()
+    }
+
+    /// Update session ID for a process.
+    pub async fn set_session_id(
+        &self,
+        process_id: &str,
+        session_id: String,
+    ) -> Result<(), SubprocessError> {
+        let mut processes = self.processes.write().await;
+        let state =
+            processes
+                .get_mut(process_id)
+                .ok_or_else(|| SubprocessError::ProcessNotFound {
+                    id: process_id.to_string(),
+                })?;
+        state.session_id = Some(session_id);
+        Ok(())
+    }
+}
+
+/// Errors from subprocess operations.
+#[derive(Debug, thiserror::Error)]
+pub enum SubprocessError {
+    #[error("Subprocess pool exhausted ({current}/{max})")]
+    PoolExhausted { current: usize, max: usize },
+
+    #[error("Failed to spawn subprocess: {reason}")]
+    SpawnFailed { reason: String },
+
+    #[error("Process not found: {id}")]
+    ProcessNotFound { id: String },
+
+    #[error("Process already exited: {id}")]
+    ProcessExited { id: String },
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn manager_respects_pool_limit() {
+        let manager = SubprocessManager::new(2);
+        assert_eq!(manager.active_count().await, 0);
+    }
+
+    #[tokio::test]
+    async fn spawn_config_defaults() {
+        let config = SpawnConfig::default();
+        assert_eq!(config.max_processes, 5);
+        assert!(config.prompt.is_none());
+        assert!(config.resume_session.is_none());
+    }
+}

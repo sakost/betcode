@@ -130,8 +130,7 @@ fn matches_tool(pattern: &str, tool_name: &str) -> bool {
     if pattern == "*" {
         return true;
     }
-    if pattern.ends_with('*') {
-        let prefix = &pattern[..pattern.len() - 1];
+    if let Some(prefix) = pattern.strip_suffix('*') {
         return tool_name.starts_with(prefix);
     }
     pattern == tool_name
@@ -143,12 +142,10 @@ fn matches_path(pattern: &str, path: &Path) -> bool {
     if pattern == "*" || pattern == "**" {
         return true;
     }
-    if pattern.ends_with("/**") {
-        let prefix = &pattern[..pattern.len() - 3];
+    if let Some(prefix) = pattern.strip_suffix("/**") {
         return path_str.starts_with(prefix);
     }
-    if pattern.ends_with("/*") {
-        let prefix = &pattern[..pattern.len() - 2];
+    if let Some(prefix) = pattern.strip_suffix("/*") {
         if let Some(parent) = path.parent() {
             return parent.to_string_lossy() == prefix;
         }

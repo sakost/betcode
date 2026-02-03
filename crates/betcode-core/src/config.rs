@@ -152,7 +152,11 @@ pub fn global_config_path() -> Option<PathBuf> {
         std::env::var("XDG_CONFIG_HOME")
             .ok()
             .map(PathBuf::from)
-            .or_else(|| std::env::var("HOME").ok().map(|h| PathBuf::from(h).join(".config")))
+            .or_else(|| {
+                std::env::var("HOME")
+                    .ok()
+                    .map(|h| PathBuf::from(h).join(".config"))
+            })
             .map(|p| p.join("betcode").join("settings.json"))
     }
     #[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
@@ -180,7 +184,11 @@ pub fn database_path() -> Option<PathBuf> {
         std::env::var("XDG_CONFIG_HOME")
             .ok()
             .map(PathBuf::from)
-            .or_else(|| std::env::var("HOME").ok().map(|h| PathBuf::from(h).join(".config")))
+            .or_else(|| {
+                std::env::var("HOME")
+                    .ok()
+                    .map(|h| PathBuf::from(h).join(".config"))
+            })
             .map(|p| p.join("betcode").join("daemon.db"))
     }
     #[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
@@ -191,10 +199,18 @@ pub fn database_path() -> Option<PathBuf> {
 
 fn load_config_file(path: &Path) -> Result<Config> {
     let content = std::fs::read_to_string(path).map_err(|e| {
-        Error::Config(format!("Failed to read config file {}: {}", path.display(), e))
+        Error::Config(format!(
+            "Failed to read config file {}: {}",
+            path.display(),
+            e
+        ))
     })?;
     serde_json::from_str(&content).map_err(|e| {
-        Error::Config(format!("Failed to parse config file {}: {}", path.display(), e))
+        Error::Config(format!(
+            "Failed to parse config file {}: {}",
+            path.display(),
+            e
+        ))
     })
 }
 
@@ -247,7 +263,10 @@ mod tests {
     #[test]
     fn default_config_has_7_day_ttl() {
         let config = Config::default();
-        assert_eq!(config.permissions.disconnected_timeout_secs, 7 * 24 * 60 * 60);
+        assert_eq!(
+            config.permissions.disconnected_timeout_secs,
+            7 * 24 * 60 * 60
+        );
     }
 
     #[test]

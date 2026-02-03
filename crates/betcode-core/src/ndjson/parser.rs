@@ -177,10 +177,18 @@ fn parse_stream_event(raw: &Value) -> Result<Message> {
             let delta_type = delta.get("type").and_then(|v| v.as_str()).unwrap_or("");
             let delta = match delta_type {
                 "text_delta" => Delta::Text(
-                    delta.get("text").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+                    delta
+                        .get("text")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string(),
                 ),
                 "input_json_delta" => Delta::InputJson(
-                    delta.get("partial_json").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+                    delta
+                        .get("partial_json")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string(),
                 ),
                 _ => Delta::Unknown(delta),
             };
@@ -201,7 +209,9 @@ fn parse_stream_event(raw: &Value) -> Result<Message> {
         _ => StreamEventType::Unknown(event.clone()),
     };
 
-    Ok(Message::StreamEvent(StreamEvent { event_type: stream_type }))
+    Ok(Message::StreamEvent(StreamEvent {
+        event_type: stream_type,
+    }))
 }
 
 fn parse_control_request(raw: &Value) -> Result<Message> {
@@ -212,21 +222,35 @@ fn parse_control_request(raw: &Value) -> Result<Message> {
         .to_string();
 
     let request = raw.get("request").cloned().unwrap_or(Value::Null);
-    let subtype = request.get("subtype").and_then(|v| v.as_str()).unwrap_or("");
+    let subtype = request
+        .get("subtype")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
 
     let request_type = match subtype {
         "can_use_tool" => ControlRequestType::CanUseTool {
-            tool_name: request.get("tool_name").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+            tool_name: request
+                .get("tool_name")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string(),
             input: request.get("input").cloned().unwrap_or(Value::Null),
         },
         _ => ControlRequestType::Unknown(request),
     };
 
-    Ok(Message::ControlRequest(ControlRequest { request_id, request: request_type }))
+    Ok(Message::ControlRequest(ControlRequest {
+        request_id,
+        request: request_type,
+    }))
 }
 
 fn parse_result(raw: &Value) -> Result<Message> {
-    let session_id = raw.get("session_id").and_then(|v| v.as_str()).unwrap_or("").to_string();
+    let session_id = raw
+        .get("session_id")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
 
     let subtype = match raw.get("subtype").and_then(|v| v.as_str()) {
         Some("success") => ResultSubtype::Success,
@@ -239,7 +263,13 @@ fn parse_result(raw: &Value) -> Result<Message> {
     let cost_usd = raw.get("total_cost_usd").and_then(|v| v.as_f64());
     let usage = parse_usage(raw.get("usage"));
 
-    Ok(Message::Result(SessionResult { subtype, session_id, duration_ms, cost_usd, usage }))
+    Ok(Message::Result(SessionResult {
+        subtype,
+        session_id,
+        duration_ms,
+        cost_usd,
+        usage,
+    }))
 }
 
 #[cfg(test)]
