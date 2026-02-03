@@ -1,0 +1,25 @@
+[package]
+name = "betcode-daemon"
+description = "BetCode daemon - Claude Code subprocess manager and gRPC server"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "betcode-daemon"
+path = "src/main.rs"
+
+[dependencies]
+betcode-proto = { workspace = true }
+betcode-core = { workspace = true }
+tokio = { workspace = true }
+tonic = { workspace = true }
+prost = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+sqlx = { workspace = true }
+thiserror = { workspace = true }
+anyhow = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }

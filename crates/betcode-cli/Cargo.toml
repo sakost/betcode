@@ -1,0 +1,25 @@
+[package]
+name = "betcode-cli"
+description = "BetCode CLI - Terminal UI for interacting with Claude Code"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "betcode"
+path = "src/main.rs"
+
+[dependencies]
+betcode-proto = { workspace = true }
+betcode-core = { workspace = true }
+tokio = { workspace = true }
+tonic = { workspace = true }
+clap = { workspace = true }
+ratatui = { workspace = true }
+crossterm = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+anyhow = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }

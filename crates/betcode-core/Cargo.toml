@@ -1,0 +1,17 @@
+[package]
+name = "betcode-core"
+description = "Core library for BetCode - NDJSON parsing, config, permissions"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+betcode-proto = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true }
