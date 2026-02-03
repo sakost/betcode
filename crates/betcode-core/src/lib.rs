@@ -6,11 +6,11 @@
 //! - Permission rule matching engine
 //! - Common error types
 
+pub mod config;
 pub mod error;
+pub mod ndjson;
+pub mod permissions;
 
-// TODO: Sprint 1.2 - Implement these modules
-// pub mod ndjson;
-// pub mod config;
-// pub mod permissions;
-
+pub use config::Config;
 pub use error::{Error, Result};
+pub use permissions::{PermissionAction, PermissionEngine, PermissionRule};
