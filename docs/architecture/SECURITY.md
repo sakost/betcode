@@ -170,8 +170,9 @@ rate-limits independently.
 ## Audit Logging
 
 Security-relevant events are logged to structured output (JSON lines to
-stderr or a configured log sink). These events support incident
-investigation and compliance review.
+stderr or a configured log sink) AND persisted to the daemon database
+for forensic analysis. These events support incident investigation and
+compliance review.
 
 **Logged events**:
 - Authentication: login success/failure, token refresh, token revocation
@@ -180,6 +181,7 @@ investigation and compliance review.
 - Subagent lifecycle: spawn, complete, fail, cancel (with auto_approve flag)
 - Machine lifecycle: register, deregister, certificate issue/revoke
 - Rate limit: threshold exceeded events
+- **Auto-approved tool calls**: Every tool invocation auto-approved by a subagent
 
 **Not logged** (to avoid secret exposure): API key values, JWT tokens,
 request/response payloads, file contents from tool execution.
@@ -187,6 +189,325 @@ request/response payloads, file contents from tool execution.
 Each log entry includes: timestamp, event type, actor (user_id or
 machine_id), session_id (if applicable), outcome (success/failure),
 and a human-readable description.
+
+### Audit Log Persistence
+
+Auto-approved operations require persistent audit trails for post-incident
+forensics. The daemon stores audit logs in the `audit_log` table with
+mandatory retention periods.
+
+**Retention Policy**:
+
+| Log Category | Minimum Retention | Maximum Retention | Rationale |
+|--------------|-------------------|-------------------|-----------|
+| Auto-approved tool calls | 90 days | 365 days | Forensic investigation window |
+| Permission decisions | 90 days | 365 days | Compliance audit trail |
+| Subagent lifecycle | 90 days | 365 days | Incident correlation |
+| Authentication events | 90 days | 365 days | Security review |
+| Rate limit events | 30 days | 90 days | Operational metrics |
+
+**Retention is NOT optional**. The daemon refuses to start if the audit_log
+table is missing or corrupted. Audit log deletion before the minimum
+retention period requires explicit administrative override with a separate
+audit trail entry recording the deletion request.
+
+### Audit Log Schema
+
+```sql
+CREATE TABLE audit_log (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    event_id TEXT NOT NULL UNIQUE,           -- UUIDv7 for global correlation
+    event_type TEXT NOT NULL
+        CHECK (event_type IN (
+            'auto_approve_tool_call',
+            'permission_grant',
+            'permission_deny',
+            'permission_revoke',
+            'subagent_spawn',
+            'subagent_complete',
+            'subagent_fail',
+            'subagent_cancel',
+            'subagent_timeout',
+            'session_create',
+            'session_resume',
+            'session_complete',
+            'session_error',
+            'rate_limit_exceeded',
+            'tool_validation_fail',
+            'auth_success',
+            'auth_failure'
+        )),
+    severity TEXT NOT NULL DEFAULT 'info'
+        CHECK (severity IN ('debug', 'info', 'warn', 'error', 'critical')),
+    session_id TEXT,                          -- nullable for non-session events
+    subagent_id TEXT,                         -- nullable for non-subagent events
+    parent_session_id TEXT,                   -- for subagent correlation
+    actor_type TEXT NOT NULL
+        CHECK (actor_type IN ('user', 'daemon', 'subagent', 'system')),
+    actor_id TEXT NOT NULL,                   -- user_id, subagent_id, or 'system'
+    tool_name TEXT,                           -- for tool-related events
+    tool_input_hash TEXT,                     -- SHA-256 of input (not raw input)
+    tool_input_preview TEXT,                  -- First 256 chars, sanitized
+    outcome TEXT NOT NULL
+        CHECK (outcome IN ('success', 'failure', 'denied', 'timeout')),
+    error_code TEXT,                          -- structured error identifier
+    error_message TEXT,                       -- human-readable, max 1KB
+    context TEXT,                             -- JSON object with event-specific data
+    client_ip TEXT,                           -- for remote operations
+    created_at INTEGER NOT NULL,              -- Unix epoch seconds
+    expires_at INTEGER NOT NULL               -- Retention expiry (created_at + retention_days)
+);
+
+CREATE INDEX idx_audit_session ON audit_log(session_id, created_at DESC)
+    WHERE session_id IS NOT NULL;
+CREATE INDEX idx_audit_subagent ON audit_log(subagent_id, created_at DESC)
+    WHERE subagent_id IS NOT NULL;
+CREATE INDEX idx_audit_type ON audit_log(event_type, created_at DESC);
+CREATE INDEX idx_audit_expiry ON audit_log(expires_at)
+    WHERE expires_at > 0;
+CREATE INDEX idx_audit_actor ON audit_log(actor_type, actor_id, created_at DESC);
+CREATE INDEX idx_audit_tool ON audit_log(tool_name, created_at DESC)
+    WHERE tool_name IS NOT NULL;
+```
+
+**Column Details**:
+
+| Column | Purpose | Security Consideration |
+|--------|---------|------------------------|
+| event_id | Global correlation across components | UUIDv7 for ordering |
+| tool_input_hash | Integrity verification | Never store raw sensitive input |
+| tool_input_preview | Quick forensic review | Sanitized, truncated, no secrets |
+| context | Event-specific metadata | JSON schema per event_type |
+| expires_at | Retention enforcement | Automatic cleanup after period |
+
+### Auto-Approve Audit Entry Example
+
+```json
+{
+  "event_id": "019474a2-3b4c-7def-8901-234567890abc",
+  "event_type": "auto_approve_tool_call",
+  "severity": "warn",
+  "session_id": "session-xyz",
+  "subagent_id": "subagent-123",
+  "parent_session_id": "parent-456",
+  "actor_type": "subagent",
+  "actor_id": "subagent-123",
+  "tool_name": "Bash",
+  "tool_input_hash": "sha256:a1b2c3...",
+  "tool_input_preview": "cargo test --workspace",
+  "outcome": "success",
+  "context": {
+    "allowed_tools": ["Read", "Bash", "Glob"],
+    "auto_approve_config": {
+      "max_duration_seconds": 3600,
+      "rate_limit_remaining": 47
+    },
+    "execution_time_ms": 1234
+  },
+  "created_at": 1738540800,
+  "expires_at": 1746316800
+}
+```
+
+### Audit Log Query Patterns
+
+**Forensic investigation -- all auto-approved actions by a subagent**:
+
+```sql
+SELECT * FROM audit_log
+WHERE subagent_id = ? AND event_type = 'auto_approve_tool_call'
+ORDER BY created_at ASC;
+```
+
+**Security review -- all denied permissions in time range**:
+
+```sql
+SELECT * FROM audit_log
+WHERE event_type = 'permission_deny'
+  AND created_at BETWEEN ? AND ?
+ORDER BY created_at DESC;
+```
+
+**Incident correlation -- all events related to a parent session**:
+
+```sql
+SELECT * FROM audit_log
+WHERE session_id = ? OR parent_session_id = ?
+ORDER BY created_at ASC;
+```
+
+---
+
+## Auto-Approve Subagent Security Hardening
+
+Auto-approve is a **high-risk feature** that bypasses user confirmation for
+tool calls. This section defines the mandatory security controls that make
+auto-approve safe for production use.
+
+**Security Principle**: Auto-approve should be treated as granting temporary,
+scoped, audited sudo access to an autonomous agent. Every guardrail exists
+because the alternative is unattended execution of arbitrary operations.
+
+### Time-Boxing (Mandatory)
+
+All auto-approve subagents have a maximum session duration. This is
+**non-negotiable** -- there is no "unlimited" option for auto-approve.
+
+| Parameter | Default | Range | Config Path |
+|-----------|---------|-------|-------------|
+| `max_auto_approve_duration_seconds` | 3600 (1 hour) | 60-14400 (1 min - 4 hours) | `subagents.max_auto_approve_duration` |
+
+**Enforcement**:
+1. Timer starts at subagent spawn, not first tool call
+2. At expiration: daemon sends `SIGTERM`, logs `subagent_timeout` audit event
+3. Grace period: 10 seconds for cleanup before `SIGKILL`
+4. No extension mechanism -- spawn a new subagent if more time needed
+
+**Rationale**: Unbounded auto-approve sessions are a security incident waiting
+to happen. A compromised or malfunctioning subagent with unlimited time can
+cause unbounded damage. One hour is sufficient for most automated tasks; longer
+tasks should checkpoint and spawn fresh subagents.
+
+### Tool Validation (Spawn-Time AND Runtime)
+
+The `allowed_tools` list is validated at two points:
+
+**Spawn-Time Validation**:
+- All tool names in `allowed_tools` must exist in the daemon's tool registry
+- Unknown tools reject the spawn request with `INVALID_ARGUMENT`
+- Tool registry is loaded from Claude Code's capabilities on daemon start
+
+**Runtime Validation** (per tool call):
+- Before auto-approving, daemon verifies the tool still exists
+- If tool was removed/deprecated since spawn: deny with `tool_validation_fail` audit event
+- Subagent receives error response, can continue with other tools
+
+```protobuf
+// Error returned when a previously-valid tool is no longer available
+message ToolValidationError {
+  string tool_name = 1;
+  string reason = 2;  // "deprecated", "removed", "disabled"
+  int64 deprecated_at = 3;  // Unix timestamp, 0 if not deprecated
+}
+```
+
+**Tool Registry Updates**:
+- Daemon reloads tool registry on `SIGHUP` or config reload
+- Active subagents are NOT terminated on registry update
+- New tool calls are validated against the updated registry
+- Audit log records registry update events
+
+### Mid-Execution Permission Revocation
+
+Auto-approve permissions can be revoked without terminating the subagent.
+This enables graceful degradation: the subagent continues running but
+must request user confirmation for subsequent tool calls.
+
+**Revocation Mechanism**:
+
+```protobuf
+message RevokeAutoApproveRequest {
+  string subagent_id = 1;
+  string reason = 2;            // Required: audit trail
+  bool terminate_if_pending = 3; // Kill subagent if tool call in flight
+}
+
+message RevokeAutoApproveResponse {
+  bool revoked = 1;
+  int32 pending_tool_calls = 2; // Number of in-flight calls at revocation
+}
+```
+
+**Revocation Behavior**:
+
+| Scenario | Behavior |
+|----------|----------|
+| No tool call in progress | Revoke immediately, subagent continues with manual approval |
+| Tool call in flight, `terminate_if_pending=false` | Let call complete, revoke after |
+| Tool call in flight, `terminate_if_pending=true` | Send SIGTERM, revoke, terminate |
+| Subagent already completed | No-op, return `revoked=false` |
+
+**Audit Trail**: Revocation creates a `permission_revoke` audit entry with:
+- Revoking actor (user_id or system)
+- Reason text (required, min 10 characters)
+- Subagent state at revocation
+- Count of tool calls executed before revocation
+
+### Rate Limiting for Auto-Approved Operations
+
+Individual auto-approved tool calls are rate-limited to prevent runaway
+execution. This is separate from the `SpawnSubagent` rate limit.
+
+| Limit Type | Default | Range | Scope |
+|------------|---------|-------|-------|
+| Tool calls per minute | 60 | 10-300 | Per subagent |
+| Tool calls per session | 1000 | 100-10000 | Per subagent lifetime |
+| Bash commands per minute | 20 | 5-60 | Per subagent |
+| Write/Edit operations per minute | 30 | 10-100 | Per subagent |
+
+**Enforcement**:
+- Token bucket algorithm per limit type
+- On limit exceeded: tool call queued (if queue enabled) or denied
+- Audit log records `rate_limit_exceeded` with tool name and limit type
+- Subagent notified via error response (can retry after backoff)
+
+**Configuration**:
+
+```toml
+[subagents.rate_limits]
+tool_calls_per_minute = 60
+tool_calls_per_session = 1000
+bash_per_minute = 20
+write_per_minute = 30
+queue_on_limit = false  # false = deny, true = queue with backoff
+```
+
+### Defense-in-Depth Layers
+
+Auto-approve security uses multiple independent layers. Compromise of one
+layer does not grant unrestricted access.
+
+```
+Layer 1: Spawn Validation
+    - allowed_tools must be non-empty
+    - All tools must exist in registry
+    - Time limit must be within bounds
+
+Layer 2: Runtime Validation
+    - Tool existence check before each call
+    - Rate limit check before each call
+    - Session timeout check before each call
+
+Layer 3: Execution Constraints
+    - Worktree boundary enforcement
+    - Permission engine pattern rules still apply
+    - Bash blocklist patterns still evaluated
+
+Layer 4: Audit Trail
+    - Every auto-approved call logged
+    - Hash of input for integrity
+    - 90-day minimum retention
+
+Layer 5: Revocation
+    - Mid-execution permission revoke
+    - Graceful degradation to manual approval
+    - Forced termination option
+```
+
+### Auto-Approve Checklist (Required Before Enabling)
+
+Before setting `auto_approve_permissions = true` on any subagent:
+
+- [ ] `allowed_tools` is explicitly specified (empty list = INVALID)
+- [ ] Each tool in `allowed_tools` is reviewed for safety in unattended mode
+- [ ] `max_turns` is set to a reasonable limit (not 0/unlimited)
+- [ ] Time limit is appropriate for the task (default 1 hour)
+- [ ] Worktree is scoped appropriately (not root directory)
+- [ ] Bash patterns (if Bash allowed) are constrained via permission engine
+- [ ] Monitoring is configured to alert on `rate_limit_exceeded` events
+- [ ] Incident response procedure exists for runaway subagent scenarios
+
+---
 
 ## Input Validation
 

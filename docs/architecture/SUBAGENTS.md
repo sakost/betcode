@@ -220,6 +220,121 @@ Three mechanisms for information flow between subagents:
 
 ---
 
+## Worktree Concurrency Model
+
+BetCode supports multiple subagents operating on overlapping or shared worktrees.
+The concurrency strategy is **optimistic with fail-fast conflict detection**.
+
+### Concurrency Strategies
+
+| Strategy | Behavior | Use Case |
+|----------|----------|----------|
+| **Optimistic (default)** | Multiple subagents work freely; conflicts surface at git operations | Fast parallel execution, tolerant orchestrators |
+| **Advisory Lock** | Subagent acquires lock before starting; other subagents wait or fail | Sequential access, critical sections |
+| **Isolated Worktrees** | Each subagent gets its own worktree/branch | Maximum parallelism, merge at end |
+
+### Optimistic Concurrency (Default)
+
+Multiple subagents can operate on the same worktree simultaneously. File system
+conflicts are handled as follows:
+
+| Scenario | Behavior |
+|----------|----------|
+| Two subagents edit same file | Last write wins at file system level |
+| Subagent A commits while B is editing | B's next commit may conflict |
+| Git merge conflict | Bash tool returns non-zero exit; Claude sees error |
+| File locked by OS | Write/Edit tool returns error; Claude retries or reports |
+
+**Orchestrator responsibility**: When using optimistic concurrency, the orchestrator
+should:
+1. Design tasks to minimize file overlap (one subagent per module/directory).
+2. Handle `ToolCallResult.is_error = true` from git operations.
+3. Spawn a conflict-resolution subagent if needed.
+
+### Advisory Worktree Lock
+
+For orchestrators requiring exclusive access, the daemon provides advisory locks:
+
+```protobuf
+message SpawnSubagentRequest {
+  // ... existing fields ...
+  WorktreeLockMode worktree_lock = 10;
+}
+
+enum WorktreeLockMode {
+  WORKTREE_LOCK_NONE = 0;      // Default: no lock
+  WORKTREE_LOCK_SHARED = 1;    // Multiple readers, block writers
+  WORKTREE_LOCK_EXCLUSIVE = 2; // Single writer, block all others
+}
+```
+
+Lock behavior:
+
+| Lock Mode | Same worktree, NONE | Same worktree, SHARED | Same worktree, EXCLUSIVE |
+|-----------|---------------------|----------------------|-------------------------|
+| NONE | Allow | Allow | Block (wait or fail) |
+| SHARED | Allow | Allow | Block |
+| EXCLUSIVE | Block | Block | Block |
+
+When blocked:
+- If `SpawnSubagentRequest.wait_for_lock = true`: queue request, spawn when lock released.
+- If `wait_for_lock = false` (default): return `RESOURCE_EXHAUSTED` immediately.
+
+Lock release: automatic on subagent completion (success, failure, or cancel).
+
+### Advisory Lock Implementation
+
+```sql
+CREATE TABLE worktree_locks (
+    worktree_id TEXT PRIMARY KEY REFERENCES worktrees(id),
+    lock_mode TEXT NOT NULL CHECK (lock_mode IN ('shared', 'exclusive')),
+    holder_session_ids TEXT NOT NULL,  -- JSON array
+    acquired_at INTEGER NOT NULL
+);
+```
+
+Lock acquisition is transactional:
+```sql
+-- Exclusive lock attempt (fails if any lock exists)
+INSERT INTO worktree_locks (worktree_id, lock_mode, holder_session_ids, acquired_at)
+SELECT ?, 'exclusive', ?, ?
+WHERE NOT EXISTS (SELECT 1 FROM worktree_locks WHERE worktree_id = ?);
+
+-- Shared lock attempt (fails if exclusive lock exists)
+INSERT OR REPLACE INTO worktree_locks (...)
+SELECT ... WHERE NOT EXISTS (... WHERE lock_mode = 'exclusive');
+```
+
+### Recommended Patterns
+
+**Pattern 1: Isolated branches (maximum safety)**
+```
+Orchestrator creates worktree per subagent:
+  worktree/feature-backend  -> subagent-backend
+  worktree/feature-frontend -> subagent-frontend
+  worktree/feature-tests    -> subagent-tests
+
+Subagents work independently, orchestrator merges branches at end.
+```
+
+**Pattern 2: Exclusive lock for critical sections**
+```
+Subagent-1: SHARED lock, reads config files
+Subagent-2: SHARED lock, reads config files
+Subagent-3: EXCLUSIVE lock, modifies config files (subagents 1,2 wait)
+```
+
+**Pattern 3: Optimistic with retry**
+```
+Subagent fails due to git conflict
+  -> Orchestrator catches StepFailed
+  -> Spawns conflict-resolution subagent with EXCLUSIVE lock
+  -> Resolution subagent commits
+  -> Orchestrator retries original subagent
+```
+
+---
+
 ## Permission Handling
 
 Four modes, combinable per subagent:
@@ -230,6 +345,66 @@ Four modes, combinable per subagent:
 | **Inherit parent** | Copy parent session's `permission_grants` to subagent |
 | **Tool restriction** | `allowed_tools` limits available tools via `--allowedTools` flag |
 | **Forward to client** | Route `PermissionRequest` to parent session's input lock holder |
+
+### Permission Validation Rules
+
+The daemon enforces security invariants on `SpawnSubagentRequest` and `OrchestrationStep`
+before spawning any subprocess.
+
+#### Auto-Approve Constraint
+
+**Rule**: When `auto_approve_permissions = true`, the `allowed_tools` field MUST be
+non-empty.
+
+| `auto_approve_permissions` | `allowed_tools` | Result |
+|---------------------------|-----------------|--------|
+| `false` | Empty (all tools) | Valid: permissions forwarded to client |
+| `false` | Non-empty | Valid: permissions forwarded for listed tools |
+| `true` | Empty | **INVALID**: returns `INVALID_ARGUMENT` |
+| `true` | Non-empty | Valid: listed tools auto-approved |
+
+**Rationale**: An empty allowlist means "all tools available". Combined with
+`auto_approve_permissions = true`, this would auto-approve every tool invocation
+including destructive operations (`Bash(rm -rf /)`, `Write` to arbitrary paths).
+Requiring an explicit allowlist forces the orchestrator to consciously enumerate
+which tools are safe for unattended execution.
+
+#### Validation Error Response
+
+```protobuf
+// Returned when auto_approve_permissions = true with empty allowed_tools
+ErrorEvent {
+  code: "INVALID_PERMISSION_CONFIG",
+  message: "auto_approve_permissions requires non-empty allowed_tools list",
+  is_fatal: true
+}
+```
+
+#### Recommended Safe Tool Sets
+
+For common auto-approve scenarios, these tool sets balance utility with safety:
+
+| Use Case | Recommended `allowed_tools` |
+|----------|----------------------------|
+| Read-only analysis | `["Read", "Glob", "Grep", "TodoWrite"]` |
+| Code generation (no execution) | `["Read", "Glob", "Grep", "Write", "Edit"]` |
+| Test execution | `["Read", "Glob", "Grep", "Bash"]` with pattern rules |
+| Documentation | `["Read", "Glob", "Grep", "Write", "WebFetch"]` |
+
+**Note**: Even with `allowed_tools` restrictions, the `Bash` tool can execute arbitrary
+commands. Use the daemon's permission engine pattern rules (e.g., `"Bash(cargo test *)"`)
+to constrain Bash invocations when auto-approving. Pattern rules are evaluated before
+auto-approve.
+
+#### Audit Logging
+
+All auto-approved permissions are logged with:
+- Subagent ID and parent session ID
+- Tool name and input (truncated to 1KB)
+- `auto_approve: true` flag
+- Timestamp
+
+This enables post-incident review of what a subagent auto-approved.
 
 ---
 
@@ -347,7 +522,252 @@ No automatic restart for subagents (unlike interactive sessions). The orchestrat
 
 ## Security Considerations
 
-Subagents inherit the daemon's security model ([SECURITY.md](./SECURITY.md)). Additional constraints: worktree enforcement per subagent, permission grants scoped per subagent session, auto-approve logged for audit, resource limits prevent exhaustion, all subagents share the daemon's `ANTHROPIC_API_KEY` (no per-subagent isolation).
+Subagents inherit the daemon's security model ([SECURITY.md](./SECURITY.md)).
+This section details subagent-specific security controls with emphasis on
+auto-approve hardening.
+
+### Baseline Security (All Subagents)
+
+| Control | Description |
+|---------|-------------|
+| Worktree enforcement | Each subagent is confined to its `working_directory` |
+| Permission scoping | Permission grants are per-subagent session, no cross-session leakage |
+| Resource limits | Max concurrent, max turns, timeout prevent exhaustion |
+| API key sharing | All subagents share daemon's `ANTHROPIC_API_KEY` (no isolation) |
+
+### Auto-Approve Security Model
+
+**WARNING**: Auto-approve bypasses user confirmation for tool calls. This is
+inherently dangerous and requires strict guardrails. See
+[SECURITY.md](./SECURITY.md#auto-approve-subagent-security-hardening) for
+complete security controls.
+
+#### Mandatory Constraints
+
+When `auto_approve_permissions = true`:
+
+1. **Non-empty allowlist required**: `allowed_tools` MUST be specified
+2. **Time-boxed execution**: Maximum 4 hours (default 1 hour)
+3. **Rate-limited operations**: Per-minute and per-session limits
+4. **Full audit trail**: Every auto-approved call logged with 90-day retention
+5. **Runtime tool validation**: Tools verified before each auto-approve
+
+#### SpawnSubagentRequest Security Fields
+
+```protobuf
+message SpawnSubagentRequest {
+  string parent_session_id = 1;
+  string prompt = 2;
+  string model = 3;
+  string working_directory = 4;
+  repeated string allowed_tools = 5;       // REQUIRED if auto_approve=true
+  int32 max_turns = 6;
+  map<string, string> env = 7;
+  string name = 8;
+  bool auto_approve_permissions = 9;
+  WorktreeLockMode worktree_lock = 10;
+
+  // Security additions (Phase 2)
+  AutoApproveConfig auto_approve_config = 11;
+}
+
+message AutoApproveConfig {
+  int32 max_duration_seconds = 1;          // Default: 3600, Max: 14400
+  int32 tool_calls_per_minute = 2;         // Default: 60, Max: 300
+  int32 tool_calls_per_session = 3;        // Default: 1000, Max: 10000
+  int32 bash_commands_per_minute = 4;      // Default: 20, Max: 60
+  int32 write_operations_per_minute = 5;   // Default: 30, Max: 100
+  bool queue_on_rate_limit = 6;            // Default: false (deny)
+}
+```
+
+#### Spawn-Time Validation
+
+The daemon performs these checks before spawning an auto-approve subagent:
+
+```
+1. Verify allowed_tools is non-empty
+   -> INVALID_ARGUMENT: "auto_approve_permissions requires non-empty allowed_tools"
+
+2. Verify all tools exist in registry
+   -> INVALID_ARGUMENT: "unknown tool in allowed_tools: {tool_name}"
+
+3. Verify max_duration_seconds is within bounds
+   -> INVALID_ARGUMENT: "max_duration_seconds must be 60-14400"
+
+4. Verify rate limits are within bounds
+   -> INVALID_ARGUMENT: "tool_calls_per_minute must be 10-300"
+
+5. Create audit entry: subagent_spawn with auto_approve=true
+```
+
+#### Runtime Tool Call Flow (Auto-Approve)
+
+```
+Claude requests tool call
+    |
+    v
+[1] Is tool in allowed_tools?
+    |-- No --> Forward to client for manual approval
+    |-- Yes --> Continue
+    v
+[2] Does tool still exist in registry?
+    |-- No --> Deny, audit: tool_validation_fail
+    |-- Yes --> Continue
+    v
+[3] Is subagent within time limit?
+    |-- No --> SIGTERM subagent, audit: subagent_timeout
+    |-- Yes --> Continue
+    v
+[4] Is rate limit available?
+    |-- No, queue=false --> Deny, audit: rate_limit_exceeded
+    |-- No, queue=true  --> Queue with backoff
+    |-- Yes --> Continue
+    v
+[5] Execute tool, audit: auto_approve_tool_call
+    |
+    v
+[6] Return result to Claude
+```
+
+#### Mid-Execution Revocation
+
+Auto-approve can be revoked without killing the subagent. The subagent
+continues but subsequent tool calls require manual approval.
+
+```protobuf
+// Added to SubagentService
+rpc RevokeAutoApprove(RevokeAutoApproveRequest) returns (RevokeAutoApproveResponse);
+
+message RevokeAutoApproveRequest {
+  string subagent_id = 1;
+  string reason = 2;             // Required, min 10 chars
+  bool terminate_if_pending = 3; // Kill if tool call in flight
+}
+
+message RevokeAutoApproveResponse {
+  bool revoked = 1;
+  int32 pending_tool_calls = 2;
+  string subagent_status = 3;    // 'running', 'completed', 'failed'
+}
+```
+
+**Use cases for revocation**:
+- Suspicious activity detected in audit log
+- User wants to review remaining operations manually
+- External system signals concern (security scanner, etc.)
+- Subagent approaching sensitive operation
+
+#### CancelSubagent with Permission Cleanup
+
+When canceling an auto-approve subagent, all associated permissions and
+in-flight state must be cleaned up atomically.
+
+```protobuf
+message CancelSubagentRequest {
+  string subagent_id = 1;
+  string reason = 2;              // Required for audit
+  bool force = 3;                 // SIGKILL vs SIGTERM
+  bool cleanup_worktree = 4;      // Revert uncommitted changes
+}
+
+message CancelSubagentResponse {
+  bool cancelled = 1;
+  string final_status = 2;
+  int32 tool_calls_executed = 3;  // For audit summary
+  int32 tool_calls_auto_approved = 4;
+}
+```
+
+**Cleanup sequence**:
+
+```
+1. Set subagent.auto_approve_permissions = false (prevent new auto-approves)
+2. If force=false: SIGTERM, wait 10s grace period
+3. If force=true or grace period exceeded: SIGKILL
+4. Release worktree lock (if held)
+5. Audit: subagent_cancel with final metrics
+6. If cleanup_worktree=true: git checkout . && git clean -fd
+7. Update subagents table: status='cancelled'
+```
+
+### Audit Log Integration
+
+All subagent security events are logged to the `audit_log` table. See
+[SECURITY.md](./SECURITY.md#audit-log-schema) for schema details.
+
+**Subagent-specific audit events**:
+
+| Event Type | Trigger | Severity |
+|------------|---------|----------|
+| `subagent_spawn` | SpawnSubagent called | info (warn if auto_approve) |
+| `subagent_complete` | Clean exit | info |
+| `subagent_fail` | Non-zero exit | warn |
+| `subagent_cancel` | CancelSubagent called | warn |
+| `subagent_timeout` | Time limit exceeded | error |
+| `auto_approve_tool_call` | Tool auto-approved | warn |
+| `tool_validation_fail` | Tool no longer valid | error |
+| `rate_limit_exceeded` | Rate limit hit | warn |
+| `permission_revoke` | RevokeAutoApprove called | warn |
+
+**Audit context for auto_approve_tool_call**:
+
+```json
+{
+  "tool_name": "Bash",
+  "tool_input_preview": "cargo test --workspace",
+  "tool_input_hash": "sha256:...",
+  "allowed_tools": ["Read", "Bash", "Glob"],
+  "rate_limit_state": {
+    "tool_calls_remaining": 47,
+    "bash_calls_remaining": 15,
+    "session_calls_remaining": 892
+  },
+  "time_remaining_seconds": 2847,
+  "execution_time_ms": 1234
+}
+```
+
+### Security Recommendations for Orchestrators
+
+Orchestrators using auto-approve subagents SHOULD:
+
+1. **Minimize allowed_tools**: Only include tools necessary for the task
+2. **Prefer read-only tools**: `["Read", "Glob", "Grep"]` when possible
+3. **Constrain Bash patterns**: Use permission engine rules if Bash needed
+4. **Set conservative time limits**: 30 minutes for most tasks, not 4 hours
+5. **Monitor audit logs**: Alert on `rate_limit_exceeded`, `tool_validation_fail`
+6. **Use isolated worktrees**: Prevent cross-subagent file conflicts
+7. **Implement circuit breakers**: Revoke auto-approve on repeated failures
+
+**Example: Minimal auto-approve for test runner**:
+
+```protobuf
+SpawnSubagentRequest {
+  prompt: "Run the test suite and report failures"
+  allowed_tools: ["Read", "Glob", "Grep", "Bash"]
+  auto_approve_permissions: true
+  auto_approve_config: {
+    max_duration_seconds: 1800   // 30 minutes
+    bash_commands_per_minute: 10 // Conservative
+    tool_calls_per_session: 200  // Bounded
+  }
+}
+```
+
+With permission engine rule (in daemon config):
+
+```toml
+[[permissions.rules]]
+tool = "Bash"
+pattern = "cargo test *"
+action = "allow"
+
+[[permissions.rules]]
+tool = "Bash"
+pattern = "*"
+action = "deny"  # Deny all other Bash commands
+```
 
 ## Roadmap Integration
 

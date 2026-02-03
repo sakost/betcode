@@ -168,23 +168,50 @@ A user with three machines has three independent daemons, each with its own
 sessions, worktrees, and configuration. The client selects which machine to
 interact with by specifying `machine_id`.
 
-### Message Buffering
+### Message Buffering (Mobile-First Design)
 
 When a daemon goes offline (laptop lid closed, network interruption):
 
 1. Relay detects no active tunnel for the target `machine_id`.
-2. Stores the request in SQLite with a 24-hour TTL.
+2. Stores the request in SQLite with configurable TTL (default 7 days).
 3. Sends `StatusChange { status: DAEMON_OFFLINE }` to the client.
-4. On daemon reconnect: buffered messages delivered in FIFO order.
+4. On daemon reconnect: buffered messages delivered in priority order, then FIFO.
 5. Sends `StatusChange { status: DAEMON_ONLINE }` to connected clients.
-6. Messages older than 24 hours are purged by a background sweep (1h cadence).
+6. Messages older than TTL are purged by a background sweep (1h cadence).
 
 | Parameter | Value | Rationale |
 |-----------|-------|-----------|
-| TTL | 24 hours | Covers overnight disconnects |
+| Default TTL | 7 days | Covers weekend disconnects, vacations |
+| Min TTL | 1 hour | Prevents accidental data loss |
+| Max TTL | 30 days | Balances storage vs. usefulness |
 | Max buffer per daemon | 1000 messages | Prevent unbounded growth |
 | Max message size | 1 MB | Matches gRPC default max |
 | Purge interval | 1 hour | Background cleanup cadence |
+
+**Why 7 days instead of 24 hours:**
+
+| Scenario | 24h TTL result | 7d TTL result |
+|----------|---------------|---------------|
+| Overnight disconnect | OK | OK |
+| Weekend without laptop | LOST | OK |
+| Week-long vacation | LOST | OK |
+| Hardware failure (repair shop) | LOST | Likely OK |
+| Forgot to open laptop for 2 weeks | LOST | LOST (acceptable) |
+
+Storage cost for 1000 messages at 1MB max each: 1GB worst case per daemon.
+Realistic average: ~50MB per daemon. This is negligible for a relay server.
+
+**Priority Queue for Buffered Messages:**
+
+Buffered messages are delivered in priority order on daemon reconnect:
+
+| Priority | Message Type | Rationale |
+|----------|--------------|-----------|
+| 0 (highest) | Permission responses | Unblocks waiting agent |
+| 1 | Cancel requests | Time-sensitive user intent |
+| 2 | User messages | Primary interaction |
+| 3 | Session control | Can wait |
+| 4 (lowest) | Heartbeats, status | Background sync |
 
 ### Relay Restart Recovery
 
@@ -208,6 +235,47 @@ per-machine cap (1000 messages), the relay rejects new buffered requests
 with `RESOURCE_EXHAUSTED` and includes the cap in the error detail.
 Clients receive `StatusChange { status: BUFFER_FULL }` and should
 inform the user that the target machine has been offline too long.
+
+### Relay Observability
+
+The relay emits metrics via the same OpenTelemetry infrastructure as the daemon
+([DAEMON.md](./DAEMON.md#observability)).
+
+#### Relay Metrics
+
+| Metric | Type | Description |
+|--------|------|-------------|
+| `betcode_relay_tunnels_active` | Gauge | Currently connected daemon tunnels |
+| `betcode_relay_clients_connected` | Gauge | Currently connected client sessions |
+| `betcode_relay_requests_total` | Counter | Total requests routed, by `method`, `status` |
+| `betcode_relay_request_duration_seconds` | Histogram | End-to-end routing latency |
+| `betcode_relay_buffer_size` | Gauge | Message buffer row count, by `machine_id` |
+| `betcode_relay_buffer_bytes` | Gauge | Message buffer total size in bytes |
+| `betcode_relay_auth_failures_total` | Counter | Authentication failures, by `reason` |
+| `betcode_relay_push_notifications_total` | Counter | Push notifications sent, by `platform`, `status` |
+| `betcode_relay_tunnel_reconnects_total` | Counter | Daemon tunnel reconnection count |
+
+#### Structured Logging
+
+Same format as daemon (JSON lines, tracing crate):
+
+| Level | Content |
+|-------|---------|
+| ERROR | Auth failures, database errors, push delivery failures |
+| WARN | Tunnel disconnections, buffer overflow, rate limit hits |
+| INFO | Tunnel connections, client connections, push sends |
+| DEBUG | Request routing, buffer operations |
+| TRACE | gRPC frame details, JWT claims |
+
+#### Prometheus Endpoint
+
+Optional `/metrics` HTTP endpoint (disabled by default, enable via config):
+
+```
+betcode_relay_tunnels_active 42
+betcode_relay_clients_connected 156
+betcode_relay_buffer_size{machine_id="*"} 1234
+```
 
 ---
 

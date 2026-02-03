@@ -203,6 +203,231 @@ Rule format (Claude Code native):
 The daemon does NOT execute hooks or parse CLAUDE.md. Claude Code handles
 both internally. The daemon only reads permission rules for pre-screening.
 
+### Permission Request Durability
+
+Permission requests (`control_request` from Claude) may span network interruptions.
+The daemon ensures no permission request is lost or double-processed.
+
+#### Pending Request Tracking
+
+The daemon maintains an in-memory map of pending permission requests per session:
+
+```rust
+struct PendingPermission {
+    request_id: String,
+    tool_name: String,
+    input: serde_json::Value,
+    received_at: Instant,
+    forwarded_to_client: bool,
+    response_received: bool,
+}
+
+// Per-session state
+pending_permissions: HashMap<String, PendingPermission>
+```
+
+#### Request Lifecycle
+
+```
+Claude emits control_request
+    |
+    v
+Daemon adds to pending_permissions map
+    |
+    +-- Auto-approve rule matches? --> Write allow to Claude, remove from map
+    |
+    +-- Forward to client with input lock
+            |
+            v
+    PermissionRequest sent to client
+            |
+    +-- Client responds with PermissionResponse
+    |       |
+    |       v
+    |   Daemon validates request_id exists in map
+    |       |
+    |       +-- Not found (duplicate/stale): Log warning, ignore
+    |       |
+    |       +-- Found: Write control_response to Claude, remove from map
+    |
+    +-- Tunnel drops before response
+            |
+            v
+        Client reconnects
+            |
+            v
+        Daemon replays all pending_permissions with forwarded_to_client = true
+            |
+            v
+        Client receives PermissionRequest (may be duplicate from client's view)
+            |
+            v
+        Client responds (response is idempotent via request_id check)
+```
+
+#### Reconnection Replay Protocol
+
+When a client reconnects via `Converse` with an existing `session_id`:
+
+1. Daemon checks `pending_permissions` map for the session.
+2. For each entry where `forwarded_to_client = true` and `response_received = false`:
+   - Re-emit `PermissionRequest` event with original `request_id`.
+   - Set `is_replay: true` flag in the event (client can deduplicate in UI).
+3. Client may receive a `PermissionRequest` it already responded to (if response was
+   in-flight when tunnel dropped).
+4. Client sends `PermissionResponse` (possibly duplicate).
+5. Daemon checks `request_id` in map:
+   - If `response_received = true`: log and ignore (idempotent).
+   - If `response_received = false`: process normally.
+
+#### Idempotent Response Handling
+
+```protobuf
+message PermissionResponse {
+  string request_id = 1;           // Must match pending request
+  PermissionDecision decision = 2;
+  string idempotency_key = 3;      // Optional: client-generated UUID
+}
+```
+
+The daemon:
+1. Checks `request_id` exists in `pending_permissions`.
+2. If `response_received = true`: return success (already processed).
+3. If `response_received = false`: write to Claude stdin, set `response_received = true`.
+4. Remove from map after writing (or after 60s timeout).
+
+#### Timeout Behavior (Mobile-First Design)
+
+**Design Philosophy**: Mobile users are NOT at their desk. A user getting lunch, commuting,
+or sleeping should NOT lose their work because they failed to respond within 60 seconds.
+The daemon should WAIT, the relay should BUFFER, the client should QUEUE.
+
+**Counter-argument addressed**: "Long timeouts block the agent" - FALSE. The agent can
+continue with other tools while awaiting permission for ONE specific tool. The permission
+request is for a single operation, not the entire session. Claude Code handles pending
+permissions gracefully and continues working on other aspects of the task.
+
+| Event | Timeout | Action |
+|-------|---------|--------|
+| Default permission TTL | 7 days | Configurable: 1 hour to 30 days |
+| No client connected | TTL from config | Buffer at relay, push notification sent |
+| Client connected, no response | TTL from config | Reminder notifications at 1h, 24h |
+| Client activity (reconnect, heartbeat, any message) | TTL resets | Auto-extend on ANY activity |
+| Explicit user action | Immediate | User grants/denies via push tap or client UI |
+| TTL expiration (final) | After configured period | Soft-deny with resumable option |
+
+**TTL Extension Rules:**
+
+Permission TTL automatically extends on ANY client activity for that session:
+- Client reconnects to the session
+- Heartbeat received from any client on the session
+- Any user message sent to the session
+- Permission response for ANY request in the session
+
+This ensures active users never hit timeouts, while truly abandoned requests eventually expire.
+
+**Soft-Deny vs Hard-Deny:**
+
+When a permission request expires after the configured TTL:
+- The daemon writes a `control_response` with `behavior: "deny"` and
+  `message: "Permission request expired after {TTL}. User can retry the operation."`
+- Claude receives the denial and can inform the user or skip the operation
+- The operation can be retried by the user asking Claude to perform it again
+- This is NOT a session-ending error; the conversation continues
+
+**Configuration:**
+
+```toml
+# daemon.toml / settings.json
+[permissions]
+default_ttl = "7d"           # 7 days (accepts: 1h, 6h, 1d, 7d, 30d)
+min_ttl = "1h"               # Minimum configurable (prevents accidental 0)
+max_ttl = "30d"              # Maximum configurable
+extend_on_activity = true    # Auto-extend on client activity
+reminder_intervals = ["1h", "24h"]  # Push notification reminders
+```
+
+**Why NOT 60 seconds:**
+
+The 60-second timeout was designed for desktop CLI usage where the user is actively
+watching the terminal. Mobile usage patterns are fundamentally different:
+
+| Scenario | 60s timeout result | 7d timeout result |
+|----------|-------------------|-------------------|
+| User gets coffee (5 min) | DENIED | Waiting |
+| User in meeting (1 hour) | DENIED | Reminder sent, waiting |
+| User commuting (2 hours) | DENIED | Reminder sent, waiting |
+| User sleeping (8 hours) | DENIED | Responds next morning |
+| User on vacation (3 days) | DENIED | Responds when back |
+| User abandoned session (2 weeks) | DENIED | Soft-denied after 7d |
+
+Storage cost for buffering a permission request: ~1 KB. Cost of losing user work: priceless.
+
+#### Database Persistence (Required for Mobile-First TTL)
+
+Pending permissions MUST be persisted to survive daemon restarts and support multi-day TTLs:
+
+```sql
+CREATE TABLE pending_permissions (
+    request_id TEXT PRIMARY KEY,
+    session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+    tool_name TEXT NOT NULL,
+    tool_description TEXT,          -- Human-readable description for push notifications
+    input TEXT NOT NULL,            -- JSON
+    received_at INTEGER NOT NULL,
+    forwarded_at INTEGER,
+    expires_at INTEGER NOT NULL,    -- received_at + configured_ttl (default 7 days)
+    last_extended_at INTEGER,       -- Last TTL extension timestamp
+    extension_count INTEGER DEFAULT 0,  -- Number of times TTL was extended
+    reminder_1h_sent INTEGER DEFAULT 0, -- 0/1: first reminder sent
+    reminder_24h_sent INTEGER DEFAULT 0, -- 0/1: second reminder sent
+    push_notification_id TEXT,      -- Correlation ID for push deduplication
+    response_received INTEGER DEFAULT 0,
+    response_decision TEXT,         -- 'allow_once', 'allow_session', 'deny', 'expired'
+    response_at INTEGER
+);
+
+CREATE INDEX idx_pending_session ON pending_permissions(session_id);
+CREATE INDEX idx_pending_expires ON pending_permissions(expires_at)
+    WHERE response_received = 0;
+CREATE INDEX idx_pending_reminders ON pending_permissions(reminder_1h_sent, reminder_24h_sent)
+    WHERE response_received = 0;
+```
+
+**TTL Extension Trigger:**
+
+```sql
+-- Called on any client activity for a session
+UPDATE pending_permissions
+SET expires_at = :now + :configured_ttl,
+    last_extended_at = :now,
+    extension_count = extension_count + 1
+WHERE session_id = :session_id
+  AND response_received = 0
+  AND expires_at > :now;  -- Only extend non-expired requests
+```
+
+**Reminder Query (run by background task every 5 minutes):**
+
+```sql
+-- Find requests needing 1-hour reminder
+SELECT request_id, session_id, tool_name, tool_description
+FROM pending_permissions
+WHERE response_received = 0
+  AND reminder_1h_sent = 0
+  AND received_at < :now - 3600;  -- Older than 1 hour
+
+-- Find requests needing 24-hour reminder
+SELECT request_id, session_id, tool_name, tool_description
+FROM pending_permissions
+WHERE response_received = 0
+  AND reminder_24h_sent = 0
+  AND received_at < :now - 86400;  -- Older than 24 hours
+```
+
+On daemon startup, load unexpired pending permissions and resume TTL tracking. The
+daemon also reconciles with the relay's buffered notifications to prevent duplicates.
+
 ## Session Management
 
 ### State: `NEW -> ACTIVE -> IDLE -> CLOSED`

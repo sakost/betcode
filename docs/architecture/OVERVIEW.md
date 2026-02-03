@@ -96,7 +96,7 @@ session continuity across devices. Trade-off: single point of failure per machin
 ### 4. Relay as Pure Router
 Zero AI workload, only routes gRPC traffic. Cheap to host, horizontally scalable.
 No API keys or secrets on relay. Trade-off: daemon must be online for real-time
-interaction; message buffer has 24h TTL.
+interaction; message buffer has 7-day TTL (configurable).
 
 ### 5. SQLite for Storage
 Embedded, zero-config, cross-platform. WAL mode for concurrency. Trade-off: relay
@@ -201,6 +201,7 @@ Code), plus BetCode-specific relay auth (JWT + mTLS).
 | Document                         | Description                                            |
 |----------------------------------|--------------------------------------------------------|
 | [OVERVIEW.md](./OVERVIEW.md)    | This file. C4 diagrams, decisions, tech stack          |
+| [GLOSSARY.md](./GLOSSARY.md)    | Terminology definitions and abbreviations              |
 | [DAEMON.md](./DAEMON.md)        | Daemon process, Claude subprocess mgmt, session mux    |
 | [PROTOCOL.md](./PROTOCOL.md)    | Claude SDK stream-json protocol, gRPC API definitions  |
 | [TOPOLOGY.md](./TOPOLOGY.md)    | Network topology, relay architecture, connection modes  |

@@ -229,6 +229,138 @@ CREATE INDEX idx_clients_heartbeat ON connected_clients(last_heartbeat);
 `has_input_lock = 1`. Enforced at the application layer via
 compare-and-swap logic within a transaction.
 
+### audit_log
+
+Persistent security audit trail for forensic analysis and compliance. This
+table stores all security-relevant events with mandatory retention periods.
+See [SECURITY.md](./SECURITY.md#audit-log-schema) for detailed schema
+documentation and retention policies.
+
+**Critical**: This table is required for daemon startup. The daemon refuses
+to start if the audit_log table is missing or corrupted.
+
+```sql
+CREATE TABLE audit_log (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    event_id TEXT NOT NULL UNIQUE,
+    event_type TEXT NOT NULL
+        CHECK (event_type IN (
+            'auto_approve_tool_call',
+            'permission_grant',
+            'permission_deny',
+            'permission_revoke',
+            'subagent_spawn',
+            'subagent_complete',
+            'subagent_fail',
+            'subagent_cancel',
+            'subagent_timeout',
+            'session_create',
+            'session_resume',
+            'session_complete',
+            'session_error',
+            'rate_limit_exceeded',
+            'tool_validation_fail',
+            'auth_success',
+            'auth_failure'
+        )),
+    severity TEXT NOT NULL DEFAULT 'info'
+        CHECK (severity IN ('debug', 'info', 'warn', 'error', 'critical')),
+    session_id TEXT,
+    subagent_id TEXT,
+    parent_session_id TEXT,
+    actor_type TEXT NOT NULL
+        CHECK (actor_type IN ('user', 'daemon', 'subagent', 'system')),
+    actor_id TEXT NOT NULL,
+    tool_name TEXT,
+    tool_input_hash TEXT,
+    tool_input_preview TEXT,
+    outcome TEXT NOT NULL
+        CHECK (outcome IN ('success', 'failure', 'denied', 'timeout')),
+    error_code TEXT,
+    error_message TEXT,
+    context TEXT,
+    client_ip TEXT,
+    created_at INTEGER NOT NULL,
+    expires_at INTEGER NOT NULL
+);
+
+CREATE INDEX idx_audit_session ON audit_log(session_id, created_at DESC)
+    WHERE session_id IS NOT NULL;
+CREATE INDEX idx_audit_subagent ON audit_log(subagent_id, created_at DESC)
+    WHERE subagent_id IS NOT NULL;
+CREATE INDEX idx_audit_type ON audit_log(event_type, created_at DESC);
+CREATE INDEX idx_audit_expiry ON audit_log(expires_at)
+    WHERE expires_at > 0;
+CREATE INDEX idx_audit_actor ON audit_log(actor_type, actor_id, created_at DESC);
+CREATE INDEX idx_audit_tool ON audit_log(tool_name, created_at DESC)
+    WHERE tool_name IS NOT NULL;
+```
+
+| Column | Type | Description |
+|--------|------|-------------|
+| id | INTEGER PK | Auto-incrementing row ID |
+| event_id | TEXT UNIQUE | UUIDv7 for global correlation across components |
+| event_type | TEXT | Security event category (see CHECK constraint) |
+| severity | TEXT | Log level: debug, info, warn, error, critical |
+| session_id | TEXT | References sessions(id), nullable for non-session events |
+| subagent_id | TEXT | References subagents(id), nullable for non-subagent events |
+| parent_session_id | TEXT | Parent session for subagent correlation |
+| actor_type | TEXT | Entity initiating the event |
+| actor_id | TEXT | Identifier of the actor (user_id, subagent_id, or 'system') |
+| tool_name | TEXT | Tool identifier for tool-related events, nullable |
+| tool_input_hash | TEXT | SHA-256 hash of tool input (integrity, not raw data) |
+| tool_input_preview | TEXT | First 256 chars of input, sanitized |
+| outcome | TEXT | Result of the operation |
+| error_code | TEXT | Structured error identifier, nullable |
+| error_message | TEXT | Human-readable error, max 1KB, nullable |
+| context | TEXT | JSON object with event-specific metadata |
+| client_ip | TEXT | IP address for remote operations, nullable |
+| created_at | INTEGER | Unix epoch seconds |
+| expires_at | INTEGER | Retention expiry timestamp for automatic cleanup |
+
+**Retention enforcement**: A background task runs hourly to delete rows where
+`expires_at < now()`. Minimum retention (90 days) is enforced at insert time;
+the daemon calculates `expires_at = created_at + retention_seconds` based on
+event_type. Manual deletion before expiry requires administrative override.
+
+### subagent_rate_limits
+
+Tracks rate limit state for auto-approve subagents. Token bucket counters
+are stored per subagent and reset periodically.
+
+```sql
+CREATE TABLE subagent_rate_limits (
+    subagent_id TEXT PRIMARY KEY REFERENCES subagents(id) ON DELETE CASCADE,
+    tool_calls_bucket INTEGER NOT NULL DEFAULT 60,
+    tool_calls_last_refill INTEGER NOT NULL,
+    bash_bucket INTEGER NOT NULL DEFAULT 20,
+    bash_last_refill INTEGER NOT NULL,
+    write_bucket INTEGER NOT NULL DEFAULT 30,
+    write_last_refill INTEGER NOT NULL,
+    session_tool_calls INTEGER NOT NULL DEFAULT 0,
+    session_limit INTEGER NOT NULL DEFAULT 1000
+);
+```
+
+| Column | Type | Description |
+|--------|------|-------------|
+| subagent_id | TEXT PK/FK | References subagents(id), cascading delete |
+| tool_calls_bucket | INTEGER | Current tokens for general tool calls |
+| tool_calls_last_refill | INTEGER | Unix epoch of last bucket refill |
+| bash_bucket | INTEGER | Current tokens for Bash commands |
+| bash_last_refill | INTEGER | Unix epoch of last Bash bucket refill |
+| write_bucket | INTEGER | Current tokens for Write/Edit operations |
+| write_last_refill | INTEGER | Unix epoch of last write bucket refill |
+| session_tool_calls | INTEGER | Total tool calls in session (monotonic) |
+| session_limit | INTEGER | Maximum tool calls allowed in session |
+
+**Token bucket algorithm**: On each tool call, the daemon refills buckets
+based on time elapsed since last refill (1 token per second up to max),
+then decrements the appropriate bucket. If bucket is empty, the call is
+denied or queued based on configuration.
+
+---
+
 ### todos
 
 Stores task items created by the agent via the TodoWrite tool. These are
@@ -385,8 +517,9 @@ informational and used by clients to display machine status.
 
 Buffered requests for machines that are currently offline. When a client
 sends a request targeting an offline machine, the relay stores it here
-with a 24-hour TTL. When the machine reconnects, buffered messages are
-delivered in FIFO order and marked as delivered.
+with a configurable TTL (default 7 days). When the machine reconnects,
+buffered messages are delivered in priority order (then FIFO within
+priority) and marked as delivered.
 
 ```sql
 CREATE TABLE message_buffer (
@@ -394,6 +527,9 @@ CREATE TABLE message_buffer (
     machine_id TEXT NOT NULL REFERENCES machines(id) ON DELETE CASCADE,
     request_id TEXT NOT NULL,
     payload BLOB NOT NULL,
+    message_type TEXT NOT NULL DEFAULT 'user_message',
+    priority INTEGER NOT NULL DEFAULT 2
+        CHECK (priority BETWEEN 0 AND 4),
     created_at INTEGER NOT NULL,
     expires_at INTEGER NOT NULL,
     delivered INTEGER NOT NULL DEFAULT 0
@@ -401,7 +537,7 @@ CREATE TABLE message_buffer (
 );
 
 CREATE INDEX idx_buffer_machine
-    ON message_buffer(machine_id, delivered);
+    ON message_buffer(machine_id, delivered, priority, id);
 CREATE INDEX idx_buffer_expiry ON message_buffer(expires_at)
     WHERE delivered = 0;
 ```
@@ -412,9 +548,29 @@ CREATE INDEX idx_buffer_expiry ON message_buffer(expires_at)
 | machine_id | TEXT FK | References machines(id) |
 | request_id | TEXT | Correlation ID for request/response matching |
 | payload | BLOB | Serialized gRPC request (protobuf bytes) |
+| message_type | TEXT | Type hint: permission_response, cancel, user_message, etc. |
+| priority | INTEGER | 0=highest (permission responses), 4=lowest (heartbeats) |
 | created_at | INTEGER | Unix epoch seconds |
-| expires_at | INTEGER | Unix epoch seconds (default: created_at + 86400) |
+| expires_at | INTEGER | Unix epoch seconds (default: created_at + 604800 = 7 days) |
 | delivered | INTEGER | 0 = pending, 1 = delivered |
+
+**Priority Values:**
+
+| Priority | Message Type | Description |
+|----------|--------------|-------------|
+| 0 | permission_response | Unblocks waiting agent operations |
+| 1 | cancel_request | Time-sensitive user intent |
+| 2 | user_message | Primary user interaction (default) |
+| 3 | session_control | Session management operations |
+| 4 | heartbeat | Background sync, lowest priority |
+
+**Delivery Query (on daemon reconnect):**
+
+```sql
+SELECT id, request_id, payload FROM message_buffer
+WHERE machine_id = ? AND delivered = 0
+ORDER BY priority ASC, id ASC;  -- Priority first, then FIFO
+```
 
 A background task periodically deletes rows where
 `expires_at < now() OR delivered = 1` to reclaim space.
@@ -468,8 +624,8 @@ actual SQLite DDL.
 
 Offline command queue. When the device has no connectivity to the relay or
 target machine, user actions are serialized and queued here. On reconnect,
-the sync engine drains the queue in sequence order, applying exponential
-backoff on failures.
+the sync engine drains the queue in priority order (then FIFO within priority),
+applying exponential backoff on failures. Default TTL is 7 days.
 
 ```sql
 CREATE TABLE sync_queue (
@@ -478,16 +634,21 @@ CREATE TABLE sync_queue (
     session_id TEXT,
     request_type TEXT NOT NULL,
     payload BLOB NOT NULL,
+    priority INTEGER NOT NULL DEFAULT 3
+        CHECK (priority BETWEEN 0 AND 5),
     sequence INTEGER NOT NULL,
     status TEXT NOT NULL DEFAULT 'pending'
-        CHECK (status IN ('pending', 'sending', 'sent', 'failed')),
+        CHECK (status IN ('pending', 'sending', 'sent', 'blocked', 'failed')),
     retry_count INTEGER NOT NULL DEFAULT 0,
     last_error TEXT,
-    created_at INTEGER NOT NULL
+    created_at INTEGER NOT NULL,
+    expires_at INTEGER NOT NULL
 );
 
-CREATE INDEX idx_sync_status ON sync_queue(status, sequence)
-    WHERE status IN ('pending', 'failed');
+CREATE INDEX idx_sync_status ON sync_queue(status, priority, sequence)
+    WHERE status IN ('pending', 'blocked', 'failed');
+CREATE INDEX idx_sync_expiry ON sync_queue(expires_at)
+    WHERE status NOT IN ('sent', 'failed');
 ```
 
 | Column | Type | Description |
@@ -497,11 +658,40 @@ CREATE INDEX idx_sync_status ON sync_queue(status, sequence)
 | session_id | TEXT | Target session, nullable (for session creation) |
 | request_type | TEXT | gRPC method name (e.g. "SendMessage") |
 | payload | BLOB | Serialized protobuf request bytes |
-| sequence | INTEGER | Monotonic ordering for FIFO delivery |
-| status | TEXT | pending, sending, sent, failed |
+| priority | INTEGER | 0=highest (permission responses), 5=lowest (status) |
+| sequence | INTEGER | Monotonic ordering for FIFO within priority |
+| status | TEXT | pending, sending, sent, blocked, failed |
 | retry_count | INTEGER | Number of delivery attempts |
 | last_error | TEXT | Most recent error message, nullable |
 | created_at | INTEGER | Unix epoch seconds |
+| expires_at | INTEGER | Unix epoch seconds (default: created_at + 604800 = 7 days) |
+
+**Priority Values (Client):**
+
+| Priority | Request Type | Description |
+|----------|--------------|-------------|
+| 0 | permission_response | Unblocks agent, highest priority |
+| 1 | question_response | Unblocks agent questions |
+| 2 | cancel_request | Time-sensitive user intent |
+| 3 | user_message | Primary interaction (default) |
+| 4 | session_control | Management operations |
+| 5 | heartbeat | Background sync, lowest priority |
+
+**Drain Query:**
+
+```sql
+SELECT id, machine_id, session_id, request_type, payload
+FROM sync_queue
+WHERE status IN ('pending', 'blocked')
+  AND expires_at > :now
+ORDER BY priority ASC, sequence ASC;
+```
+
+**TTL Cleanup (run on app launch and periodically):**
+
+```sql
+DELETE FROM sync_queue WHERE expires_at < :now;
+```
 
 ### cached_sessions
 
@@ -629,12 +819,12 @@ on enum columns catch invalid values at the database layer.
 - **messages as stream capture**: Stores raw NDJSON lines from Claude's
   stdout (`message_type` + `payload`), not parsed conversation turns.
   Preserves full fidelity for replay and reconnection.
-- **Payload size limits**: The `messages.payload` column stores raw
-  NDJSON lines which may contain large tool results (file contents,
-  command output). No SQL-level size limit is enforced — SQLite handles
-  TEXT up to 1GB. The daemon enforces a configurable max payload size
-  (default 10MB) at the application layer before insertion. Messages
-  exceeding this are truncated with a `[truncated]` marker.
+- **Payload size limits**: The `messages.payload` column stores raw NDJSON lines
+  which may contain large tool results. The daemon enforces a configurable max
+  payload size (default 10 MB, `daemon.max_payload_bytes`) at the application
+  layer before insertion. Messages exceeding this limit are truncated with a
+  `[truncated: original_size=X bytes]` marker. SQLite handles TEXT up to 1 GB
+  but this limit is not reached in practice.
 - **Input lock denormalization**: The input lock is tracked in two places:
   `sessions.input_lock_client` (authoritative, used by the permission
   bridge) and `connected_clients.has_input_lock` (derived, used for
@@ -755,6 +945,14 @@ sessions  1──<0..* messages
 sessions  1──<0..* permission_grants
 sessions  1──<0..* todos
 sessions  1──<0..* connected_clients
+sessions  1──<0..* subagents (as parent)
+sessions  1──<1    subagents (as own session)
+sessions  1──<0..* orchestrations
+subagents 1──<0..1 subagent_rate_limits
+subagents 1──<0..* audit_log (via subagent_id)
+sessions  1──<0..* audit_log (via session_id)
+orchestrations 1──<1..* orchestration_steps
+orchestration_steps 0..1──<1 subagents
 
 
 RELAY DATABASE
@@ -828,4 +1026,64 @@ FROM sync_queue
 WHERE status IN ('pending', 'failed')
 ORDER BY sequence ASC;
 -- served by: idx_sync_status
+```
+
+**Daemon -- forensic: all auto-approved actions by subagent**:
+
+```sql
+SELECT event_id, tool_name, tool_input_preview, outcome, created_at
+FROM audit_log
+WHERE subagent_id = ? AND event_type = 'auto_approve_tool_call'
+ORDER BY created_at ASC;
+-- served by: idx_audit_subagent
+```
+
+**Daemon -- security review: denied permissions in time range**:
+
+```sql
+SELECT * FROM audit_log
+WHERE event_type IN ('permission_deny', 'tool_validation_fail')
+  AND created_at BETWEEN ? AND ?
+ORDER BY created_at DESC;
+-- served by: idx_audit_type
+```
+
+**Daemon -- incident correlation: all events for parent session**:
+
+```sql
+SELECT * FROM audit_log
+WHERE session_id = ? OR parent_session_id = ?
+ORDER BY created_at ASC;
+-- served by: idx_audit_session (partial), requires OR optimization
+```
+
+**Daemon -- retention cleanup (hourly background task)**:
+
+```sql
+DELETE FROM audit_log
+WHERE expires_at < ?;
+-- served by: idx_audit_expiry
+```
+
+**Daemon -- check rate limit state for subagent**:
+
+```sql
+SELECT tool_calls_bucket, tool_calls_last_refill,
+       bash_bucket, bash_last_refill,
+       session_tool_calls, session_limit
+FROM subagent_rate_limits
+WHERE subagent_id = ?;
+-- served by: PRIMARY KEY
+```
+
+**Daemon -- decrement rate limit bucket (within transaction)**:
+
+```sql
+UPDATE subagent_rate_limits
+SET tool_calls_bucket = tool_calls_bucket - 1,
+    session_tool_calls = session_tool_calls + 1
+WHERE subagent_id = ?
+  AND tool_calls_bucket > 0
+  AND session_tool_calls < session_limit;
+-- Returns rows_affected=0 if rate limited
 ```
