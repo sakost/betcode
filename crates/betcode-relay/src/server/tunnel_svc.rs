@@ -13,6 +13,7 @@ use betcode_proto::v1::{
     FrameType, TunnelFrame, TunnelHeartbeat, TunnelRegisterRequest, TunnelRegisterResponse,
 };
 
+use crate::buffer::BufferManager;
 use crate::registry::ConnectionRegistry;
 use crate::server::interceptor::extract_claims;
 use crate::storage::RelayDatabase;
@@ -22,11 +23,20 @@ type TunnelStream = Pin<Box<dyn tokio_stream::Stream<Item = Result<TunnelFrame, 
 pub struct TunnelServiceImpl {
     registry: Arc<ConnectionRegistry>,
     db: RelayDatabase,
+    buffer: Arc<BufferManager>,
 }
 
 impl TunnelServiceImpl {
-    pub fn new(registry: Arc<ConnectionRegistry>, db: RelayDatabase) -> Self {
-        Self { registry, db }
+    pub fn new(
+        registry: Arc<ConnectionRegistry>,
+        db: RelayDatabase,
+        buffer: Arc<BufferManager>,
+    ) -> Self {
+        Self {
+            registry,
+            db,
+            buffer,
+        }
     }
 }
 
@@ -50,6 +60,7 @@ impl TunnelService for TunnelServiceImpl {
 
         let registry = Arc::clone(&self.registry);
         let db = self.db.clone();
+        let buffer = Arc::clone(&self.buffer);
 
         tokio::spawn(async move {
             // Wait for first frame to identify the machine
@@ -85,6 +96,17 @@ impl TunnelService for TunnelServiceImpl {
             // Update machine status to online
             if let Err(e) = db.update_machine_status(&machine_id, "online").await {
                 warn!(machine_id = %machine_id, error = %e, "Failed to update machine status");
+            }
+
+            // Drain any buffered messages for this machine
+            match buffer.drain_buffer(&machine_id).await {
+                Ok(count) if count > 0 => {
+                    info!(machine_id = %machine_id, count, "Drained buffered messages on reconnect");
+                }
+                Err(e) => {
+                    warn!(machine_id = %machine_id, error = %e, "Failed to drain buffer on reconnect");
+                }
+                _ => {}
             }
 
             // Forward frames from relay_rx to daemon (out_tx)

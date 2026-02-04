@@ -4,28 +4,38 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use tokio::time::timeout;
-use tracing::warn;
+use tracing::{info, warn};
 
 use betcode_proto::v1::{FrameType, StreamPayload, TunnelError, TunnelErrorCode, TunnelFrame};
 
+use crate::buffer::BufferManager;
 use crate::registry::ConnectionRegistry;
 
 /// Routes requests through tunnel connections to daemons.
 #[derive(Clone)]
 pub struct RequestRouter {
     registry: Arc<ConnectionRegistry>,
+    buffer: Arc<BufferManager>,
     request_timeout: Duration,
 }
 
 impl RequestRouter {
-    pub fn new(registry: Arc<ConnectionRegistry>, request_timeout: Duration) -> Self {
+    pub fn new(
+        registry: Arc<ConnectionRegistry>,
+        buffer: Arc<BufferManager>,
+        request_timeout: Duration,
+    ) -> Self {
         Self {
             registry,
+            buffer,
             request_timeout,
         }
     }
 
     /// Forward a request to a machine and wait for the response.
+    ///
+    /// If the machine is offline, the request is buffered for later delivery
+    /// and a `Buffered` error is returned.
     pub async fn forward_request(
         &self,
         machine_id: &str,
@@ -34,11 +44,37 @@ impl RequestRouter {
         data: Vec<u8>,
         metadata: std::collections::HashMap<String, String>,
     ) -> Result<TunnelFrame, RouterError> {
-        let conn = self
-            .registry
-            .get(machine_id)
-            .await
-            .ok_or(RouterError::MachineOffline(machine_id.to_string()))?;
+        let conn = match self.registry.get(machine_id).await {
+            Some(c) => c,
+            None => {
+                // Buffer the request for when the machine reconnects
+                let metadata_json =
+                    serde_json::to_string(&metadata).unwrap_or_else(|_| "{}".to_string());
+                match self
+                    .buffer
+                    .buffer_request(machine_id, request_id, method, &data, &metadata_json)
+                    .await
+                {
+                    Ok(buf_id) => {
+                        info!(
+                            machine_id = %machine_id,
+                            request_id = %request_id,
+                            buffer_id = buf_id,
+                            "Request buffered for offline machine"
+                        );
+                        return Err(RouterError::Buffered(machine_id.to_string()));
+                    }
+                    Err(e) => {
+                        warn!(
+                            machine_id = %machine_id,
+                            error = %e,
+                            "Failed to buffer request for offline machine"
+                        );
+                        return Err(RouterError::MachineOffline(machine_id.to_string()));
+                    }
+                }
+            }
+        };
 
         // Build request frame
         let frame = TunnelFrame {
@@ -105,6 +141,9 @@ pub enum RouterError {
     #[error("Machine offline: {0}")]
     MachineOffline(String),
 
+    #[error("Request buffered for offline machine: {0}")]
+    Buffered(String),
+
     #[error("Failed to send through tunnel: {0}")]
     SendFailed(String),
 
@@ -118,7 +157,22 @@ pub enum RouterError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::storage::RelayDatabase;
     use tokio::sync::mpsc;
+
+    async fn test_buffer(
+        registry: &Arc<ConnectionRegistry>,
+        machines: &[&str],
+    ) -> Arc<BufferManager> {
+        let db = RelayDatabase::open_in_memory().await.unwrap();
+        db.create_user("u1", "alice", "alice@test.com", "hash")
+            .await
+            .unwrap();
+        for mid in machines {
+            db.create_machine(mid, mid, "u1", "{}").await.unwrap();
+        }
+        Arc::new(BufferManager::new(db, Arc::clone(registry)))
+    }
 
     #[tokio::test]
     async fn forward_request_to_online_machine() {
@@ -127,7 +181,8 @@ mod tests {
 
         registry.register("m1".into(), "u1".into(), tx).await;
 
-        let router = RequestRouter::new(Arc::clone(&registry), Duration::from_secs(5));
+        let buffer = test_buffer(&registry, &["m1"]).await;
+        let router = RequestRouter::new(Arc::clone(&registry), buffer, Duration::from_secs(5));
 
         // Spawn responder that echoes back
         let reg_clone = Arc::clone(&registry);
@@ -155,15 +210,17 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn forward_to_offline_machine_fails() {
+    async fn forward_to_offline_machine_buffers() {
         let registry = Arc::new(ConnectionRegistry::new());
-        let router = RequestRouter::new(registry, Duration::from_secs(1));
+        let buffer = test_buffer(&registry, &["m-missing"]).await;
+        let router = RequestRouter::new(Arc::clone(&registry), buffer, Duration::from_secs(1));
 
         let result = router
             .forward_request("m-missing", "req-1", "Test", vec![], Default::default())
             .await;
 
-        assert!(matches!(result, Err(RouterError::MachineOffline(_))));
+        // Should be buffered, not a hard offline error
+        assert!(matches!(result, Err(RouterError::Buffered(_))));
     }
 
     #[tokio::test]
@@ -173,8 +230,9 @@ mod tests {
 
         registry.register("m1".into(), "u1".into(), tx).await;
 
+        let buffer = test_buffer(&registry, &["m1"]).await;
         // Very short timeout, no responder
-        let router = RequestRouter::new(Arc::clone(&registry), Duration::from_millis(50));
+        let router = RequestRouter::new(Arc::clone(&registry), buffer, Duration::from_millis(50));
 
         let result = router
             .forward_request("m1", "req-1", "Test", vec![], Default::default())

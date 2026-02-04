@@ -9,7 +9,7 @@ use std::time::Duration;
 
 use clap::Parser;
 use tonic::transport::Server;
-use tracing::info;
+use tracing::{info, warn};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 use betcode_proto::v1::agent_service_server::AgentServiceServer;
@@ -18,6 +18,7 @@ use betcode_proto::v1::machine_service_server::MachineServiceServer;
 use betcode_proto::v1::tunnel_service_server::TunnelServiceServer;
 
 use betcode_relay::auth::JwtManager;
+use betcode_relay::buffer::BufferManager;
 use betcode_relay::registry::ConnectionRegistry;
 use betcode_relay::router::RequestRouter;
 use betcode_relay::server::{
@@ -110,14 +111,16 @@ async fn main() -> anyhow::Result<()> {
     ));
 
     let registry = Arc::new(ConnectionRegistry::new());
+    let buffer = Arc::new(BufferManager::new(db.clone(), Arc::clone(&registry)));
     let router = Arc::new(RequestRouter::new(
         Arc::clone(&registry),
+        Arc::clone(&buffer),
         Duration::from_secs(args.request_timeout),
     ));
 
     // Build services
     let auth = AuthServiceImpl::new(db.clone(), Arc::clone(&jwt));
-    let tunnel = TunnelServiceImpl::new(Arc::clone(&registry), db.clone());
+    let tunnel = TunnelServiceImpl::new(Arc::clone(&registry), db.clone(), Arc::clone(&buffer));
     let machine = MachineServiceImpl::new(db.clone());
     let agent_proxy = AgentProxyService::new(Arc::clone(&router));
 
@@ -149,7 +152,26 @@ async fn main() -> anyhow::Result<()> {
         info!(addr = %args.addr, "Relay server starting (plaintext)");
     }
 
-    let router = builder
+    // Spawn background task to clean up expired buffered messages (hourly)
+    let cleanup_buffer = Arc::clone(&buffer);
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(Duration::from_secs(3600));
+        interval.tick().await; // Skip first immediate tick
+        loop {
+            interval.tick().await;
+            match cleanup_buffer.cleanup_expired().await {
+                Ok(removed) if removed > 0 => {
+                    info!(removed, "Background buffer cleanup completed");
+                }
+                Err(e) => {
+                    warn!(error = %e, "Background buffer cleanup failed");
+                }
+                _ => {}
+            }
+        }
+    });
+
+    let grpc_router = builder
         .add_service(AuthServiceServer::new(auth))
         .add_service(TunnelServiceServer::with_interceptor(
             tunnel,
@@ -162,7 +184,7 @@ async fn main() -> anyhow::Result<()> {
         .add_service(AgentServiceServer::with_interceptor(agent_proxy, jwt_check));
 
     tokio::select! {
-        result = router.serve(args.addr) => {
+        result = grpc_router.serve(args.addr) => {
             result?;
         }
         _ = tokio::signal::ctrl_c() => {
