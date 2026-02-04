@@ -5,6 +5,7 @@ members = [
     "crates/betcode-core",
     "crates/betcode-daemon",
     "crates/betcode-cli",
+    "crates/betcode-relay",
 ]
 
 [workspace.package]

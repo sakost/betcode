@@ -1,0 +1,102 @@
+// BetCode Machine Service
+// Machine registration and management for relay routing.
+//
+// Version: v1
+
+syntax = "proto3";
+
+package betcode.v1;
+
+import "google/protobuf/timestamp.proto";
+
+// MachineService manages daemon machine registrations.
+service MachineService {
+  // Register a new machine for the authenticated user.
+  rpc RegisterMachine(RegisterMachineRequest) returns (RegisterMachineResponse);
+
+  // List all machines owned by the authenticated user.
+  rpc ListMachines(ListMachinesRequest) returns (ListMachinesResponse);
+
+  // Remove a machine registration.
+  rpc RemoveMachine(RemoveMachineRequest) returns (RemoveMachineResponse);
+
+  // Get details for a specific machine.
+  rpc GetMachine(GetMachineRequest) returns (GetMachineResponse);
+}
+
+// =============================================================================
+// Machine Status
+// =============================================================================
+
+enum MachineStatus {
+  MACHINE_STATUS_UNSPECIFIED = 0;
+  MACHINE_STATUS_ONLINE = 1;
+  MACHINE_STATUS_OFFLINE = 2;
+}
+
+// =============================================================================
+// Machine Info
+// =============================================================================
+
+message MachineInfo {
+  string machine_id = 1;
+  string name = 2;
+  string owner_id = 3;
+  MachineStatus status = 4;
+  google.protobuf.Timestamp registered_at = 5;
+  google.protobuf.Timestamp last_seen = 6;
+  map<string, string> metadata = 7;
+}
+
+// =============================================================================
+// Register Machine
+// =============================================================================
+
+message RegisterMachineRequest {
+  string machine_id = 1;
+  string name = 2;
+  map<string, string> metadata = 3;
+}
+
+message RegisterMachineResponse {
+  MachineInfo machine = 1;
+}
+
+// =============================================================================
+// List Machines
+// =============================================================================
+
+message ListMachinesRequest {
+  MachineStatus status_filter = 1;
+  uint32 limit = 2;
+  uint32 offset = 3;
+}
+
+message ListMachinesResponse {
+  repeated MachineInfo machines = 1;
+  uint32 total = 2;
+}
+
+// =============================================================================
+// Remove Machine
+// =============================================================================
+
+message RemoveMachineRequest {
+  string machine_id = 1;
+}
+
+message RemoveMachineResponse {
+  bool removed = 1;
+}
+
+// =============================================================================
+// Get Machine
+// =============================================================================
+
+message GetMachineRequest {
+  string machine_id = 1;
+}
+
+message GetMachineResponse {
+  MachineInfo machine = 1;
+}

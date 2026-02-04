@@ -1,0 +1,33 @@
+[package]
+name = "betcode-relay"
+description = "BetCode relay server - gRPC router, auth, and tunnel management"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "betcode-relay"
+path = "src/main.rs"
+
+[dependencies]
+betcode-proto = { workspace = true }
+tokio.workspace = true
+tonic.workspace = true
+prost.workspace = true
+prost-types.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sqlx.workspace = true
+thiserror.workspace = true
+anyhow.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+clap.workspace = true
+uuid = { version = "1", features = ["v4"] }
+tokio-stream = "0.1"
+dirs = "6"
+jsonwebtoken = "10.3.0"
+argon2 = "0.5.3"
+sha2 = "0.10.9"
+rcgen = "0.14.7"

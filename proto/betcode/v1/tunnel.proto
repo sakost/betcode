@@ -1,0 +1,145 @@
+// BetCode Tunnel Service
+// Bidirectional tunnel between relay and daemon for proxied requests.
+//
+// Version: v1
+
+syntax = "proto3";
+
+package betcode.v1;
+
+import "google/protobuf/timestamp.proto";
+import "google/protobuf/struct.proto";
+
+// TunnelService manages the persistent tunnel between relay and daemon.
+service TunnelService {
+  // OpenTunnel establishes a bidirectional stream for proxied requests.
+  // Daemon connects and keeps this stream open for the lifetime of the connection.
+  rpc OpenTunnel(stream TunnelFrame) returns (stream TunnelFrame);
+
+  // Register announces a daemon's machine to the relay.
+  rpc Register(TunnelRegisterRequest) returns (TunnelRegisterResponse);
+
+  // Heartbeat keeps the tunnel alive and reports daemon health.
+  rpc Heartbeat(TunnelHeartbeat) returns (TunnelHeartbeat);
+}
+
+// =============================================================================
+// Tunnel Frame (bidirectional envelope)
+// =============================================================================
+
+// TunnelFrame is the envelope for all messages sent through the tunnel.
+message TunnelFrame {
+  string request_id = 1;
+  FrameType frame_type = 2;
+  google.protobuf.Timestamp timestamp = 3;
+
+  oneof payload {
+    StreamPayload stream_data = 10;
+    TunnelError error = 11;
+    TunnelControl control = 12;
+  }
+}
+
+// FrameType identifies the purpose of a tunnel frame.
+enum FrameType {
+  FRAME_TYPE_UNSPECIFIED = 0;
+  // Request from relay to daemon (wraps a client gRPC call).
+  FRAME_TYPE_REQUEST = 1;
+  // Response from daemon to relay (wraps a gRPC response).
+  FRAME_TYPE_RESPONSE = 2;
+  // Streaming data chunk (for bidi-streaming proxied calls).
+  FRAME_TYPE_STREAM_DATA = 3;
+  // End of stream marker.
+  FRAME_TYPE_STREAM_END = 4;
+  // Error frame.
+  FRAME_TYPE_ERROR = 5;
+  // Control frame (tunnel management).
+  FRAME_TYPE_CONTROL = 6;
+}
+
+// =============================================================================
+// Stream Payload
+// =============================================================================
+
+// StreamPayload carries the serialized gRPC request/response through the tunnel.
+message StreamPayload {
+  // The gRPC service method being proxied (e.g. "betcode.v1.AgentService/Converse").
+  string method = 1;
+  // Serialized protobuf bytes of the request or response.
+  bytes data = 2;
+  // Sequence number for ordering within a stream.
+  uint64 sequence = 3;
+  // Metadata headers to forward.
+  map<string, string> metadata = 4;
+}
+
+// =============================================================================
+// Tunnel Error
+// =============================================================================
+
+// TunnelError reports an error within the tunnel.
+message TunnelError {
+  TunnelErrorCode code = 1;
+  string message = 2;
+  map<string, string> details = 3;
+}
+
+// TunnelErrorCode categorizes tunnel errors.
+enum TunnelErrorCode {
+  TUNNEL_ERROR_CODE_UNSPECIFIED = 0;
+  TUNNEL_ERROR_CODE_INTERNAL = 1;
+  TUNNEL_ERROR_CODE_TIMEOUT = 2;
+  TUNNEL_ERROR_CODE_NOT_FOUND = 3;
+  TUNNEL_ERROR_CODE_UNAUTHORIZED = 4;
+  TUNNEL_ERROR_CODE_UNAVAILABLE = 5;
+}
+
+// =============================================================================
+// Tunnel Control
+// =============================================================================
+
+// TunnelControl carries tunnel management messages.
+message TunnelControl {
+  TunnelControlType control_type = 1;
+  map<string, string> params = 2;
+}
+
+// TunnelControlType identifies tunnel control operations.
+enum TunnelControlType {
+  TUNNEL_CONTROL_TYPE_UNSPECIFIED = 0;
+  // Sent by relay to request tunnel drain (graceful shutdown).
+  TUNNEL_CONTROL_TYPE_DRAIN = 1;
+  // Sent by daemon to acknowledge drain.
+  TUNNEL_CONTROL_TYPE_DRAIN_ACK = 2;
+  // Ping/pong for tunnel-level keepalive.
+  TUNNEL_CONTROL_TYPE_PING = 3;
+  TUNNEL_CONTROL_TYPE_PONG = 4;
+}
+
+// =============================================================================
+// Registration
+// =============================================================================
+
+message TunnelRegisterRequest {
+  string machine_id = 1;
+  string machine_name = 2;
+  map<string, string> capabilities = 3;
+}
+
+message TunnelRegisterResponse {
+  bool accepted = 1;
+  string relay_id = 2;
+  int64 heartbeat_interval_secs = 3;
+}
+
+// =============================================================================
+// Heartbeat
+// =============================================================================
+
+message TunnelHeartbeat {
+  string machine_id = 1;
+  google.protobuf.Timestamp timestamp = 2;
+  uint32 active_sessions = 3;
+  float cpu_usage_percent = 4;
+  float memory_usage_percent = 5;
+}
