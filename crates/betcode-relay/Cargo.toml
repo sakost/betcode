@@ -27,7 +27,7 @@ clap.workspace = true
 uuid = { version = "1", features = ["v4"] }
 tokio-stream = "0.1"
 dirs = "6"
-jsonwebtoken = "10.3.0"
+jsonwebtoken = { version = "10.3.0", features = ["rust_crypto"] }
 argon2 = "0.5.3"
 sha2 = "0.10.9"
 rcgen = "0.14.7"

@@ -7,4 +7,6 @@
 //! - Connection registry for tunnel management
 //! - Request routing through tunnels to daemons
 
+pub mod auth;
+pub mod server;
 pub mod storage;
