@@ -8,5 +8,6 @@
 //! - Request routing through tunnels to daemons
 
 pub mod auth;
+pub mod registry;
 pub mod server;
 pub mod storage;
