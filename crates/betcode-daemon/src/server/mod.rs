@@ -138,4 +138,19 @@ impl GrpcServer {
     pub fn config(&self) -> &ServerConfig {
         &self.config
     }
+
+    /// Get a reference to the session relay (for tunnel handler).
+    pub fn relay(&self) -> &Arc<SessionRelay> {
+        &self.relay
+    }
+
+    /// Get a reference to the session multiplexer (for tunnel handler).
+    pub fn multiplexer(&self) -> &Arc<SessionMultiplexer> {
+        &self.multiplexer
+    }
+
+    /// Get a clone of the database (for tunnel handler).
+    pub fn db(&self) -> &Database {
+        &self.db
+    }
 }

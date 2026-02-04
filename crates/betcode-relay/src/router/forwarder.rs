@@ -3,6 +3,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
+use tokio::sync::mpsc;
 use tokio::time::timeout;
 use tracing::{info, warn};
 
@@ -112,6 +113,98 @@ impl RequestRouter {
                 Err(RouterError::Timeout(request_id.to_string()))
             }
         }
+    }
+
+    /// Forward a streaming request to a machine and return a receiver for multiple response frames.
+    ///
+    /// Unlike `forward_request` which waits for a single response, this registers a stream
+    /// channel and returns immediately. The caller reads frames from the receiver until it
+    /// closes (StreamEnd received).
+    pub async fn forward_stream(
+        &self,
+        machine_id: &str,
+        request_id: &str,
+        method: &str,
+        data: Vec<u8>,
+        metadata: std::collections::HashMap<String, String>,
+    ) -> Result<mpsc::Receiver<TunnelFrame>, RouterError> {
+        let conn = self
+            .registry
+            .get(machine_id)
+            .await
+            .ok_or_else(|| RouterError::MachineOffline(machine_id.to_string()))?;
+
+        let frame = TunnelFrame {
+            request_id: request_id.to_string(),
+            frame_type: FrameType::Request as i32,
+            timestamp: Some(prost_types::Timestamp::from(std::time::SystemTime::now())),
+            payload: Some(betcode_proto::v1::tunnel_frame::Payload::StreamData(
+                StreamPayload {
+                    method: method.to_string(),
+                    data,
+                    sequence: 0,
+                    metadata,
+                },
+            )),
+        };
+
+        // Register stream pending before sending
+        let stream_rx = conn.register_stream_pending(request_id.to_string()).await;
+
+        conn.send_frame(frame)
+            .await
+            .map_err(|_| RouterError::SendFailed(machine_id.to_string()))?;
+
+        Ok(stream_rx)
+    }
+
+    /// Forward a bidirectional streaming request.
+    ///
+    /// Returns a sender for pushing frames to the daemon and a receiver for response frames.
+    /// The caller sends client frames via the sender and reads server frames from the receiver.
+    pub async fn forward_bidi_stream(
+        &self,
+        machine_id: &str,
+        request_id: &str,
+        method: &str,
+        data: Vec<u8>,
+        metadata: std::collections::HashMap<String, String>,
+    ) -> Result<(mpsc::Sender<TunnelFrame>, mpsc::Receiver<TunnelFrame>), RouterError> {
+        let conn = self
+            .registry
+            .get(machine_id)
+            .await
+            .ok_or_else(|| RouterError::MachineOffline(machine_id.to_string()))?;
+
+        let frame = TunnelFrame {
+            request_id: request_id.to_string(),
+            frame_type: FrameType::Request as i32,
+            timestamp: Some(prost_types::Timestamp::from(std::time::SystemTime::now())),
+            payload: Some(betcode_proto::v1::tunnel_frame::Payload::StreamData(
+                StreamPayload {
+                    method: method.to_string(),
+                    data,
+                    sequence: 0,
+                    metadata,
+                },
+            )),
+        };
+
+        // Register stream pending before sending
+        let stream_rx = conn.register_stream_pending(request_id.to_string()).await;
+
+        conn.send_frame(frame)
+            .await
+            .map_err(|_| RouterError::SendFailed(machine_id.to_string()))?;
+
+        // Return the connection's frame_tx clone for sending additional client frames
+        let client_tx = conn.frame_tx.clone();
+        Ok((client_tx, stream_rx))
+    }
+
+    /// Get a reference to the connection registry.
+    pub fn registry(&self) -> &Arc<ConnectionRegistry> {
+        &self.registry
     }
 
     /// Create an error TunnelFrame for returning to callers.
@@ -239,5 +332,134 @@ mod tests {
             .await;
 
         assert!(matches!(result, Err(RouterError::Timeout(_))));
+    }
+
+    #[tokio::test]
+    async fn forward_stream_to_online_machine() {
+        let registry = Arc::new(ConnectionRegistry::new());
+        let (tx, mut tunnel_rx) = mpsc::channel(16);
+        registry.register("m1".into(), "u1".into(), tx).await;
+
+        let buffer = test_buffer(&registry, &["m1"]).await;
+        let router = RequestRouter::new(Arc::clone(&registry), buffer, Duration::from_secs(5));
+
+        // Spawn mock responder: 3 StreamData + StreamEnd
+        let reg = Arc::clone(&registry);
+        tokio::spawn(async move {
+            if let Some(frame) = tunnel_rx.recv().await {
+                let rid = frame.request_id;
+                let conn = reg.get("m1").await.unwrap();
+                for i in 0..3 {
+                    let f = TunnelFrame {
+                        request_id: rid.clone(),
+                        frame_type: FrameType::StreamData as i32,
+                        payload: Some(betcode_proto::v1::tunnel_frame::Payload::StreamData(
+                            StreamPayload {
+                                method: String::new(),
+                                data: vec![i],
+                                sequence: i as u64,
+                                metadata: Default::default(),
+                            },
+                        )),
+                        ..Default::default()
+                    };
+                    conn.send_stream_frame(&rid, f).await;
+                }
+                conn.complete_stream(&rid).await;
+            }
+        });
+
+        let mut rx = router
+            .forward_stream("m1", "req-s1", "Test/Stream", vec![], Default::default())
+            .await
+            .unwrap();
+
+        let mut received = vec![];
+        while let Some(f) = rx.recv().await {
+            received.push(f);
+        }
+        assert_eq!(received.len(), 3);
+        for (i, f) in received.iter().enumerate() {
+            assert_eq!(f.request_id, "req-s1");
+            assert_eq!(f.frame_type, FrameType::StreamData as i32);
+            if let Some(betcode_proto::v1::tunnel_frame::Payload::StreamData(p)) = &f.payload {
+                assert_eq!(p.data, vec![i as u8]);
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn forward_stream_offline_returns_error() {
+        let registry = Arc::new(ConnectionRegistry::new());
+        let buffer = test_buffer(&registry, &["m1"]).await;
+        let router = RequestRouter::new(Arc::clone(&registry), buffer, Duration::from_secs(1));
+
+        let result = router
+            .forward_stream("m1", "req-1", "Test", vec![], Default::default())
+            .await;
+        assert!(matches!(result, Err(RouterError::MachineOffline(_))));
+    }
+
+    #[tokio::test]
+    async fn forward_bidi_stream_sends_and_receives() {
+        let registry = Arc::new(ConnectionRegistry::new());
+        let (tx, mut tunnel_rx) = mpsc::channel(16);
+        registry.register("m1".into(), "u1".into(), tx).await;
+
+        let buffer = test_buffer(&registry, &["m1"]).await;
+        let router = RequestRouter::new(Arc::clone(&registry), buffer, Duration::from_secs(5));
+
+        let reg = Arc::clone(&registry);
+        tokio::spawn(async move {
+            // Receive initial request
+            if let Some(frame) = tunnel_rx.recv().await {
+                let rid = frame.request_id;
+                let conn = reg.get("m1").await.unwrap();
+                // Send one response
+                let f = TunnelFrame {
+                    request_id: rid.clone(),
+                    frame_type: FrameType::StreamData as i32,
+                    ..Default::default()
+                };
+                conn.send_stream_frame(&rid, f).await;
+
+                // Wait for client frame
+                if let Some(client_frame) = tunnel_rx.recv().await {
+                    assert_eq!(client_frame.request_id, rid);
+                    // Send final + close
+                    let f2 = TunnelFrame {
+                        request_id: rid.clone(),
+                        frame_type: FrameType::StreamData as i32,
+                        ..Default::default()
+                    };
+                    conn.send_stream_frame(&rid, f2).await;
+                    conn.complete_stream(&rid).await;
+                }
+            }
+        });
+
+        let (client_tx, mut rx) = router
+            .forward_bidi_stream("m1", "req-b1", "Test/Bidi", vec![], Default::default())
+            .await
+            .unwrap();
+
+        // Receive first server frame
+        let f1 = rx.recv().await.unwrap();
+        assert_eq!(f1.request_id, "req-b1");
+
+        // Send client frame
+        let client_frame = TunnelFrame {
+            request_id: "req-b1".into(),
+            frame_type: FrameType::StreamData as i32,
+            ..Default::default()
+        };
+        client_tx.send(client_frame).await.unwrap();
+
+        // Receive second server frame
+        let f2 = rx.recv().await.unwrap();
+        assert_eq!(f2.request_id, "req-b1");
+
+        // Stream closes
+        assert!(rx.recv().await.is_none());
     }
 }

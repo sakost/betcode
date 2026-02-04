@@ -20,16 +20,31 @@ use super::config::TunnelConfig;
 use super::error::TunnelClientError;
 use super::handler::TunnelRequestHandler;
 
+use crate::relay::SessionRelay;
+use crate::session::SessionMultiplexer;
+use crate::storage::Database;
+
 /// Tunnel client that maintains a persistent connection to the relay.
 pub struct TunnelClient {
     config: TunnelConfig,
-    handler: Arc<TunnelRequestHandler>,
+    relay: Arc<SessionRelay>,
+    multiplexer: Arc<SessionMultiplexer>,
+    db: Database,
 }
 
 impl TunnelClient {
-    pub fn new(config: TunnelConfig) -> Self {
-        let handler = Arc::new(TunnelRequestHandler::new(config.machine_id.clone()));
-        Self { config, handler }
+    pub fn new(
+        config: TunnelConfig,
+        relay: Arc<SessionRelay>,
+        multiplexer: Arc<SessionMultiplexer>,
+        db: Database,
+    ) -> Self {
+        Self {
+            config,
+            relay,
+            multiplexer,
+            db,
+        }
     }
 
     /// Run the tunnel client with automatic reconnection.
@@ -118,6 +133,14 @@ impl TunnelClient {
         let (outbound_tx, outbound_rx) = mpsc::channel::<TunnelFrame>(128);
         self.send_init_frame(&outbound_tx).await?;
 
+        let handler = Arc::new(TunnelRequestHandler::new(
+            self.config.machine_id.clone(),
+            Arc::clone(&self.relay),
+            Arc::clone(&self.multiplexer),
+            self.db.clone(),
+            outbound_tx.clone(),
+        ));
+
         let outbound_stream = ReceiverStream::new(outbound_rx);
         let mut request = Request::new(outbound_stream);
         request.metadata_mut().insert(
@@ -134,7 +157,7 @@ impl TunnelClient {
 
         info!(machine_id = %self.config.machine_id, "Tunnel connected");
 
-        self.tunnel_loop(response.into_inner(), outbound_tx, shutdown)
+        self.tunnel_loop(handler, response.into_inner(), outbound_tx, shutdown)
             .await
     }
 
@@ -214,11 +237,11 @@ impl TunnelClient {
     /// Main tunnel loop: process incoming frames and send responses.
     async fn tunnel_loop(
         &self,
+        handler: Arc<TunnelRequestHandler>,
         mut inbound: Streaming<TunnelFrame>,
         outbound_tx: mpsc::Sender<TunnelFrame>,
         shutdown: &mut tokio::sync::watch::Receiver<bool>,
     ) -> Result<(), TunnelClientError> {
-        let handler = Arc::clone(&self.handler);
         let machine_id = self.config.machine_id.clone();
         let mut heartbeat_timer = tokio::time::interval(self.config.heartbeat_interval);
         heartbeat_timer.tick().await; // Skip first immediate tick
@@ -228,7 +251,8 @@ impl TunnelClient {
                 frame_result = inbound.next() => {
                     match frame_result {
                         Some(Ok(frame)) => {
-                            if let Some(response) = handler.handle_frame(frame) {
+                            let responses = handler.handle_frame(frame).await;
+                            for response in responses {
                                 if outbound_tx.send(response).await.is_err() {
                                     return Err(TunnelClientError::Connection(
                                         "Outbound channel closed".into(),
@@ -285,9 +309,10 @@ impl TunnelClient {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::subprocess::SubprocessManager;
 
-    #[test]
-    fn tunnel_client_creation() {
+    #[tokio::test]
+    async fn tunnel_client_creation() {
         let config = TunnelConfig::new(
             "https://localhost:443".into(),
             "m1".into(),
@@ -295,7 +320,11 @@ mod tests {
             "user".into(),
             "pass".into(),
         );
-        let client = TunnelClient::new(config);
+        let db = Database::open_in_memory().await.unwrap();
+        let sub = Arc::new(SubprocessManager::new(5));
+        let mux = Arc::new(SessionMultiplexer::with_defaults());
+        let relay = Arc::new(SessionRelay::new(sub, Arc::clone(&mux), db.clone()));
+        let client = TunnelClient::new(config, relay, mux, db);
         assert_eq!(client.config.machine_id, "m1");
     }
 }

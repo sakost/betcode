@@ -126,17 +126,28 @@ impl TunnelService for TunnelServiceImpl {
                 match result {
                     Ok(frame) => {
                         let frame_type = frame.frame_type;
-                        if frame_type == FrameType::Response as i32
-                            || frame_type == FrameType::StreamData as i32
-                            || frame_type == FrameType::StreamEnd as i32
-                        {
-                            // Route response to pending waiter
-                            let rid = frame.request_id.clone();
+                        let rid = frame.request_id.clone();
+
+                        if frame_type == FrameType::StreamEnd as i32 {
+                            // StreamEnd: deliver final frame to stream channel, then close it.
+                            // If no stream channel, try unary pending as fallback.
+                            if conn_ref.has_stream_pending(&rid).await {
+                                conn_ref.send_stream_frame(&rid, frame).await;
+                                conn_ref.complete_stream(&rid).await;
+                            } else if !conn_ref.complete_pending(&rid, frame).await {
+                                warn!(request_id = %rid, "No pending waiter for StreamEnd");
+                            }
+                        } else if frame_type == FrameType::StreamData as i32 {
+                            // StreamData: try stream channel first, fall back to unary
+                            if !conn_ref.send_stream_frame(&rid, frame.clone()).await
+                                && !conn_ref.complete_pending(&rid, frame).await
+                            {
+                                warn!(request_id = %rid, "No pending waiter for StreamData");
+                            }
+                        } else if frame_type == FrameType::Response as i32 {
+                            // Unary response: complete the oneshot pending
                             if !conn_ref.complete_pending(&rid, frame).await {
-                                warn!(
-                                    request_id = %rid,
-                                    "No pending waiter for response"
-                                );
+                                warn!(request_id = %rid, "No pending waiter for Response");
                             }
                         }
                     }

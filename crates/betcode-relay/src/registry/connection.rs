@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use tokio::sync::{mpsc, oneshot, RwLock};
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 
 use betcode_proto::v1::TunnelFrame;
 
@@ -16,8 +16,10 @@ pub struct TunnelConnection {
     pub owner_id: String,
     /// Sender for pushing frames to the daemon through the tunnel.
     pub frame_tx: mpsc::Sender<TunnelFrame>,
-    /// Pending response waiters keyed by request_id.
+    /// Pending response waiters for unary requests (single response per request_id).
     pub pending: Arc<RwLock<HashMap<String, oneshot::Sender<TunnelFrame>>>>,
+    /// Pending stream channels for streaming requests (multiple frames per request_id).
+    stream_pending: Arc<RwLock<HashMap<String, mpsc::Sender<TunnelFrame>>>>,
 }
 
 impl TunnelConnection {
@@ -27,6 +29,7 @@ impl TunnelConnection {
             owner_id,
             frame_tx,
             pending: Arc::new(RwLock::new(HashMap::new())),
+            stream_pending: Arc::new(RwLock::new(HashMap::new())),
         }
     }
 
@@ -54,9 +57,57 @@ impl TunnelConnection {
         }
     }
 
-    /// Cancel all pending requests.
+    // --- Stream pending (mpsc) ---
+
+    /// Register a streaming pending request and return a receiver for multiple frames.
+    pub async fn register_stream_pending(&self, request_id: String) -> mpsc::Receiver<TunnelFrame> {
+        let (tx, rx) = mpsc::channel(128);
+        self.stream_pending.write().await.insert(request_id, tx);
+        rx
+    }
+
+    /// Send a frame to a streaming pending channel.
+    /// Returns true if delivered, false if no stream channel or receiver dropped.
+    pub async fn send_stream_frame(&self, request_id: &str, frame: TunnelFrame) -> bool {
+        let guard = self.stream_pending.read().await;
+        if let Some(tx) = guard.get(request_id) {
+            tx.send(frame).await.is_ok()
+        } else {
+            false
+        }
+    }
+
+    /// Close a streaming channel by removing the sender.
+    pub async fn complete_stream(&self, request_id: &str) -> bool {
+        self.stream_pending
+            .write()
+            .await
+            .remove(request_id)
+            .is_some()
+    }
+
+    /// Check if a request_id has an active stream channel.
+    pub async fn has_stream_pending(&self, request_id: &str) -> bool {
+        self.stream_pending.read().await.contains_key(request_id)
+    }
+
+    // --- Shared ---
+
+    /// Cancel all pending requests (both unary and streaming).
     pub async fn cancel_all_pending(&self) {
         self.pending.write().await.clear();
+        self.stream_pending.write().await.clear();
+        debug!(machine_id = %self.machine_id, "All pending requests cancelled");
+    }
+
+    /// Count of active unary pending requests.
+    pub async fn pending_count(&self) -> usize {
+        self.pending.read().await.len()
+    }
+
+    /// Count of active streaming pending requests.
+    pub async fn stream_pending_count(&self) -> usize {
+        self.stream_pending.read().await.len()
     }
 }
 
@@ -134,6 +185,7 @@ impl Default for ConnectionRegistry {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use betcode_proto::v1::FrameType;
 
     #[tokio::test]
     async fn register_and_get_connection() {
@@ -203,5 +255,138 @@ mod tests {
         let mut machines = registry.connected_machines().await;
         machines.sort();
         assert_eq!(machines, vec!["m1", "m2"]);
+    }
+
+    #[tokio::test]
+    async fn stream_pending_register_and_receive() {
+        let (tx, _rx) = mpsc::channel(16);
+        let conn = TunnelConnection::new("m1".into(), "u1".into(), tx);
+        let mut stream_rx = conn.register_stream_pending("req-s1".into()).await;
+        assert!(conn.has_stream_pending("req-s1").await);
+        assert_eq!(conn.stream_pending_count().await, 1);
+
+        let f1 = TunnelFrame {
+            request_id: "req-s1".into(),
+            frame_type: FrameType::StreamData as i32,
+            ..Default::default()
+        };
+        let f2 = TunnelFrame {
+            request_id: "req-s1".into(),
+            frame_type: FrameType::StreamData as i32,
+            ..Default::default()
+        };
+        assert!(conn.send_stream_frame("req-s1", f1).await);
+        assert!(conn.send_stream_frame("req-s1", f2).await);
+
+        assert_eq!(stream_rx.recv().await.unwrap().request_id, "req-s1");
+        assert_eq!(stream_rx.recv().await.unwrap().request_id, "req-s1");
+    }
+
+    #[tokio::test]
+    async fn stream_pending_complete_closes_channel() {
+        let (tx, _rx) = mpsc::channel(16);
+        let conn = TunnelConnection::new("m1".into(), "u1".into(), tx);
+        let mut stream_rx = conn.register_stream_pending("req-s2".into()).await;
+
+        let frame = TunnelFrame {
+            request_id: "req-s2".into(),
+            frame_type: FrameType::StreamData as i32,
+            ..Default::default()
+        };
+        assert!(conn.send_stream_frame("req-s2", frame).await);
+        assert!(conn.complete_stream("req-s2").await);
+        assert!(!conn.has_stream_pending("req-s2").await);
+
+        // Drain buffered frame, then channel closes
+        assert!(stream_rx.recv().await.is_some());
+        assert!(stream_rx.recv().await.is_none());
+    }
+
+    #[tokio::test]
+    async fn stream_pending_unknown_id_returns_false() {
+        let (tx, _rx) = mpsc::channel(16);
+        let conn = TunnelConnection::new("m1".into(), "u1".into(), tx);
+        assert!(!conn.send_stream_frame("nope", TunnelFrame::default()).await);
+        assert!(!conn.complete_stream("nope").await);
+    }
+
+    #[tokio::test]
+    async fn cancel_all_clears_both_maps() {
+        let (tx, _rx) = mpsc::channel(16);
+        let conn = TunnelConnection::new("m1".into(), "u1".into(), tx);
+        let _u = conn.register_pending("u1".into()).await;
+        let _s = conn.register_stream_pending("s1".into()).await;
+        assert_eq!(conn.pending_count().await, 1);
+        assert_eq!(conn.stream_pending_count().await, 1);
+        conn.cancel_all_pending().await;
+        assert_eq!(conn.pending_count().await, 0);
+        assert_eq!(conn.stream_pending_count().await, 0);
+    }
+
+    #[tokio::test]
+    async fn stream_and_unary_coexist() {
+        let (tx, _rx) = mpsc::channel(16);
+        let conn = TunnelConnection::new("m1".into(), "u1".into(), tx);
+        let unary_rx = conn.register_pending("u1".into()).await;
+        let mut stream_rx = conn.register_stream_pending("s1".into()).await;
+
+        // Complete unary
+        let uf = TunnelFrame {
+            request_id: "u1".into(),
+            frame_type: FrameType::Response as i32,
+            ..Default::default()
+        };
+        assert!(conn.complete_pending("u1", uf).await);
+        assert_eq!(
+            unary_rx.await.unwrap().frame_type,
+            FrameType::Response as i32
+        );
+
+        // Stream still works
+        let sf = TunnelFrame {
+            request_id: "s1".into(),
+            frame_type: FrameType::StreamData as i32,
+            ..Default::default()
+        };
+        assert!(conn.send_stream_frame("s1", sf).await);
+        assert_eq!(
+            stream_rx.recv().await.unwrap().frame_type,
+            FrameType::StreamData as i32
+        );
+        assert!(conn.complete_stream("s1").await);
+    }
+
+    #[tokio::test]
+    async fn multiple_concurrent_streams() {
+        let (tx, _rx) = mpsc::channel(16);
+        let conn = TunnelConnection::new("m1".into(), "u1".into(), tx);
+        let mut rx1 = conn.register_stream_pending("s1".into()).await;
+        let mut rx2 = conn.register_stream_pending("s2".into()).await;
+        assert_eq!(conn.stream_pending_count().await, 2);
+
+        for id in &["s1", "s2"] {
+            let f = TunnelFrame {
+                request_id: id.to_string(),
+                frame_type: FrameType::StreamData as i32,
+                ..Default::default()
+            };
+            assert!(conn.send_stream_frame(id, f).await);
+        }
+        assert_eq!(rx1.recv().await.unwrap().request_id, "s1");
+        assert_eq!(rx2.recv().await.unwrap().request_id, "s2");
+
+        conn.complete_stream("s1").await;
+        assert_eq!(conn.stream_pending_count().await, 1);
+        assert!(!conn.has_stream_pending("s1").await);
+        assert!(conn.has_stream_pending("s2").await);
+    }
+
+    #[tokio::test]
+    async fn stream_dropped_receiver_returns_false() {
+        let (tx, _rx) = mpsc::channel(16);
+        let conn = TunnelConnection::new("m1".into(), "u1".into(), tx);
+        let stream_rx = conn.register_stream_pending("drop".into()).await;
+        drop(stream_rx);
+        assert!(!conn.send_stream_frame("drop", TunnelFrame::default()).await);
     }
 }

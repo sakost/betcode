@@ -1,25 +1,68 @@
-//! AgentService proxy that forwards Converse calls through the tunnel to daemons.
+//! AgentService proxy that forwards calls through the tunnel to daemons.
 
+use std::collections::HashMap;
 use std::pin::Pin;
 use std::sync::Arc;
 
+use prost::Message;
 use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
 use tokio_stream::StreamExt;
 use tonic::{Request, Response, Status, Streaming};
-use tracing::error;
+use tracing::{info, warn};
 
 use betcode_proto::v1::agent_service_server::AgentService;
 use betcode_proto::v1::{
     AgentEvent, AgentRequest, CancelTurnRequest, CancelTurnResponse, CompactSessionRequest,
-    CompactSessionResponse, InputLockRequest, InputLockResponse, ListSessionsRequest,
-    ListSessionsResponse, ResumeSessionRequest,
+    CompactSessionResponse, FrameType, InputLockRequest, InputLockResponse, ListSessionsRequest,
+    ListSessionsResponse, ResumeSessionRequest, StreamPayload, TunnelFrame,
 };
 
-use crate::router::RequestRouter;
+use crate::router::{RequestRouter, RouterError};
 use crate::server::interceptor::extract_claims;
 
 type EventStream = Pin<Box<dyn tokio_stream::Stream<Item = Result<AgentEvent, Status>> + Send>>;
+
+/// Extract machine_id from gRPC request metadata.
+#[allow(clippy::result_large_err)]
+pub fn extract_machine_id<T>(req: &Request<T>) -> Result<String, Status> {
+    req.metadata()
+        .get("x-machine-id")
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.to_string())
+        .ok_or_else(|| Status::invalid_argument("Missing x-machine-id metadata header"))
+}
+
+/// Map a RouterError to a gRPC Status.
+fn router_error_to_status(err: RouterError) -> Status {
+    match err {
+        RouterError::MachineOffline(m) => Status::unavailable(format!("Machine offline: {}", m)),
+        RouterError::Buffered(m) => {
+            Status::unavailable(format!("Machine offline, request buffered: {}", m))
+        }
+        RouterError::Timeout(r) => Status::deadline_exceeded(format!("Request timed out: {}", r)),
+        RouterError::SendFailed(m) => Status::internal(format!("Failed to send to machine: {}", m)),
+        RouterError::ResponseDropped(r) => Status::internal(format!("Response dropped: {}", r)),
+    }
+}
+
+/// Decode a response payload from a TunnelFrame.
+#[allow(clippy::result_large_err)]
+fn decode_response<M: Message + Default>(frame: &TunnelFrame) -> Result<M, Status> {
+    if frame.frame_type == FrameType::Error as i32 {
+        if let Some(betcode_proto::v1::tunnel_frame::Payload::Error(ref e)) = frame.payload {
+            return Err(Status::internal(format!("Daemon error: {}", e.message)));
+        }
+        return Err(Status::internal("Daemon returned error frame"));
+    }
+    match &frame.payload {
+        Some(betcode_proto::v1::tunnel_frame::Payload::StreamData(p)) => {
+            M::decode(p.data.as_slice())
+                .map_err(|e| Status::internal(format!("Failed to decode response: {}", e)))
+        }
+        _ => Err(Status::internal("Unexpected response payload format")),
+    }
+}
 
 /// Proxies AgentService calls through the tunnel to a target daemon.
 pub struct AgentProxyService {
@@ -29,6 +72,24 @@ pub struct AgentProxyService {
 impl AgentProxyService {
     pub fn new(router: Arc<RequestRouter>) -> Self {
         Self { router }
+    }
+
+    async fn forward_unary<Req: Message, Resp: Message + Default>(
+        &self,
+        machine_id: &str,
+        method: &str,
+        req: &Req,
+    ) -> Result<Resp, Status> {
+        let request_id = uuid::Uuid::new_v4().to_string();
+        let mut buf = Vec::with_capacity(req.encoded_len());
+        req.encode(&mut buf)
+            .map_err(|e| Status::internal(format!("Encode error: {}", e)))?;
+        let frame = self
+            .router
+            .forward_request(machine_id, &request_id, method, buf, HashMap::new())
+            .await
+            .map_err(router_error_to_status)?;
+        decode_response(&frame)
     }
 }
 
@@ -41,80 +102,247 @@ impl AgentService for AgentProxyService {
         &self,
         request: Request<Streaming<AgentRequest>>,
     ) -> Result<Response<Self::ConverseStream>, Status> {
-        let _claims = {
-            let c = extract_claims(&request)?;
-            c.sub.clone()
+        let _claims = extract_claims(&request)?;
+        let machine_id = extract_machine_id(&request)?;
+        let mut in_stream = request.into_inner();
+
+        let first = match in_stream.next().await {
+            Some(Ok(req)) => req,
+            Some(Err(e)) => return Err(Status::internal(format!("Stream error: {}", e))),
+            None => return Err(Status::invalid_argument("Empty stream")),
         };
 
-        let mut in_stream = request.into_inner();
-        let (tx, rx) = mpsc::channel::<Result<AgentEvent, Status>>(128);
-        let _router = Arc::clone(&self.router);
+        let request_id = uuid::Uuid::new_v4().to_string();
+        let mut buf = Vec::with_capacity(first.encoded_len());
+        first
+            .encode(&mut buf)
+            .map_err(|e| Status::internal(format!("Encode error: {}", e)))?;
 
+        let (client_tx, mut event_rx) = self
+            .router
+            .forward_bidi_stream(
+                &machine_id,
+                &request_id,
+                "AgentService/Converse",
+                buf,
+                HashMap::new(),
+            )
+            .await
+            .map_err(router_error_to_status)?;
+
+        let (out_tx, out_rx) = mpsc::channel::<Result<AgentEvent, Status>>(128);
+
+        // Forward client messages to daemon
+        let rid = request_id.clone();
         tokio::spawn(async move {
-            // Read the first message to determine target machine
-            match in_stream.next().await {
-                Some(Ok(_req)) => {
-                    // Proxy is a placeholder - full routing requires
-                    // machine_id in request metadata or session-to-machine mapping
-                    let _ = tx
-                        .send(Err(Status::unimplemented(
-                            "Converse proxy requires machine routing (Sprint 3.8)",
-                        )))
-                        .await;
+            while let Some(result) = in_stream.next().await {
+                match result {
+                    Ok(req) => {
+                        let mut data = Vec::with_capacity(req.encoded_len());
+                        if req.encode(&mut data).is_err() {
+                            continue;
+                        }
+                        let frame = TunnelFrame {
+                            request_id: rid.clone(),
+                            frame_type: FrameType::StreamData as i32,
+                            timestamp: Some(prost_types::Timestamp::from(
+                                std::time::SystemTime::now(),
+                            )),
+                            payload: Some(betcode_proto::v1::tunnel_frame::Payload::StreamData(
+                                StreamPayload {
+                                    method: String::new(),
+                                    data,
+                                    sequence: 0,
+                                    metadata: HashMap::new(),
+                                },
+                            )),
+                        };
+                        if client_tx.send(frame).await.is_err() {
+                            break;
+                        }
+                    }
+                    Err(e) => {
+                        warn!(error = %e, "Client stream error in converse proxy");
+                        break;
+                    }
                 }
-                Some(Err(e)) => {
-                    error!(error = %e, "Proxy converse stream error");
-                }
-                None => {}
             }
         });
 
-        let out_stream = ReceiverStream::new(rx);
-        Ok(Response::new(Box::pin(out_stream)))
+        // Forward daemon events to client
+        let mid = machine_id;
+        tokio::spawn(async move {
+            while let Some(frame) = event_rx.recv().await {
+                match FrameType::try_from(frame.frame_type) {
+                    Ok(FrameType::StreamData) => {
+                        if let Some(betcode_proto::v1::tunnel_frame::Payload::StreamData(p)) =
+                            frame.payload
+                        {
+                            match AgentEvent::decode(p.data.as_slice()) {
+                                Ok(event) => {
+                                    if out_tx.send(Ok(event)).await.is_err() {
+                                        break;
+                                    }
+                                }
+                                Err(e) => {
+                                    warn!(error = %e, machine_id = %mid, "Failed to decode AgentEvent");
+                                }
+                            }
+                        }
+                    }
+                    Ok(FrameType::Error) => {
+                        if let Some(betcode_proto::v1::tunnel_frame::Payload::Error(e)) =
+                            frame.payload
+                        {
+                            let _ = out_tx
+                                .send(Err(Status::internal(format!(
+                                    "Daemon error: {}",
+                                    e.message
+                                ))))
+                                .await;
+                        }
+                        break;
+                    }
+                    _ => {}
+                }
+            }
+            info!(request_id = %request_id, "Converse proxy stream ended");
+        });
+
+        Ok(Response::new(Box::pin(ReceiverStream::new(out_rx))))
     }
 
     async fn list_sessions(
         &self,
-        _request: Request<ListSessionsRequest>,
+        request: Request<ListSessionsRequest>,
     ) -> Result<Response<ListSessionsResponse>, Status> {
-        Err(Status::unimplemented(
-            "ListSessions proxy not yet implemented",
-        ))
+        let _claims = extract_claims(&request)?;
+        let machine_id = extract_machine_id(&request)?;
+        let resp = self
+            .forward_unary(
+                &machine_id,
+                "AgentService/ListSessions",
+                &request.into_inner(),
+            )
+            .await?;
+        Ok(Response::new(resp))
     }
 
     async fn resume_session(
         &self,
-        _request: Request<ResumeSessionRequest>,
+        request: Request<ResumeSessionRequest>,
     ) -> Result<Response<Self::ResumeSessionStream>, Status> {
-        Err(Status::unimplemented(
-            "ResumeSession proxy not yet implemented",
-        ))
+        let _claims = extract_claims(&request)?;
+        let machine_id = extract_machine_id(&request)?;
+        let req = request.into_inner();
+        let request_id = uuid::Uuid::new_v4().to_string();
+        let mut buf = Vec::with_capacity(req.encoded_len());
+        req.encode(&mut buf)
+            .map_err(|e| Status::internal(format!("Encode error: {}", e)))?;
+
+        let mut stream_rx = self
+            .router
+            .forward_stream(
+                &machine_id,
+                &request_id,
+                "AgentService/ResumeSession",
+                buf,
+                HashMap::new(),
+            )
+            .await
+            .map_err(router_error_to_status)?;
+
+        let (tx, rx) = mpsc::channel::<Result<AgentEvent, Status>>(128);
+        let mid = machine_id;
+        tokio::spawn(async move {
+            while let Some(frame) = stream_rx.recv().await {
+                match FrameType::try_from(frame.frame_type) {
+                    Ok(FrameType::StreamData) => {
+                        if let Some(betcode_proto::v1::tunnel_frame::Payload::StreamData(p)) =
+                            frame.payload
+                        {
+                            match AgentEvent::decode(p.data.as_slice()) {
+                                Ok(event) => {
+                                    if tx.send(Ok(event)).await.is_err() {
+                                        break;
+                                    }
+                                }
+                                Err(e) => {
+                                    warn!(error = %e, machine_id = %mid, "Failed to decode AgentEvent in resume");
+                                }
+                            }
+                        }
+                    }
+                    Ok(FrameType::Error) => {
+                        if let Some(betcode_proto::v1::tunnel_frame::Payload::Error(e)) =
+                            frame.payload
+                        {
+                            let _ = tx
+                                .send(Err(Status::internal(format!(
+                                    "Daemon error: {}",
+                                    e.message
+                                ))))
+                                .await;
+                        }
+                        break;
+                    }
+                    _ => {}
+                }
+            }
+            info!(request_id = %request_id, "ResumeSession proxy stream ended");
+        });
+        Ok(Response::new(Box::pin(ReceiverStream::new(rx))))
     }
 
     async fn compact_session(
         &self,
-        _request: Request<CompactSessionRequest>,
+        request: Request<CompactSessionRequest>,
     ) -> Result<Response<CompactSessionResponse>, Status> {
-        Err(Status::unimplemented(
-            "CompactSession proxy not yet implemented",
-        ))
+        let _claims = extract_claims(&request)?;
+        let machine_id = extract_machine_id(&request)?;
+        let resp = self
+            .forward_unary(
+                &machine_id,
+                "AgentService/CompactSession",
+                &request.into_inner(),
+            )
+            .await?;
+        Ok(Response::new(resp))
     }
 
     async fn cancel_turn(
         &self,
-        _request: Request<CancelTurnRequest>,
+        request: Request<CancelTurnRequest>,
     ) -> Result<Response<CancelTurnResponse>, Status> {
-        Err(Status::unimplemented(
-            "CancelTurn proxy not yet implemented",
-        ))
+        let _claims = extract_claims(&request)?;
+        let machine_id = extract_machine_id(&request)?;
+        let resp = self
+            .forward_unary(
+                &machine_id,
+                "AgentService/CancelTurn",
+                &request.into_inner(),
+            )
+            .await?;
+        Ok(Response::new(resp))
     }
 
     async fn request_input_lock(
         &self,
-        _request: Request<InputLockRequest>,
+        request: Request<InputLockRequest>,
     ) -> Result<Response<InputLockResponse>, Status> {
-        Err(Status::unimplemented(
-            "RequestInputLock proxy not yet implemented",
-        ))
+        let _claims = extract_claims(&request)?;
+        let machine_id = extract_machine_id(&request)?;
+        let resp = self
+            .forward_unary(
+                &machine_id,
+                "AgentService/RequestInputLock",
+                &request.into_inner(),
+            )
+            .await?;
+        Ok(Response::new(resp))
     }
 }
+
+#[cfg(test)]
+#[path = "agent_proxy_tests.rs"]
+mod tests;

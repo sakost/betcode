@@ -5,6 +5,7 @@
 
 use std::net::SocketAddr;
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use clap::Parser;
 use tracing::info;
@@ -126,7 +127,12 @@ async fn main() -> anyhow::Result<()> {
             "Spawning tunnel client"
         );
 
-        let tunnel_client = TunnelClient::new(tunnel_config);
+        let tunnel_client = TunnelClient::new(
+            tunnel_config,
+            Arc::clone(server.relay()),
+            Arc::clone(server.multiplexer()),
+            server.db().clone(),
+        );
         Some(tokio::spawn(async move {
             tunnel_client.run(shutdown_rx).await;
         }))
