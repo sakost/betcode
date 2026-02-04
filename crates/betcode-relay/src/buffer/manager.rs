@@ -89,6 +89,7 @@ impl BufferManager {
             }
         };
 
+        let total = messages.len();
         let mut sent = 0u64;
         for msg in &messages {
             let metadata: std::collections::HashMap<String, String> =
@@ -112,19 +113,40 @@ impl BufferManager {
                 warn!(
                     machine_id = %machine_id,
                     request_id = %msg.request_id,
-                    "Failed to send buffered frame, machine may have disconnected"
+                    sent,
+                    remaining = total as u64 - sent,
+                    "Failed to send buffered frame, remaining messages preserved in DB"
                 );
                 break;
+            }
+
+            // Delete from DB only after successful send
+            if let Err(e) = self.db.delete_buffered_message(msg.id).await {
+                warn!(
+                    machine_id = %machine_id,
+                    buffer_id = msg.id,
+                    error = %e,
+                    "Failed to delete delivered buffer message"
+                );
             }
             sent += 1;
         }
 
-        info!(
-            machine_id = %machine_id,
-            total = messages.len(),
-            sent,
-            "Buffer drained"
-        );
+        if sent < total as u64 {
+            warn!(
+                machine_id = %machine_id,
+                total,
+                sent,
+                retained = total as u64 - sent,
+                "Buffer drain incomplete, unsent messages retained for next reconnect"
+            );
+        } else {
+            info!(
+                machine_id = %machine_id,
+                count = sent,
+                "Buffer drained successfully"
+            );
+        }
 
         Ok(sent)
     }

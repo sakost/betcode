@@ -178,6 +178,13 @@ async fn buffer_and_drain_messages() {
     assert_eq!(messages[0].request_id, "r2"); // higher priority
     assert_eq!(messages[1].request_id, "r1");
 
+    // Messages are still in DB until explicitly deleted
+    assert_eq!(db.count_buffered_messages("m1").await.unwrap(), 2);
+
+    // Delete each message after "delivery"
+    for msg in &messages {
+        assert!(db.delete_buffered_message(msg.id).await.unwrap());
+    }
     assert_eq!(db.count_buffered_messages("m1").await.unwrap(), 0);
 }
 

@@ -41,7 +41,10 @@ impl RelayDatabase {
         Ok(result.last_insert_rowid())
     }
 
-    /// Drain buffered messages for a machine (priority DESC, created_at ASC).
+    /// Fetch buffered messages for a machine (priority DESC, created_at ASC).
+    ///
+    /// Messages are NOT deleted by this call. Use `delete_buffered_message` to
+    /// remove each message after it has been successfully delivered.
     pub async fn drain_buffer(
         &self,
         machine_id: &str,
@@ -54,12 +57,17 @@ impl RelayDatabase {
         .fetch_all(self.pool())
         .await?;
 
-        sqlx::query("DELETE FROM message_buffer WHERE machine_id = ?")
-            .bind(machine_id)
+        Ok(messages)
+    }
+
+    /// Delete a single buffered message by ID after successful delivery.
+    pub async fn delete_buffered_message(&self, id: i64) -> Result<bool, DatabaseError> {
+        let result = sqlx::query("DELETE FROM message_buffer WHERE id = ?")
+            .bind(id)
             .execute(self.pool())
             .await?;
 
-        Ok(messages)
+        Ok(result.rows_affected() > 0)
     }
 
     /// Remove expired buffered messages.
