@@ -1,0 +1,79 @@
+// BetCode Worktree Service
+// Git worktree management for isolated session working directories.
+//
+// Version: v1
+
+syntax = "proto3";
+
+package betcode.v1;
+
+import "google/protobuf/timestamp.proto";
+
+// WorktreeService manages git worktrees and their association with sessions.
+service WorktreeService {
+  // Create a new git worktree with optional setup script.
+  rpc CreateWorktree(CreateWorktreeRequest) returns (WorktreeDetail);
+
+  // Remove a worktree and its database record.
+  rpc RemoveWorktree(RemoveWorktreeRequest) returns (RemoveWorktreeResponse);
+
+  // List worktrees, optionally filtered by repo path.
+  rpc ListWorktrees(ListWorktreesRequest) returns (ListWorktreesResponse);
+
+  // Get a single worktree with status info.
+  rpc GetWorktree(GetWorktreeRequest) returns (WorktreeDetail);
+}
+
+// =============================================================================
+// Requests
+// =============================================================================
+
+message CreateWorktreeRequest {
+  // Human-readable name (e.g. "feat-login"). Used as directory name.
+  string name = 1;
+  // Path to the git repository root.
+  string repo_path = 2;
+  // Branch name to create (passed to `git worktree add -b`).
+  string branch = 3;
+  // Optional shell command to run after worktree creation (e.g. "npm install").
+  string setup_script = 4;
+}
+
+message RemoveWorktreeRequest {
+  string id = 1;
+}
+
+message ListWorktreesRequest {
+  // Filter by repo path. Empty string returns all.
+  string repo_path = 1;
+}
+
+message GetWorktreeRequest {
+  string id = 1;
+}
+
+// =============================================================================
+// Responses
+// =============================================================================
+
+message RemoveWorktreeResponse {
+  bool removed = 1;
+}
+
+message ListWorktreesResponse {
+  repeated WorktreeDetail worktrees = 1;
+}
+
+// WorktreeDetail combines the database record with runtime status.
+message WorktreeDetail {
+  string id = 1;
+  string name = 2;
+  string path = 3;
+  string branch = 4;
+  string repo_path = 5;
+  string setup_script = 6;
+  bool exists_on_disk = 7;
+  uint32 session_count = 8;
+  google.protobuf.Timestamp created_at = 9;
+  google.protobuf.Timestamp last_active = 10;
+}

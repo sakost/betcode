@@ -20,6 +20,7 @@ use betcode_cli::app::{App, AppMode};
 use betcode_cli::connection::{ConnectionConfig, DaemonConnection};
 use betcode_cli::headless::{self, HeadlessConfig};
 use betcode_cli::ui;
+use betcode_cli::worktree_cmd::{self, WorktreeAction};
 
 use betcode_proto::v1::{
     AgentRequest, PermissionDecision, PermissionResponse, StartConversation, UserMessage,
@@ -52,6 +53,20 @@ struct Cli {
     /// Auto-accept all permission prompts (headless only)
     #[arg(long)]
     yes: bool,
+
+    /// Subcommand to run (omit for chat mode)
+    #[command(subcommand)]
+    command: Option<Commands>,
+}
+
+/// Top-level subcommands.
+#[derive(clap::Subcommand, Debug)]
+enum Commands {
+    /// Manage git worktrees
+    Worktree {
+        #[command(subcommand)]
+        action: WorktreeAction,
+    },
 }
 
 #[tokio::main]
@@ -59,7 +74,7 @@ async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
 
     // Use file-based tracing for TUI mode to avoid polluting terminal
-    let is_headless = cli.prompt.is_some();
+    let is_headless = cli.prompt.is_some() || cli.command.is_some();
     if is_headless {
         tracing_subscriber::registry()
             .with(tracing_subscriber::EnvFilter::new(
@@ -86,27 +101,34 @@ async fn main() -> anyhow::Result<()> {
     let mut conn = DaemonConnection::new(config);
     conn.connect().await?;
 
-    if let Some(prompt) = cli.prompt {
-        // Headless mode
-        let working_dir = cli.working_dir.unwrap_or_else(|| {
-            std::env::current_dir()
-                .unwrap()
-                .to_string_lossy()
-                .to_string()
-        });
+    // Dispatch subcommand or fall through to chat mode
+    match cli.command {
+        Some(Commands::Worktree { action }) => {
+            worktree_cmd::run(&mut conn, action).await?;
+        }
+        None => {
+            // Chat mode (headless or TUI)
+            if let Some(prompt) = cli.prompt {
+                let working_dir = cli.working_dir.unwrap_or_else(|| {
+                    std::env::current_dir()
+                        .unwrap()
+                        .to_string_lossy()
+                        .to_string()
+                });
 
-        let config = HeadlessConfig {
-            prompt,
-            session_id: cli.session,
-            working_directory: working_dir,
-            model: cli.model,
-            auto_accept: cli.yes,
-        };
+                let config = HeadlessConfig {
+                    prompt,
+                    session_id: cli.session,
+                    working_directory: working_dir,
+                    model: cli.model,
+                    auto_accept: cli.yes,
+                };
 
-        headless::run(&mut conn, config).await?;
-    } else {
-        // TUI mode
-        run_tui(&mut conn, &cli.session, &cli.working_dir, &cli.model).await?;
+                headless::run(&mut conn, config).await?;
+            } else {
+                run_tui(&mut conn, &cli.session, &cli.working_dir, &cli.model).await?;
+            }
+        }
     }
 
     Ok(())

@@ -10,8 +10,10 @@ use tonic::transport::{Channel, Endpoint};
 use tracing::{error, info, warn};
 
 use betcode_proto::v1::{
-    agent_service_client::AgentServiceClient, AgentEvent, AgentRequest, CancelTurnRequest,
-    CancelTurnResponse, ListSessionsRequest, ListSessionsResponse,
+    agent_service_client::AgentServiceClient, worktree_service_client::WorktreeServiceClient,
+    AgentEvent, AgentRequest, CancelTurnRequest, CancelTurnResponse, CreateWorktreeRequest,
+    GetWorktreeRequest, ListSessionsRequest, ListSessionsResponse, ListWorktreesRequest,
+    ListWorktreesResponse, RemoveWorktreeRequest, RemoveWorktreeResponse, WorktreeDetail,
 };
 
 /// Connection configuration.
@@ -48,6 +50,7 @@ pub enum ConnectionState {
 pub struct DaemonConnection {
     config: ConnectionConfig,
     client: Option<AgentServiceClient<Channel>>,
+    worktree_client: Option<WorktreeServiceClient<Channel>>,
     state: ConnectionState,
 }
 
@@ -57,6 +60,7 @@ impl DaemonConnection {
         Self {
             config,
             client: None,
+            worktree_client: None,
             state: ConnectionState::Disconnected,
         }
     }
@@ -75,7 +79,8 @@ impl DaemonConnection {
             ConnectionError::ConnectFailed(e.to_string())
         })?;
 
-        self.client = Some(AgentServiceClient::new(channel));
+        self.client = Some(AgentServiceClient::new(channel.clone()));
+        self.worktree_client = Some(WorktreeServiceClient::new(channel));
         self.state = ConnectionState::Connected;
 
         info!(addr = %self.config.addr, "Connected to daemon");
@@ -171,6 +176,93 @@ impl DaemonConnection {
 
         Ok(response.into_inner())
     }
+
+    // =========================================================================
+    // Worktree operations
+    // =========================================================================
+
+    /// Create a new worktree.
+    pub async fn create_worktree(
+        &mut self,
+        name: &str,
+        repo_path: &str,
+        branch: &str,
+        setup_script: Option<&str>,
+    ) -> Result<WorktreeDetail, ConnectionError> {
+        let client = self
+            .worktree_client
+            .as_mut()
+            .ok_or(ConnectionError::NotConnected)?;
+
+        let response = client
+            .create_worktree(CreateWorktreeRequest {
+                name: name.to_string(),
+                repo_path: repo_path.to_string(),
+                branch: branch.to_string(),
+                setup_script: setup_script.unwrap_or_default().to_string(),
+            })
+            .await
+            .map_err(|e| ConnectionError::RpcFailed(e.to_string()))?;
+
+        Ok(response.into_inner())
+    }
+
+    /// Remove a worktree.
+    pub async fn remove_worktree(
+        &mut self,
+        id: &str,
+    ) -> Result<RemoveWorktreeResponse, ConnectionError> {
+        let client = self
+            .worktree_client
+            .as_mut()
+            .ok_or(ConnectionError::NotConnected)?;
+
+        let response = client
+            .remove_worktree(RemoveWorktreeRequest { id: id.to_string() })
+            .await
+            .map_err(|e| ConnectionError::RpcFailed(e.to_string()))?;
+
+        Ok(response.into_inner())
+    }
+
+    /// List worktrees.
+    pub async fn list_worktrees(
+        &mut self,
+        repo_path: Option<&str>,
+    ) -> Result<ListWorktreesResponse, ConnectionError> {
+        let client = self
+            .worktree_client
+            .as_mut()
+            .ok_or(ConnectionError::NotConnected)?;
+
+        let response = client
+            .list_worktrees(ListWorktreesRequest {
+                repo_path: repo_path.unwrap_or_default().to_string(),
+            })
+            .await
+            .map_err(|e| ConnectionError::RpcFailed(e.to_string()))?;
+
+        Ok(response.into_inner())
+    }
+
+    /// Get a single worktree.
+    pub async fn get_worktree(&mut self, id: &str) -> Result<WorktreeDetail, ConnectionError> {
+        let client = self
+            .worktree_client
+            .as_mut()
+            .ok_or(ConnectionError::NotConnected)?;
+
+        let response = client
+            .get_worktree(GetWorktreeRequest { id: id.to_string() })
+            .await
+            .map_err(|e| ConnectionError::RpcFailed(e.to_string()))?;
+
+        Ok(response.into_inner())
+    }
+
+    // =========================================================================
+    // Connection state
+    // =========================================================================
 
     /// Get connection state.
     pub fn state(&self) -> ConnectionState {

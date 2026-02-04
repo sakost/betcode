@@ -7,3 +7,4 @@ pub mod app;
 pub mod connection;
 pub mod headless;
 pub mod ui;
+pub mod worktree_cmd;

@@ -6,10 +6,12 @@ mod agent;
 mod config;
 mod handler;
 mod health;
+mod worktree_svc;
 
 pub use agent::AgentServiceImpl;
 pub use config::ServerConfig;
 pub use health::HealthServiceImpl;
+pub use worktree_svc::WorktreeServiceImpl;
 
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -20,11 +22,13 @@ use tracing::info;
 use betcode_proto::v1::agent_service_server::AgentServiceServer;
 use betcode_proto::v1::bet_code_health_server::BetCodeHealthServer;
 use betcode_proto::v1::health_server::HealthServer;
+use betcode_proto::v1::worktree_service_server::WorktreeServiceServer;
 
 use crate::relay::SessionRelay;
 use crate::session::SessionMultiplexer;
 use crate::storage::Database;
 use crate::subprocess::SubprocessManager;
+use crate::worktree::WorktreeManager;
 
 /// Server errors.
 #[derive(Debug, Error)]
@@ -75,7 +79,9 @@ impl GrpcServer {
             Arc::clone(&self.relay),
             Arc::clone(&self.multiplexer),
         );
-        let health_service = HealthServiceImpl::new(self.db, Arc::clone(&self.subprocess_manager));
+        let health_service =
+            HealthServiceImpl::new(self.db.clone(), Arc::clone(&self.subprocess_manager));
+        let worktree_service = WorktreeServiceImpl::new(WorktreeManager::new(self.db));
 
         info!(%addr, "Starting gRPC server on TCP");
 
@@ -83,6 +89,7 @@ impl GrpcServer {
             .add_service(AgentServiceServer::new(agent_service))
             .add_service(HealthServer::new(health_service.clone()))
             .add_service(BetCodeHealthServer::new(health_service))
+            .add_service(WorktreeServiceServer::new(worktree_service))
             .serve(addr)
             .await?;
 
@@ -110,7 +117,9 @@ impl GrpcServer {
             Arc::clone(&self.relay),
             Arc::clone(&self.multiplexer),
         );
-        let health_service = HealthServiceImpl::new(self.db, Arc::clone(&self.subprocess_manager));
+        let health_service =
+            HealthServiceImpl::new(self.db.clone(), Arc::clone(&self.subprocess_manager));
+        let worktree_service = WorktreeServiceImpl::new(WorktreeManager::new(self.db));
 
         info!(path = %path.display(), "Starting gRPC server on Unix socket");
 
@@ -118,6 +127,7 @@ impl GrpcServer {
             .add_service(AgentServiceServer::new(agent_service))
             .add_service(HealthServer::new(health_service.clone()))
             .add_service(BetCodeHealthServer::new(health_service))
+            .add_service(WorktreeServiceServer::new(worktree_service))
             .serve_with_incoming(stream)
             .await?;
 
