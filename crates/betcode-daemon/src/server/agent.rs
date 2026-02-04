@@ -210,12 +210,69 @@ impl AgentService for AgentServiceImpl {
 
     async fn compact_session(
         &self,
-        _request: Request<CompactSessionRequest>,
+        request: Request<CompactSessionRequest>,
     ) -> Result<Response<CompactSessionResponse>, Status> {
+        let req = request.into_inner();
+        let sid = &req.session_id;
+
+        let messages_before = self
+            .db
+            .count_messages(sid)
+            .await
+            .map_err(|e| Status::internal(e.to_string()))? as u32;
+
+        if messages_before == 0 {
+            return Ok(Response::new(CompactSessionResponse {
+                messages_before: 0,
+                messages_after: 0,
+                tokens_saved: 0,
+            }));
+        }
+
+        // Keep the most recent half of messages (at least 10)
+        let max_seq = self
+            .db
+            .max_message_sequence(sid)
+            .await
+            .map_err(|e| Status::internal(e.to_string()))?;
+        let keep_count = (messages_before / 2).max(10).min(messages_before);
+        let cutoff = max_seq - keep_count as i64;
+
+        if cutoff <= 0 {
+            return Ok(Response::new(CompactSessionResponse {
+                messages_before,
+                messages_after: messages_before,
+                tokens_saved: 0,
+            }));
+        }
+
+        let deleted = self
+            .db
+            .delete_messages_before_sequence(sid, cutoff)
+            .await
+            .map_err(|e| Status::internal(e.to_string()))?;
+
+        self.db
+            .update_compaction_sequence(sid, cutoff)
+            .await
+            .map_err(|e| Status::internal(e.to_string()))?;
+
+        let messages_after = messages_before - deleted as u32;
+        // Rough estimate: ~100 tokens per message on average
+        let tokens_saved = deleted as u32 * 100;
+
+        info!(
+            session_id = %sid,
+            messages_before,
+            messages_after,
+            tokens_saved,
+            "Session compacted"
+        );
+
         Ok(Response::new(CompactSessionResponse {
-            messages_before: 0,
-            messages_after: 0,
-            tokens_saved: 0,
+            messages_before,
+            messages_after,
+            tokens_saved,
         }))
     }
 
@@ -234,16 +291,41 @@ impl AgentService for AgentServiceImpl {
 
     async fn request_input_lock(
         &self,
-        _request: Request<InputLockRequest>,
+        request: Request<InputLockRequest>,
     ) -> Result<Response<InputLockResponse>, Status> {
-        // Input lock is managed per-client within the Converse stream.
-        // This unary RPC currently grants by default since the proto
-        // doesn't carry a client_id for identification.
+        // Extract client_id from metadata before consuming the request
+        let client_id = request_client_id(&request)
+            .unwrap_or_else(|| format!("unary-{}", uuid::Uuid::new_v4()));
+        let req = request.into_inner();
+        let sid = &req.session_id;
+
+        let previous = self
+            .db
+            .acquire_input_lock(sid, &client_id)
+            .await
+            .map_err(|e| Status::internal(e.to_string()))?;
+
+        info!(
+            session_id = %sid,
+            client_id = %client_id,
+            previous_holder = ?previous,
+            "Input lock acquired"
+        );
+
         Ok(Response::new(InputLockResponse {
             granted: true,
-            previous_holder: String::new(),
+            previous_holder: previous.unwrap_or_default(),
         }))
     }
+}
+
+/// Extract client_id from gRPC request metadata.
+fn request_client_id<T>(request: &Request<T>) -> Option<String> {
+    request
+        .metadata()
+        .get("x-client-id")
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.to_string())
 }
 
 /// Simple base64 decoding for stored event payloads.
@@ -260,6 +342,9 @@ fn base64_decode(input: &str) -> Result<Vec<u8>, String> {
     };
 
     let input = input.trim_end_matches('=');
+    if input.len() % 4 == 1 {
+        return Err("Invalid base64 length".to_string());
+    }
     let mut result = Vec::with_capacity(input.len() * 3 / 4);
 
     for chunk in input.as_bytes().chunks(4) {

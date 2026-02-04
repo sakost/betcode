@@ -253,6 +253,11 @@ impl SubprocessManager {
         self.processes.read().await.len()
     }
 
+    /// Get the maximum process pool capacity.
+    pub fn capacity(&self) -> usize {
+        self.max_processes
+    }
+
     /// Update session ID for a process.
     pub async fn set_session_id(
         &self,

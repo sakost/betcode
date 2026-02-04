@@ -28,3 +28,4 @@ prost-types.workspace = true
 tokio-stream = "0.1.18"
 clap.workspace = true
 dirs = "6"
+async-stream = "0.3"

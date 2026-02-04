@@ -13,3 +13,4 @@ pub mod server;
 pub mod session;
 pub mod storage;
 pub mod subprocess;
+pub mod worktree;
