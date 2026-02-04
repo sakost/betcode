@@ -2,7 +2,7 @@
 
 /// Errors that can occur in the tunnel client.
 #[derive(Debug, thiserror::Error)]
-pub enum TunnelError {
+pub enum TunnelClientError {
     #[error("Connection error: {0}")]
     Connection(String),
 

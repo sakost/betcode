@@ -11,5 +11,5 @@ pub mod heartbeat;
 
 pub use client::TunnelClient;
 pub use config::TunnelConfig;
-pub use error::TunnelError;
+pub use error::TunnelClientError;
 pub use handler::TunnelRequestHandler;

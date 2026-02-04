@@ -1,10 +1,11 @@
 //! Tunnel client configuration.
 
+use std::fmt;
 use std::path::PathBuf;
 use std::time::Duration;
 
 /// Configuration for the daemon's tunnel connection to the relay.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct TunnelConfig {
     /// Relay server URL (e.g., "https://relay.betcode.io:443").
     pub relay_url: String,
@@ -93,6 +94,21 @@ impl TunnelConfig {
             heartbeat_interval: Duration::from_secs(30),
             ca_cert_path: None,
         }
+    }
+}
+
+impl fmt::Debug for TunnelConfig {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("TunnelConfig")
+            .field("relay_url", &self.relay_url)
+            .field("machine_id", &self.machine_id)
+            .field("machine_name", &self.machine_name)
+            .field("username", &self.username)
+            .field("password", &"[REDACTED]")
+            .field("reconnect", &self.reconnect)
+            .field("heartbeat_interval", &self.heartbeat_interval)
+            .field("ca_cert_path", &self.ca_cert_path)
+            .finish()
     }
 }
 

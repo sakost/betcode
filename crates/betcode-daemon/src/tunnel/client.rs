@@ -17,7 +17,7 @@ use betcode_proto::v1::{
 };
 
 use super::config::TunnelConfig;
-use super::error::TunnelError;
+use super::error::TunnelClientError;
 use super::handler::TunnelRequestHandler;
 
 /// Tunnel client that maintains a persistent connection to the relay.
@@ -46,12 +46,18 @@ impl TunnelClient {
                 return;
             }
 
+            let started = std::time::Instant::now();
             match self.connect_and_run(&mut shutdown).await {
                 Ok(()) => {
                     info!("Tunnel connection closed cleanly");
                     return;
                 }
                 Err(e) => {
+                    // Reset backoff if connection was up for >60s
+                    if started.elapsed() > std::time::Duration::from_secs(60) {
+                        attempt = 0;
+                    }
+
                     if !self.config.reconnect.should_retry(attempt) {
                         error!(error = %e, attempt, "Max reconnect attempts reached");
                         return;
@@ -78,14 +84,14 @@ impl TunnelClient {
     async fn connect_and_run(
         &self,
         shutdown: &mut tokio::sync::watch::Receiver<bool>,
-    ) -> Result<(), TunnelError> {
+    ) -> Result<(), TunnelClientError> {
         let mut endpoint = Channel::from_shared(self.config.relay_url.clone())
-            .map_err(|e| TunnelError::Connection(e.to_string()))?;
+            .map_err(|e| TunnelClientError::Connection(e.to_string()))?;
 
         // Configure TLS if CA cert is provided
         if let Some(ca_path) = &self.config.ca_cert_path {
             let ca_pem = std::fs::read_to_string(ca_path).map_err(|e| {
-                TunnelError::Connection(format!(
+                TunnelClientError::Connection(format!(
                     "Failed to read CA cert {}: {}",
                     ca_path.display(),
                     e
@@ -95,14 +101,14 @@ impl TunnelClient {
             let tls_config = ClientTlsConfig::new().ca_certificate(ca_cert);
             endpoint = endpoint
                 .tls_config(tls_config)
-                .map_err(|e| TunnelError::Connection(e.to_string()))?;
+                .map_err(|e| TunnelClientError::Connection(e.to_string()))?;
             info!(ca_cert = %ca_path.display(), "TLS configured for relay connection");
         }
 
         let channel = endpoint
             .connect()
             .await
-            .map_err(|e| TunnelError::Connection(e.to_string()))?;
+            .map_err(|e| TunnelClientError::Connection(e.to_string()))?;
 
         let token = self.authenticate(channel.clone()).await?;
 
@@ -118,13 +124,13 @@ impl TunnelClient {
             "authorization",
             format!("Bearer {}", token)
                 .parse()
-                .map_err(|_| TunnelError::Auth("Invalid token format".into()))?,
+                .map_err(|_| TunnelClientError::Auth("Invalid token format".into()))?,
         );
 
         let response = tunnel_client
             .open_tunnel(request)
             .await
-            .map_err(|e| TunnelError::Connection(e.to_string()))?;
+            .map_err(|e| TunnelClientError::Connection(e.to_string()))?;
 
         info!(machine_id = %self.config.machine_id, "Tunnel connected");
 
@@ -133,7 +139,7 @@ impl TunnelClient {
     }
 
     /// Authenticate with the relay and get an access token.
-    async fn authenticate(&self, channel: Channel) -> Result<String, TunnelError> {
+    async fn authenticate(&self, channel: Channel) -> Result<String, TunnelClientError> {
         let mut auth_client = AuthServiceClient::new(channel);
 
         let response = auth_client
@@ -142,7 +148,7 @@ impl TunnelClient {
                 password: self.config.password.clone(),
             })
             .await
-            .map_err(|e| TunnelError::Auth(e.to_string()))?;
+            .map_err(|e| TunnelClientError::Auth(e.to_string()))?;
 
         let login_resp = response.into_inner();
         info!(user_id = %login_resp.user_id, "Authenticated with relay");
@@ -154,7 +160,7 @@ impl TunnelClient {
         &self,
         client: &mut TunnelServiceClient<Channel>,
         token: &str,
-    ) -> Result<(), TunnelError> {
+    ) -> Result<(), TunnelClientError> {
         let mut request = Request::new(TunnelRegisterRequest {
             machine_id: self.config.machine_id.clone(),
             machine_name: self.config.machine_name.clone(),
@@ -164,16 +170,18 @@ impl TunnelClient {
             "authorization",
             format!("Bearer {}", token)
                 .parse()
-                .map_err(|_| TunnelError::Auth("Invalid token format".into()))?,
+                .map_err(|_| TunnelClientError::Auth("Invalid token format".into()))?,
         );
 
         let response = client
             .register(request)
             .await
-            .map_err(|e| TunnelError::Registration(e.to_string()))?;
+            .map_err(|e| TunnelClientError::Registration(e.to_string()))?;
 
         if !response.into_inner().accepted {
-            return Err(TunnelError::Registration("Registration rejected".into()));
+            return Err(TunnelClientError::Registration(
+                "Registration rejected".into(),
+            ));
         }
 
         info!(machine_id = %self.config.machine_id, "Machine registered");
@@ -181,7 +189,10 @@ impl TunnelClient {
     }
 
     /// Send the initial control frame identifying this machine.
-    async fn send_init_frame(&self, tx: &mpsc::Sender<TunnelFrame>) -> Result<(), TunnelError> {
+    async fn send_init_frame(
+        &self,
+        tx: &mpsc::Sender<TunnelFrame>,
+    ) -> Result<(), TunnelClientError> {
         let frame = TunnelFrame {
             request_id: String::new(),
             frame_type: FrameType::Control as i32,
@@ -197,7 +208,7 @@ impl TunnelClient {
         };
         tx.send(frame)
             .await
-            .map_err(|_| TunnelError::Connection("Failed to send init frame".into()))
+            .map_err(|_| TunnelClientError::Connection("Failed to send init frame".into()))
     }
 
     /// Main tunnel loop: process incoming frames and send responses.
@@ -206,7 +217,7 @@ impl TunnelClient {
         mut inbound: Streaming<TunnelFrame>,
         outbound_tx: mpsc::Sender<TunnelFrame>,
         shutdown: &mut tokio::sync::watch::Receiver<bool>,
-    ) -> Result<(), TunnelError> {
+    ) -> Result<(), TunnelClientError> {
         let handler = Arc::clone(&self.handler);
         let machine_id = self.config.machine_id.clone();
         let mut heartbeat_timer = tokio::time::interval(self.config.heartbeat_interval);
@@ -219,17 +230,17 @@ impl TunnelClient {
                         Some(Ok(frame)) => {
                             if let Some(response) = handler.handle_frame(frame) {
                                 if outbound_tx.send(response).await.is_err() {
-                                    return Err(TunnelError::Connection(
+                                    return Err(TunnelClientError::Connection(
                                         "Outbound channel closed".into(),
                                     ));
                                 }
                             }
                         }
                         Some(Err(e)) => {
-                            return Err(TunnelError::Stream(e.to_string()));
+                            return Err(TunnelClientError::Stream(e.to_string()));
                         }
                         None => {
-                            return Err(TunnelError::Connection(
+                            return Err(TunnelClientError::Connection(
                                 "Stream ended by relay".into(),
                             ));
                         }
@@ -257,7 +268,7 @@ impl TunnelClient {
                         ),
                     };
                     if outbound_tx.send(ping).await.is_err() {
-                        return Err(TunnelError::Connection(
+                        return Err(TunnelClientError::Connection(
                             "Outbound channel closed during heartbeat".into(),
                         ));
                     }
