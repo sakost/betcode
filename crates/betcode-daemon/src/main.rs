@@ -13,6 +13,7 @@ use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 use betcode_daemon::server::{GrpcServer, ServerConfig};
 use betcode_daemon::storage::Database;
 use betcode_daemon::subprocess::SubprocessManager;
+use betcode_daemon::tunnel::{TunnelClient, TunnelConfig};
 
 #[derive(Parser, Debug)]
 #[command(name = "betcode-daemon")]
@@ -33,6 +34,26 @@ struct Args {
     /// Maximum concurrent sessions
     #[arg(long, default_value_t = 10)]
     max_sessions: usize,
+
+    /// Relay server URL (enables tunnel mode, e.g. "https://relay.betcode.io:443")
+    #[arg(long, env = "BETCODE_RELAY_URL")]
+    relay_url: Option<String>,
+
+    /// Machine ID for relay registration
+    #[arg(long, env = "BETCODE_MACHINE_ID")]
+    machine_id: Option<String>,
+
+    /// Human-readable machine name for relay
+    #[arg(long, env = "BETCODE_MACHINE_NAME", default_value = "betcode-daemon")]
+    machine_name: String,
+
+    /// Username for relay authentication
+    #[arg(long, env = "BETCODE_RELAY_USERNAME")]
+    relay_username: Option<String>,
+
+    /// Password for relay authentication
+    #[arg(long, env = "BETCODE_RELAY_PASSWORD")]
+    relay_password: Option<String>,
 }
 
 #[tokio::main]
@@ -50,6 +71,7 @@ async fn main() -> anyhow::Result<()> {
         version = env!("CARGO_PKG_VERSION"),
         addr = %args.addr,
         max_processes = args.max_processes,
+        relay = args.relay_url.is_some(),
         "Starting betcode-daemon"
     );
 
@@ -73,6 +95,41 @@ async fn main() -> anyhow::Result<()> {
     let config = ServerConfig::tcp(args.addr).with_max_sessions(args.max_sessions);
     let server = GrpcServer::new(config, db, subprocess_manager);
 
+    // Shutdown signal for tunnel client
+    let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
+
+    // Optionally spawn tunnel client
+    let tunnel_handle = if let Some(relay_url) = &args.relay_url {
+        let machine_id = args
+            .machine_id
+            .clone()
+            .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+        let username = args.relay_username.clone().unwrap_or_default();
+        let password = args.relay_password.clone().unwrap_or_default();
+
+        let tunnel_config = TunnelConfig::new(
+            relay_url.clone(),
+            machine_id.clone(),
+            args.machine_name.clone(),
+            username,
+            password,
+        );
+
+        info!(
+            relay_url = %relay_url,
+            machine_id = %machine_id,
+            "Spawning tunnel client"
+        );
+
+        let tunnel_client = TunnelClient::new(tunnel_config);
+        Some(tokio::spawn(async move {
+            tunnel_client.run(shutdown_rx).await;
+        }))
+    } else {
+        drop(shutdown_rx);
+        None
+    };
+
     info!(addr = %args.addr, "gRPC server listening");
 
     // Serve until shutdown signal
@@ -83,6 +140,12 @@ async fn main() -> anyhow::Result<()> {
         _ = tokio::signal::ctrl_c() => {
             info!("Received shutdown signal");
         }
+    }
+
+    // Signal tunnel client to shut down
+    let _ = shutdown_tx.send(true);
+    if let Some(handle) = tunnel_handle {
+        let _ = handle.await;
     }
 
     info!("Daemon stopped");
