@@ -8,6 +8,7 @@
 //! - Permission bridge for tool authorization
 
 pub mod permission;
+pub mod relay;
 pub mod server;
 pub mod session;
 pub mod storage;

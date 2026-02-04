@@ -4,17 +4,21 @@
 
 mod agent;
 mod config;
+mod handler;
 
 pub use agent::AgentServiceImpl;
 pub use config::ServerConfig;
 
 use std::net::SocketAddr;
+use std::sync::Arc;
 use thiserror::Error;
 use tonic::transport::Server;
 use tracing::info;
 
 use betcode_proto::v1::agent_service_server::AgentServiceServer;
 
+use crate::relay::SessionRelay;
+use crate::session::SessionMultiplexer;
 use crate::storage::Database;
 use crate::subprocess::SubprocessManager;
 
@@ -35,22 +39,33 @@ pub enum ServerError {
 pub struct GrpcServer {
     config: ServerConfig,
     db: Database,
-    subprocess_manager: SubprocessManager,
+    multiplexer: Arc<SessionMultiplexer>,
+    relay: Arc<SessionRelay>,
 }
 
 impl GrpcServer {
-    /// Create a new gRPC server.
+    /// Create a new gRPC server with all components wired together.
     pub fn new(config: ServerConfig, db: Database, subprocess_manager: SubprocessManager) -> Self {
+        let subprocess_manager = Arc::new(subprocess_manager);
+        let multiplexer = Arc::new(SessionMultiplexer::with_defaults());
+        let relay = Arc::new(SessionRelay::new(
+            subprocess_manager,
+            Arc::clone(&multiplexer),
+            db.clone(),
+        ));
+
         Self {
             config,
             db,
-            subprocess_manager,
+            multiplexer,
+            relay,
         }
     }
 
     /// Start serving on TCP socket.
     pub async fn serve_tcp(self, addr: SocketAddr) -> Result<(), ServerError> {
-        let agent_service = AgentServiceImpl::new(self.db, self.subprocess_manager);
+        let agent_service =
+            AgentServiceImpl::new(self.db, Arc::clone(&self.relay), Arc::clone(&self.multiplexer));
 
         info!(%addr, "Starting gRPC server on TCP");
 
@@ -64,16 +79,13 @@ impl GrpcServer {
 
     /// Start serving on Unix socket (non-Windows).
     #[cfg(unix)]
-    pub async fn serve_unix(self, path: PathBuf) -> Result<(), ServerError> {
+    pub async fn serve_unix(self, path: std::path::PathBuf) -> Result<(), ServerError> {
         use tokio::net::UnixListener;
         use tokio_stream::wrappers::UnixListenerStream;
 
-        // Remove existing socket file if present
         if path.exists() {
             std::fs::remove_file(&path)?;
         }
-
-        // Ensure parent directory exists
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
         }
@@ -81,7 +93,8 @@ impl GrpcServer {
         let listener = UnixListener::bind(&path)?;
         let stream = UnixListenerStream::new(listener);
 
-        let agent_service = AgentServiceImpl::new(self.db, self.subprocess_manager);
+        let agent_service =
+            AgentServiceImpl::new(self.db, Arc::clone(&self.relay), Arc::clone(&self.multiplexer));
 
         info!(path = %path.display(), "Starting gRPC server on Unix socket");
 
