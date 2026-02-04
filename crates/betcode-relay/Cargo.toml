@@ -13,7 +13,7 @@ path = "src/main.rs"
 [dependencies]
 betcode-proto = { workspace = true }
 tokio.workspace = true
-tonic.workspace = true
+tonic = { workspace = true, features = ["tls"] }
 prost.workspace = true
 prost-types.workspace = true
 serde.workspace = true

@@ -14,7 +14,7 @@ path = "src/main.rs"
 betcode-proto = { workspace = true }
 betcode-core = { workspace = true }
 tokio.workspace = true
-tonic.workspace = true
+tonic = { workspace = true, features = ["tls"] }
 prost.workspace = true
 serde.workspace = true
 serde_json.workspace = true

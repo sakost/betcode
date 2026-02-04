@@ -54,6 +54,10 @@ struct Args {
     /// Password for relay authentication
     #[arg(long, env = "BETCODE_RELAY_PASSWORD")]
     relay_password: Option<String>,
+
+    /// Path to CA certificate for verifying the relay's TLS certificate (PEM).
+    #[arg(long, env = "BETCODE_RELAY_CA_CERT")]
+    relay_ca_cert: Option<PathBuf>,
 }
 
 #[tokio::main]
@@ -107,13 +111,14 @@ async fn main() -> anyhow::Result<()> {
         let username = args.relay_username.clone().unwrap_or_default();
         let password = args.relay_password.clone().unwrap_or_default();
 
-        let tunnel_config = TunnelConfig::new(
+        let mut tunnel_config = TunnelConfig::new(
             relay_url.clone(),
             machine_id.clone(),
             args.machine_name.clone(),
             username,
             password,
         );
+        tunnel_config.ca_cert_path = args.relay_ca_cert.clone();
 
         info!(
             relay_url = %relay_url,

@@ -24,6 +24,7 @@ use betcode_relay::server::{
     AgentProxyService, AuthServiceImpl, MachineServiceImpl, TunnelServiceImpl,
 };
 use betcode_relay::storage::RelayDatabase;
+use betcode_relay::tls::TlsMode;
 
 #[derive(Parser, Debug)]
 #[command(name = "betcode-relay")]
@@ -59,6 +60,18 @@ struct Args {
     /// Request forwarding timeout in seconds.
     #[arg(long, default_value_t = 30)]
     request_timeout: u64,
+
+    /// Enable dev TLS with auto-generated self-signed certificates.
+    #[arg(long)]
+    dev_tls: bool,
+
+    /// Path to TLS certificate file (PEM). Mutually exclusive with --dev-tls.
+    #[arg(long, requires = "tls_key")]
+    tls_cert: Option<PathBuf>,
+
+    /// Path to TLS private key file (PEM). Mutually exclusive with --dev-tls.
+    #[arg(long, requires = "tls_cert")]
+    tls_key: Option<PathBuf>,
 }
 
 #[tokio::main]
@@ -110,15 +123,46 @@ async fn main() -> anyhow::Result<()> {
 
     let jwt_check = betcode_relay::server::jwt_interceptor(Arc::clone(&jwt));
 
-    info!(addr = %args.addr, "Relay server starting with all services");
+    // Determine TLS mode
+    let tls_mode = if args.dev_tls {
+        let cert_dir = dirs::home_dir()
+            .ok_or_else(|| anyhow::anyhow!("Cannot determine home directory"))?
+            .join(".betcode")
+            .join("certs");
+        TlsMode::DevSelfSigned { cert_dir }
+    } else if let (Some(cert), Some(key)) = (&args.tls_cert, &args.tls_key) {
+        TlsMode::Custom {
+            cert_path: cert.clone(),
+            key_path: key.clone(),
+        }
+    } else {
+        TlsMode::Disabled
+    };
+
+    let tls_config = tls_mode.to_server_tls_config()?;
+
+    let mut builder = Server::builder();
+    if let Some(tls) = tls_config {
+        builder = builder.tls_config(tls)?;
+        info!(addr = %args.addr, "Relay server starting with TLS");
+    } else {
+        info!(addr = %args.addr, "Relay server starting (plaintext)");
+    }
+
+    let router = builder
+        .add_service(AuthServiceServer::new(auth))
+        .add_service(TunnelServiceServer::with_interceptor(
+            tunnel,
+            jwt_check.clone(),
+        ))
+        .add_service(MachineServiceServer::with_interceptor(
+            machine,
+            jwt_check.clone(),
+        ))
+        .add_service(AgentServiceServer::with_interceptor(agent_proxy, jwt_check));
 
     tokio::select! {
-        result = Server::builder()
-            .add_service(AuthServiceServer::new(auth))
-            .add_service(TunnelServiceServer::with_interceptor(tunnel, jwt_check.clone()))
-            .add_service(MachineServiceServer::with_interceptor(machine, jwt_check.clone()))
-            .add_service(AgentServiceServer::with_interceptor(agent_proxy, jwt_check))
-            .serve(args.addr) => {
+        result = router.serve(args.addr) => {
             result?;
         }
         _ = tokio::signal::ctrl_c() => {

@@ -6,7 +6,7 @@ use tokio::sync::mpsc;
 use tokio::time::sleep;
 use tokio_stream::wrappers::ReceiverStream;
 use tokio_stream::StreamExt;
-use tonic::transport::Channel;
+use tonic::transport::{Certificate, Channel, ClientTlsConfig};
 use tonic::{Request, Streaming};
 use tracing::{error, info, warn};
 
@@ -79,8 +79,27 @@ impl TunnelClient {
         &self,
         shutdown: &mut tokio::sync::watch::Receiver<bool>,
     ) -> Result<(), TunnelError> {
-        let channel = Channel::from_shared(self.config.relay_url.clone())
-            .map_err(|e| TunnelError::Connection(e.to_string()))?
+        let mut endpoint = Channel::from_shared(self.config.relay_url.clone())
+            .map_err(|e| TunnelError::Connection(e.to_string()))?;
+
+        // Configure TLS if CA cert is provided
+        if let Some(ca_path) = &self.config.ca_cert_path {
+            let ca_pem = std::fs::read_to_string(ca_path).map_err(|e| {
+                TunnelError::Connection(format!(
+                    "Failed to read CA cert {}: {}",
+                    ca_path.display(),
+                    e
+                ))
+            })?;
+            let ca_cert = Certificate::from_pem(ca_pem);
+            let tls_config = ClientTlsConfig::new().ca_certificate(ca_cert);
+            endpoint = endpoint
+                .tls_config(tls_config)
+                .map_err(|e| TunnelError::Connection(e.to_string()))?;
+            info!(ca_cert = %ca_path.display(), "TLS configured for relay connection");
+        }
+
+        let channel = endpoint
             .connect()
             .await
             .map_err(|e| TunnelError::Connection(e.to_string()))?;

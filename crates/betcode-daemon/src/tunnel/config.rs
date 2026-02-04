@@ -1,5 +1,6 @@
 //! Tunnel client configuration.
 
+use std::path::PathBuf;
 use std::time::Duration;
 
 /// Configuration for the daemon's tunnel connection to the relay.
@@ -25,6 +26,10 @@ pub struct TunnelConfig {
 
     /// Heartbeat interval.
     pub heartbeat_interval: Duration,
+
+    /// Path to CA certificate for verifying the relay's TLS certificate.
+    /// When set, the client will use TLS with this CA cert.
+    pub ca_cert_path: Option<PathBuf>,
 }
 
 /// Exponential backoff reconnection policy.
@@ -86,6 +91,7 @@ impl TunnelConfig {
             password,
             reconnect: ReconnectPolicy::default(),
             heartbeat_interval: Duration::from_secs(30),
+            ca_cert_path: None,
         }
     }
 }
@@ -154,5 +160,6 @@ mod tests {
         assert_eq!(config.machine_id, "machine-1");
         assert_eq!(config.machine_name, "My Machine");
         assert_eq!(config.heartbeat_interval, Duration::from_secs(30));
+        assert!(config.ca_cert_path.is_none());
     }
 }
