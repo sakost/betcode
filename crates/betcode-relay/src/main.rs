@@ -4,11 +4,25 @@
 
 use std::net::SocketAddr;
 use std::path::PathBuf;
+use std::sync::Arc;
+use std::time::Duration;
 
 use clap::Parser;
+use tonic::transport::Server;
 use tracing::info;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
+use betcode_proto::v1::agent_service_server::AgentServiceServer;
+use betcode_proto::v1::auth_service_server::AuthServiceServer;
+use betcode_proto::v1::machine_service_server::MachineServiceServer;
+use betcode_proto::v1::tunnel_service_server::TunnelServiceServer;
+
+use betcode_relay::auth::JwtManager;
+use betcode_relay::registry::ConnectionRegistry;
+use betcode_relay::router::RequestRouter;
+use betcode_relay::server::{
+    AgentProxyService, AuthServiceImpl, MachineServiceImpl, TunnelServiceImpl,
+};
 use betcode_relay::storage::RelayDatabase;
 
 #[derive(Parser, Debug)]
@@ -25,6 +39,26 @@ struct Args {
     /// Path to SQLite database file.
     #[arg(long)]
     db_path: Option<PathBuf>,
+
+    /// JWT secret key.
+    #[arg(
+        long,
+        env = "BETCODE_JWT_SECRET",
+        default_value = "dev-secret-change-me"
+    )]
+    jwt_secret: String,
+
+    /// Access token TTL in seconds.
+    #[arg(long, default_value_t = 3600)]
+    access_ttl: i64,
+
+    /// Refresh token TTL in seconds.
+    #[arg(long, default_value_t = 604800)]
+    refresh_ttl: i64,
+
+    /// Request forwarding timeout in seconds.
+    #[arg(long, default_value_t = 30)]
+    request_timeout: u64,
 }
 
 #[tokio::main]
@@ -56,12 +90,37 @@ async fn main() -> anyhow::Result<()> {
         }
     };
 
-    // TODO: Wire gRPC services in Sprint 3.5
-    let _db = db;
+    let jwt = Arc::new(JwtManager::new(
+        args.jwt_secret.as_bytes(),
+        args.access_ttl,
+        args.refresh_ttl,
+    ));
 
-    info!(addr = %args.addr, "Relay server ready (services pending)");
+    let registry = Arc::new(ConnectionRegistry::new());
+    let router = Arc::new(RequestRouter::new(
+        Arc::clone(&registry),
+        Duration::from_secs(args.request_timeout),
+    ));
+
+    // Build services
+    let auth = AuthServiceImpl::new(db.clone(), Arc::clone(&jwt));
+    let tunnel = TunnelServiceImpl::new(Arc::clone(&registry), db.clone());
+    let machine = MachineServiceImpl::new(db.clone());
+    let agent_proxy = AgentProxyService::new(Arc::clone(&router));
+
+    let jwt_check = betcode_relay::server::jwt_interceptor(Arc::clone(&jwt));
+
+    info!(addr = %args.addr, "Relay server starting with all services");
 
     tokio::select! {
+        result = Server::builder()
+            .add_service(AuthServiceServer::new(auth))
+            .add_service(TunnelServiceServer::with_interceptor(tunnel, jwt_check.clone()))
+            .add_service(MachineServiceServer::with_interceptor(machine, jwt_check.clone()))
+            .add_service(AgentServiceServer::with_interceptor(agent_proxy, jwt_check))
+            .serve(args.addr) => {
+            result?;
+        }
         _ = tokio::signal::ctrl_c() => {
             info!("Received shutdown signal");
         }
