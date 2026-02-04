@@ -64,8 +64,11 @@ impl GrpcServer {
 
     /// Start serving on TCP socket.
     pub async fn serve_tcp(self, addr: SocketAddr) -> Result<(), ServerError> {
-        let agent_service =
-            AgentServiceImpl::new(self.db, Arc::clone(&self.relay), Arc::clone(&self.multiplexer));
+        let agent_service = AgentServiceImpl::new(
+            self.db,
+            Arc::clone(&self.relay),
+            Arc::clone(&self.multiplexer),
+        );
 
         info!(%addr, "Starting gRPC server on TCP");
 
@@ -93,8 +96,11 @@ impl GrpcServer {
         let listener = UnixListener::bind(&path)?;
         let stream = UnixListenerStream::new(listener);
 
-        let agent_service =
-            AgentServiceImpl::new(self.db, Arc::clone(&self.relay), Arc::clone(&self.multiplexer));
+        let agent_service = AgentServiceImpl::new(
+            self.db,
+            Arc::clone(&self.relay),
+            Arc::clone(&self.multiplexer),
+        );
 
         info!(path = %path.display(), "Starting gRPC server on Unix socket");
 

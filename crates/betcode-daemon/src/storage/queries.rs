@@ -63,6 +63,48 @@ impl Database {
         Ok(())
     }
 
+    /// Update the Claude session ID (from system.init).
+    pub async fn update_claude_session_id(
+        &self,
+        id: &str,
+        claude_session_id: &str,
+    ) -> Result<(), DatabaseError> {
+        let now = unix_timestamp();
+
+        sqlx::query("UPDATE sessions SET claude_session_id = ?, updated_at = ? WHERE id = ?")
+            .bind(claude_session_id)
+            .bind(now)
+            .bind(id)
+            .execute(self.pool())
+            .await?;
+
+        Ok(())
+    }
+
+    /// Update session usage stats.
+    pub async fn update_session_usage(
+        &self,
+        id: &str,
+        input_tokens: i64,
+        output_tokens: i64,
+        cost_usd: f64,
+    ) -> Result<(), DatabaseError> {
+        let now = unix_timestamp();
+
+        sqlx::query(
+            "UPDATE sessions SET total_input_tokens = total_input_tokens + ?, total_output_tokens = total_output_tokens + ?, total_cost_usd = total_cost_usd + ?, updated_at = ? WHERE id = ?",
+        )
+        .bind(input_tokens)
+        .bind(output_tokens)
+        .bind(cost_usd)
+        .bind(now)
+        .bind(id)
+        .execute(self.pool())
+        .await?;
+
+        Ok(())
+    }
+
     /// List sessions, optionally filtered.
     pub async fn list_sessions(
         &self,

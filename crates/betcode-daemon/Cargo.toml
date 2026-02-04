@@ -26,3 +26,5 @@ tracing-subscriber.workspace = true
 uuid = { version = "1.20.0", features = ["v4"] }
 prost-types.workspace = true
 tokio-stream = "0.1.18"
+clap.workspace = true
+dirs = "6"

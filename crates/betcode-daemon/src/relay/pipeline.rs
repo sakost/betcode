@@ -168,6 +168,22 @@ impl SessionRelay {
         Ok(())
     }
 
+    /// Send a raw JSON line to the subprocess stdin.
+    pub async fn send_raw_stdin(&self, session_id: &str, line: &str) -> Result<(), RelayError> {
+        let handle = self.get_active_handle(session_id).await?;
+
+        handle
+            .stdin_tx
+            .send(line.to_string())
+            .await
+            .map_err(|_| RelayError::StdinClosed {
+                session_id: session_id.to_string(),
+            })?;
+
+        debug!(session_id, "Sent raw stdin line to subprocess");
+        Ok(())
+    }
+
     /// Cancel the current turn for a session.
     pub async fn cancel_session(&self, session_id: &str) -> Result<bool, RelayError> {
         let process_id = match self.sessions.read().await.get(session_id) {
@@ -178,6 +194,14 @@ impl SessionRelay {
         match self.subprocess_manager.terminate(&process_id).await {
             Ok(()) => {
                 self.sessions.write().await.remove(session_id);
+                // Update DB status so the pipeline cleanup doesn't override
+                if let Err(e) = self
+                    .db
+                    .update_session_status(session_id, crate::storage::SessionStatus::Idle)
+                    .await
+                {
+                    warn!(session_id, error = %e, "Failed to update status on cancel");
+                }
                 info!(session_id, "Relay session cancelled");
                 Ok(true)
             }
@@ -235,6 +259,21 @@ fn spawn_stdout_pipeline(
             let events = bridge.convert(msg);
 
             for event in events {
+                // Update usage stats in DB when we get a UsageReport
+                if let Some(betcode_proto::v1::agent_event::Event::Usage(ref usage)) = event.event {
+                    if let Err(e) = db
+                        .update_session_usage(
+                            &sid,
+                            usage.input_tokens as i64,
+                            usage.output_tokens as i64,
+                            usage.cost_usd,
+                        )
+                        .await
+                    {
+                        warn!(session_id = %sid, error = %e, "Failed to update usage");
+                    }
+                }
+
                 if let Err(e) = store_event(&db, &sid, &event).await {
                     warn!(session_id = %sid, error = %e, "Failed to store event");
                 }
@@ -244,33 +283,101 @@ fn spawn_stdout_pipeline(
                 }
             }
 
-            // Update subprocess with Claude's session ID from SystemInit
+            // Update subprocess and DB with Claude's session ID from SystemInit
             if let Some(info) = bridge.session_info() {
                 if let Some(handle) = sessions.write().await.get_mut(&sid) {
                     let _ = subprocess_manager
                         .set_session_id(&handle.process_id, info.session_id.clone())
                         .await;
                 }
+                // Persist Claude session ID for future resume operations
+                if let Err(e) = db.update_claude_session_id(&sid, &info.session_id).await {
+                    warn!(session_id = %sid, error = %e, "Failed to update claude_session_id");
+                }
             }
         }
 
         info!(session_id = %sid, "Stdout pipeline finished");
-        sessions.write().await.remove(&sid);
+
+        // Only update DB status if the session is still in the active map
+        // (cancel_session removes it and updates status itself)
+        let was_active = sessions.write().await.remove(&sid).is_some();
+        if was_active {
+            if let Err(e) = db
+                .update_session_status(&sid, crate::storage::SessionStatus::Idle)
+                .await
+            {
+                warn!(session_id = %sid, error = %e, "Failed to mark session idle");
+            }
+        }
     });
 }
 
+/// Determine the message_type string from an AgentEvent for DB storage.
+fn event_message_type(event: &AgentEvent) -> &'static str {
+    use betcode_proto::v1::agent_event::Event;
+    match &event.event {
+        Some(Event::TextDelta(_)) => "stream_event",
+        Some(Event::ToolCallStart(_)) => "stream_event",
+        Some(Event::ToolCallResult(_)) => "result",
+        Some(Event::PermissionRequest(_)) => "control_request",
+        Some(Event::StatusChange(_)) => "stream_event",
+        Some(Event::SessionInfo(_)) => "system",
+        Some(Event::Error(_)) => "stream_event",
+        Some(Event::Usage(_)) => "result",
+        Some(Event::TurnComplete(_)) => "result",
+        Some(Event::UserQuestion(_)) => "control_request",
+        Some(Event::TodoUpdate(_)) => "stream_event",
+        Some(Event::PlanMode(_)) => "stream_event",
+        None => "stream_event",
+    }
+}
+
 /// Store an event in the database for replay support.
+/// Events are serialized as JSON for readable storage and reliable deserialization.
 async fn store_event(db: &Database, session_id: &str, event: &AgentEvent) -> Result<(), String> {
     use prost::Message;
+
+    // Encode to protobuf bytes, then base64 for safe text storage
     let mut buf = Vec::new();
     event.encode(&mut buf).map_err(|e| e.to_string())?;
+    let payload = base64_encode(&buf);
+    let msg_type = event_message_type(event);
 
-    let payload = String::from_utf8_lossy(&buf).to_string();
-
-    db.insert_message(session_id, event.sequence as i64, "agent_event", &payload)
+    db.insert_message(session_id, event.sequence as i64, msg_type, &payload)
         .await
         .map_err(|e| e.to_string())
         .map(|_| ())
+}
+
+/// Simple base64 encoding (no external dependency needed).
+fn base64_encode(data: &[u8]) -> String {
+    use std::fmt::Write;
+    const CHARS: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut result = String::with_capacity(data.len().div_ceil(3) * 4);
+
+    for chunk in data.chunks(3) {
+        let b0 = chunk[0] as u32;
+        let b1 = chunk.get(1).copied().unwrap_or(0) as u32;
+        let b2 = chunk.get(2).copied().unwrap_or(0) as u32;
+        let n = (b0 << 16) | (b1 << 8) | b2;
+
+        let _ = result.write_char(CHARS[(n >> 18 & 0x3F) as usize] as char);
+        let _ = result.write_char(CHARS[(n >> 12 & 0x3F) as usize] as char);
+
+        if chunk.len() > 1 {
+            let _ = result.write_char(CHARS[(n >> 6 & 0x3F) as usize] as char);
+        } else {
+            result.push('=');
+        }
+        if chunk.len() > 2 {
+            let _ = result.write_char(CHARS[(n & 0x3F) as usize] as char);
+        } else {
+            result.push('=');
+        }
+    }
+
+    result
 }
 
 #[cfg(test)]

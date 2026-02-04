@@ -164,7 +164,16 @@ impl AgentService for AgentServiceImpl {
 
         tokio::spawn(async move {
             for msg in messages {
-                match prost::Message::decode(msg.payload.as_bytes()) {
+                // Payload is base64-encoded protobuf bytes
+                let bytes = match base64_decode(&msg.payload) {
+                    Ok(b) => b,
+                    Err(e) => {
+                        warn!(error = %e, "Failed to decode base64 payload");
+                        continue;
+                    }
+                };
+
+                match prost::Message::decode(bytes.as_slice()) {
                     Ok(event) => {
                         if tx.send(Ok(event)).await.is_err() {
                             warn!("Resume stream receiver dropped");
@@ -235,6 +244,43 @@ impl AgentService for AgentServiceImpl {
             previous_holder: String::new(),
         }))
     }
+}
+
+/// Simple base64 decoding for stored event payloads.
+fn base64_decode(input: &str) -> Result<Vec<u8>, String> {
+    const DECODE: [u8; 128] = {
+        let mut table = [255u8; 128];
+        let chars = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+        let mut i = 0;
+        while i < 64 {
+            table[chars[i] as usize] = i as u8;
+            i += 1;
+        }
+        table
+    };
+
+    let input = input.trim_end_matches('=');
+    let mut result = Vec::with_capacity(input.len() * 3 / 4);
+
+    for chunk in input.as_bytes().chunks(4) {
+        let mut n: u32 = 0;
+        for (i, &b) in chunk.iter().enumerate() {
+            if b as usize >= 128 || DECODE[b as usize] == 255 {
+                return Err(format!("Invalid base64 character: {}", b as char));
+            }
+            n |= (DECODE[b as usize] as u32) << (18 - i * 6);
+        }
+
+        result.push((n >> 16 & 0xFF) as u8);
+        if chunk.len() > 2 {
+            result.push((n >> 8 & 0xFF) as u8);
+        }
+        if chunk.len() > 3 {
+            result.push((n & 0xFF) as u8);
+        }
+    }
+
+    Ok(result)
 }
 
 #[cfg(test)]
