@@ -212,7 +212,7 @@ impl App {
         }
         let idx = match self.history_index {
             None => 0,
-            Some(i) => (i + 1).min(self.input_history.len() - 1),
+            Some(i) => (i + 1).min(self.input_history.len().saturating_sub(1)),
         };
         self.history_index = Some(idx);
         self.input = self.input_history[idx].clone();

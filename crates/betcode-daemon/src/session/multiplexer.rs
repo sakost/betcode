@@ -239,14 +239,18 @@ impl SessionMultiplexer {
     }
 
     /// Create a sender channel for forwarding subprocess events.
+    ///
+    /// Events forwarded through this channel are assigned sequence numbers
+    /// before being broadcast, ensuring correct ordering for all clients.
     pub fn create_event_forwarder(&self, session_id: String) -> mpsc::Sender<AgentEvent> {
         let (tx, mut rx) = mpsc::channel::<AgentEvent>(128);
         let sessions = Arc::clone(&self.sessions);
 
         tokio::spawn(async move {
-            while let Some(event) = rx.recv().await {
+            while let Some(mut event) = rx.recv().await {
                 let mut sessions = sessions.write().await;
                 if let Some(session) = sessions.get_mut(&session_id) {
+                    event.sequence = session.next_sequence();
                     let _ = session.event_tx.send(event);
                 }
             }

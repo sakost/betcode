@@ -164,6 +164,22 @@ impl AgentService for AgentServiceImpl {
                     }
                     Err(e) => {
                         warn!(?e, "Failed to decode stored message");
+                        let error_event = AgentEvent {
+                            sequence: 0,
+                            timestamp: None,
+                            parent_tool_use_id: String::new(),
+                            event: Some(betcode_proto::v1::agent_event::Event::Error(
+                                betcode_proto::v1::ErrorEvent {
+                                    code: "DECODE_ERROR".to_string(),
+                                    message: format!("Failed to decode stored message: {}", e),
+                                    is_fatal: false,
+                                    details: Default::default(),
+                                },
+                            )),
+                        };
+                        if tx.send(Ok(error_event)).await.is_err() {
+                            break;
+                        }
                     }
                 }
             }

@@ -107,8 +107,14 @@ fn draw_input(frame: &mut Frame, app: &App, area: Rect) {
 
     frame.render_widget(input, area);
 
-    // Position cursor
-    frame.set_cursor_position((area.x + 1 + app.cursor_pos as u16, area.y + 1));
+    // Position cursor (clamp to prevent u16 overflow and stay within input area)
+    let max_cursor_x = area.x.saturating_add(area.width.saturating_sub(2));
+    let cursor_x = area
+        .x
+        .saturating_add(1)
+        .saturating_add(app.cursor_pos as u16)
+        .min(max_cursor_x);
+    frame.set_cursor_position((cursor_x, area.y + 1));
 }
 
 fn draw_status_bar(frame: &mut Frame, app: &App, area: Rect) {
