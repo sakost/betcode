@@ -1,0 +1,196 @@
+// BetCode GitLab Service
+// GitLab API integration for merge requests, pipelines, and issues.
+//
+// Version: v1
+
+syntax = "proto3";
+
+package betcode.v1;
+
+import "google/protobuf/timestamp.proto";
+
+// GitLabService provides access to GitLab project data.
+service GitLabService {
+  // List merge requests for a project.
+  rpc ListMergeRequests(ListMergeRequestsRequest) returns (ListMergeRequestsResponse);
+
+  // Get a single merge request by IID.
+  rpc GetMergeRequest(GetMergeRequestRequest) returns (GetMergeRequestResponse);
+
+  // List pipelines for a project.
+  rpc ListPipelines(ListPipelinesRequest) returns (ListPipelinesResponse);
+
+  // Get a single pipeline by ID.
+  rpc GetPipeline(GetPipelineRequest) returns (GetPipelineResponse);
+
+  // List issues for a project.
+  rpc ListIssues(ListIssuesRequest) returns (ListIssuesResponse);
+
+  // Get a single issue by IID.
+  rpc GetIssue(GetIssueRequest) returns (GetIssueResponse);
+}
+
+// =============================================================================
+// State Enums
+// =============================================================================
+
+enum MergeRequestState {
+  MERGE_REQUEST_STATE_UNSPECIFIED = 0;
+  MERGE_REQUEST_STATE_OPENED = 1;
+  MERGE_REQUEST_STATE_CLOSED = 2;
+  MERGE_REQUEST_STATE_MERGED = 3;
+  MERGE_REQUEST_STATE_LOCKED = 4;
+}
+
+enum PipelineStatus {
+  PIPELINE_STATUS_UNSPECIFIED = 0;
+  PIPELINE_STATUS_CREATED = 1;
+  PIPELINE_STATUS_WAITING_FOR_RESOURCE = 2;
+  PIPELINE_STATUS_PREPARING = 3;
+  PIPELINE_STATUS_PENDING = 4;
+  PIPELINE_STATUS_RUNNING = 5;
+  PIPELINE_STATUS_SUCCESS = 6;
+  PIPELINE_STATUS_FAILED = 7;
+  PIPELINE_STATUS_CANCELED = 8;
+  PIPELINE_STATUS_SKIPPED = 9;
+  PIPELINE_STATUS_MANUAL = 10;
+  PIPELINE_STATUS_SCHEDULED = 11;
+}
+
+enum MergeStatus {
+  MERGE_STATUS_UNSPECIFIED = 0;
+  MERGE_STATUS_CAN_BE_MERGED = 1;
+  MERGE_STATUS_CANNOT_BE_MERGED = 2;
+  MERGE_STATUS_CHECKING = 3;
+  MERGE_STATUS_UNCHECKED = 4;
+}
+
+enum IssueState {
+  ISSUE_STATE_UNSPECIFIED = 0;
+  ISSUE_STATE_OPENED = 1;
+  ISSUE_STATE_CLOSED = 2;
+}
+
+// =============================================================================
+// Merge Request
+// =============================================================================
+
+message MergeRequestInfo {
+  uint64 id = 1;
+  uint64 iid = 2;
+  string title = 3;
+  string description = 4;
+  MergeRequestState state = 5;
+  string source_branch = 6;
+  string target_branch = 7;
+  string author = 8;
+  repeated string labels = 9;
+  google.protobuf.Timestamp created_at = 10;
+  google.protobuf.Timestamp updated_at = 11;
+  string web_url = 12;
+  bool draft = 13;
+  MergeStatus merge_status = 14;
+  string assignee = 15;
+  repeated string assignees = 16;
+  repeated string reviewers = 17;
+  string milestone = 18;
+}
+
+message ListMergeRequestsRequest {
+  string project = 1;
+  MergeRequestState state_filter = 2;
+  uint32 limit = 3;
+  uint32 offset = 4;
+}
+
+message ListMergeRequestsResponse {
+  repeated MergeRequestInfo merge_requests = 1;
+  uint32 total = 2;
+}
+
+message GetMergeRequestRequest {
+  string project = 1;
+  uint64 iid = 2;
+}
+
+message GetMergeRequestResponse {
+  MergeRequestInfo merge_request = 1;
+}
+
+// =============================================================================
+// Pipeline
+// =============================================================================
+
+message PipelineInfo {
+  uint64 id = 1;
+  PipelineStatus status = 2;
+  string ref_name = 3;
+  string sha = 4;
+  string source = 5;
+  google.protobuf.Timestamp created_at = 6;
+  google.protobuf.Timestamp updated_at = 7;
+  string web_url = 8;
+}
+
+message ListPipelinesRequest {
+  string project = 1;
+  PipelineStatus status_filter = 2;
+  uint32 limit = 3;
+  uint32 offset = 4;
+}
+
+message ListPipelinesResponse {
+  repeated PipelineInfo pipelines = 1;
+  uint32 total = 2;
+}
+
+message GetPipelineRequest {
+  string project = 1;
+  uint64 pipeline_id = 2;
+}
+
+message GetPipelineResponse {
+  PipelineInfo pipeline = 1;
+}
+
+// =============================================================================
+// Issue
+// =============================================================================
+
+message IssueInfo {
+  uint64 id = 1;
+  uint64 iid = 2;
+  string title = 3;
+  string description = 4;
+  IssueState state = 5;
+  string author = 6;
+  repeated string labels = 7;
+  google.protobuf.Timestamp created_at = 8;
+  google.protobuf.Timestamp updated_at = 9;
+  string web_url = 10;
+  bool confidential = 11;
+  string assignee = 12;
+  repeated string assignees = 13;
+  string milestone = 14;
+}
+
+message ListIssuesRequest {
+  string project = 1;
+  IssueState state_filter = 2;
+  uint32 limit = 3;
+  uint32 offset = 4;
+}
+
+message ListIssuesResponse {
+  repeated IssueInfo issues = 1;
+  uint32 total = 2;
+}
+
+message GetIssueRequest {
+  string project = 1;
+  uint64 iid = 2;
+}
+
+message GetIssueResponse {
+  IssueInfo issue = 1;
+}
