@@ -17,8 +17,11 @@ use tracing::{error, info};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 use betcode_cli::app::{App, AppMode};
+use betcode_cli::auth_cmd::{self, AuthAction};
+use betcode_cli::config::CliConfig;
 use betcode_cli::connection::{ConnectionConfig, DaemonConnection};
 use betcode_cli::headless::{self, HeadlessConfig};
+use betcode_cli::machine_cmd::{self, MachineAction};
 use betcode_cli::ui;
 use betcode_cli::worktree_cmd::{self, WorktreeAction};
 
@@ -50,6 +53,14 @@ struct Cli {
     #[arg(long, default_value = "http://127.0.0.1:50051")]
     daemon_addr: String,
 
+    /// Relay server URL (overrides config file)
+    #[arg(long)]
+    relay: Option<String>,
+
+    /// Target machine ID for relay routing (overrides config file)
+    #[arg(long)]
+    machine: Option<String>,
+
     /// Auto-accept all permission prompts (headless only)
     #[arg(long)]
     yes: bool,
@@ -66,6 +77,16 @@ enum Commands {
     Worktree {
         #[command(subcommand)]
         action: WorktreeAction,
+    },
+    /// Authenticate with a relay server
+    Auth {
+        #[command(subcommand)]
+        action: AuthAction,
+    },
+    /// Manage remote machines
+    Machine {
+        #[command(subcommand)]
+        action: MachineAction,
     },
 }
 
@@ -93,42 +114,68 @@ async fn main() -> anyhow::Result<()> {
 
     info!(version = env!("CARGO_PKG_VERSION"), "Starting betcode CLI");
 
-    // Connect to daemon
-    let config = ConnectionConfig {
-        addr: cli.daemon_addr.clone(),
-        ..Default::default()
+    // Load persistent config and merge CLI flags
+    let mut cli_config = CliConfig::load();
+    if let Some(ref url) = cli.relay {
+        cli_config.relay_url = Some(url.clone());
+    }
+    if let Some(ref mid) = cli.machine {
+        cli_config.active_machine = Some(mid.clone());
+    }
+
+    // Dispatch auth/machine subcommands (don't need daemon connection)
+    match cli.command {
+        Some(Commands::Auth { action }) => {
+            return auth_cmd::run(action, &mut cli_config).await;
+        }
+        Some(Commands::Machine { action }) => {
+            return machine_cmd::run(action, &mut cli_config).await;
+        }
+        _ => {}
+    }
+
+    // Build connection config: relay mode if we have auth + machine, else local daemon
+    let conn_config = if cli_config.is_relay_mode() {
+        ConnectionConfig {
+            addr: cli_config.relay_url.clone().unwrap_or_default(),
+            auth_token: cli_config.auth.as_ref().map(|a| a.access_token.clone()),
+            machine_id: cli_config.active_machine.clone(),
+            ..Default::default()
+        }
+    } else {
+        ConnectionConfig {
+            addr: cli.daemon_addr.clone(),
+            ..Default::default()
+        }
     };
-    let mut conn = DaemonConnection::new(config);
+
+    let mut conn = DaemonConnection::new(conn_config);
     conn.connect().await?;
 
-    // Dispatch subcommand or fall through to chat mode
-    match cli.command {
-        Some(Commands::Worktree { action }) => {
-            worktree_cmd::run(&mut conn, action).await?;
-        }
-        None => {
-            // Chat mode (headless or TUI)
-            if let Some(prompt) = cli.prompt {
-                let working_dir = cli.working_dir.unwrap_or_else(|| {
-                    std::env::current_dir()
-                        .unwrap()
-                        .to_string_lossy()
-                        .to_string()
-                });
+    // Dispatch remaining subcommands or chat mode
+    if let Some(Commands::Worktree { action }) = cli.command {
+        worktree_cmd::run(&mut conn, action).await?;
+    } else if let Some(prompt) = cli.prompt {
+        // Headless mode
+        let working_dir = cli.working_dir.unwrap_or_else(|| {
+            std::env::current_dir()
+                .unwrap()
+                .to_string_lossy()
+                .to_string()
+        });
 
-                let config = HeadlessConfig {
-                    prompt,
-                    session_id: cli.session,
-                    working_directory: working_dir,
-                    model: cli.model,
-                    auto_accept: cli.yes,
-                };
+        let config = HeadlessConfig {
+            prompt,
+            session_id: cli.session,
+            working_directory: working_dir,
+            model: cli.model,
+            auto_accept: cli.yes,
+        };
 
-                headless::run(&mut conn, config).await?;
-            } else {
-                run_tui(&mut conn, &cli.session, &cli.working_dir, &cli.model).await?;
-            }
-        }
+        headless::run(&mut conn, config).await?;
+    } else {
+        // Interactive TUI mode
+        run_tui(&mut conn, &cli.session, &cli.working_dir, &cli.model).await?;
     }
 
     Ok(())

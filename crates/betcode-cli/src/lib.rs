@@ -4,7 +4,10 @@
 //! Provides both TUI (ratatui) and headless modes.
 
 pub mod app;
+pub mod auth_cmd;
+pub mod config;
 pub mod connection;
 pub mod headless;
+pub mod machine_cmd;
 pub mod ui;
 pub mod worktree_cmd;

@@ -19,12 +19,23 @@ use betcode_proto::v1::{
 /// Connection configuration.
 #[derive(Debug, Clone)]
 pub struct ConnectionConfig {
-    /// Daemon address (e.g., "http://127.0.0.1:50051").
+    /// Target address (daemon for local, relay for remote).
     pub addr: String,
     /// Connection timeout.
     pub connect_timeout: Duration,
     /// Request timeout.
     pub request_timeout: Duration,
+    /// JWT token for relay authentication.
+    pub auth_token: Option<String>,
+    /// Machine ID for relay routing (sent as x-machine-id header).
+    pub machine_id: Option<String>,
+}
+
+impl ConnectionConfig {
+    /// Whether this config targets a relay (has auth + machine_id).
+    pub fn is_relay(&self) -> bool {
+        self.auth_token.is_some() && self.machine_id.is_some()
+    }
 }
 
 impl Default for ConnectionConfig {
@@ -33,6 +44,8 @@ impl Default for ConnectionConfig {
             addr: "http://127.0.0.1:50051".to_string(),
             connect_timeout: Duration::from_secs(5),
             request_timeout: Duration::from_secs(30),
+            auth_token: None,
+            machine_id: None,
         }
     }
 }
@@ -44,6 +57,24 @@ pub enum ConnectionState {
     Connecting,
     Connected,
     Reconnecting,
+}
+
+/// Apply relay metadata to a tonic request.
+fn apply_relay_meta<T>(
+    req: &mut tonic::Request<T>,
+    auth_token: &Option<String>,
+    machine_id: &Option<String>,
+) {
+    if let Some(token) = auth_token {
+        if let Ok(val) = format!("Bearer {}", token).parse() {
+            req.metadata_mut().insert("authorization", val);
+        }
+    }
+    if let Some(mid) = machine_id {
+        if let Ok(val) = mid.parse() {
+            req.metadata_mut().insert("x-machine-id", val);
+        }
+    }
 }
 
 /// Client connection to the daemon.
@@ -83,7 +114,7 @@ impl DaemonConnection {
         self.worktree_client = Some(WorktreeServiceClient::new(channel));
         self.state = ConnectionState::Connected;
 
-        info!(addr = %self.config.addr, "Connected to daemon");
+        info!(addr = %self.config.addr, relay = self.config.is_relay(), "Connected");
         Ok(())
     }
 
@@ -97,6 +128,8 @@ impl DaemonConnection {
         ),
         ConnectionError,
     > {
+        let auth_token = self.config.auth_token.clone();
+        let machine_id = self.config.machine_id.clone();
         let client = self.client.as_mut().ok_or(ConnectionError::NotConnected)?;
 
         // Channel for outgoing requests (client -> daemon)
@@ -104,8 +137,10 @@ impl DaemonConnection {
         let request_stream = ReceiverStream::new(request_rx);
 
         // Call the bidirectional streaming RPC
+        let mut request = tonic::Request::new(request_stream);
+        apply_relay_meta(&mut request, &auth_token, &machine_id);
         let response = client
-            .converse(request_stream)
+            .converse(request)
             .await
             .map_err(|e| ConnectionError::RpcFailed(e.to_string()))?;
 
@@ -145,15 +180,19 @@ impl DaemonConnection {
         &mut self,
         working_directory: Option<&str>,
     ) -> Result<ListSessionsResponse, ConnectionError> {
+        let auth_token = self.config.auth_token.clone();
+        let machine_id = self.config.machine_id.clone();
         let client = self.client.as_mut().ok_or(ConnectionError::NotConnected)?;
 
+        let mut request = tonic::Request::new(ListSessionsRequest {
+            working_directory: working_directory.unwrap_or_default().to_string(),
+            worktree_id: String::new(),
+            limit: 50,
+            offset: 0,
+        });
+        apply_relay_meta(&mut request, &auth_token, &machine_id);
         let response = client
-            .list_sessions(ListSessionsRequest {
-                working_directory: working_directory.unwrap_or_default().to_string(),
-                worktree_id: String::new(),
-                limit: 50,
-                offset: 0,
-            })
+            .list_sessions(request)
             .await
             .map_err(|e| ConnectionError::RpcFailed(e.to_string()))?;
 
@@ -165,12 +204,16 @@ impl DaemonConnection {
         &mut self,
         session_id: &str,
     ) -> Result<CancelTurnResponse, ConnectionError> {
+        let auth_token = self.config.auth_token.clone();
+        let machine_id = self.config.machine_id.clone();
         let client = self.client.as_mut().ok_or(ConnectionError::NotConnected)?;
 
+        let mut request = tonic::Request::new(CancelTurnRequest {
+            session_id: session_id.to_string(),
+        });
+        apply_relay_meta(&mut request, &auth_token, &machine_id);
         let response = client
-            .cancel_turn(CancelTurnRequest {
-                session_id: session_id.to_string(),
-            })
+            .cancel_turn(request)
             .await
             .map_err(|e| ConnectionError::RpcFailed(e.to_string()))?;
 
@@ -300,6 +343,17 @@ mod tests {
         let config = ConnectionConfig::default();
         assert_eq!(config.addr, "http://127.0.0.1:50051");
         assert_eq!(config.connect_timeout, Duration::from_secs(5));
+        assert!(!config.is_relay());
+    }
+
+    #[test]
+    fn relay_config() {
+        let config = ConnectionConfig {
+            auth_token: Some("tok".into()),
+            machine_id: Some("m1".into()),
+            ..Default::default()
+        };
+        assert!(config.is_relay());
     }
 
     #[test]
@@ -307,5 +361,35 @@ mod tests {
         let conn = DaemonConnection::new(ConnectionConfig::default());
         assert_eq!(conn.state(), ConnectionState::Disconnected);
         assert!(!conn.is_connected());
+    }
+
+    #[test]
+    fn apply_relay_meta_adds_headers() {
+        let token = Some("my-token".to_string());
+        let mid = Some("m1".to_string());
+        let mut req = tonic::Request::new(());
+        apply_relay_meta(&mut req, &token, &mid);
+        let auth = req
+            .metadata()
+            .get("authorization")
+            .unwrap()
+            .to_str()
+            .unwrap();
+        assert_eq!(auth, "Bearer my-token");
+        let machine = req
+            .metadata()
+            .get("x-machine-id")
+            .unwrap()
+            .to_str()
+            .unwrap();
+        assert_eq!(machine, "m1");
+    }
+
+    #[test]
+    fn apply_relay_meta_noop_when_none() {
+        let mut req = tonic::Request::new(());
+        apply_relay_meta(&mut req, &None, &None);
+        assert!(req.metadata().get("authorization").is_none());
+        assert!(req.metadata().get("x-machine-id").is_none());
     }
 }
