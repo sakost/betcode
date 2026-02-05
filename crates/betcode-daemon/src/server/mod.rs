@@ -4,12 +4,18 @@
 
 mod agent;
 mod config;
+pub(crate) mod gitlab_convert;
+mod gitlab_svc;
 mod handler;
 mod health;
 mod worktree_svc;
 
+#[cfg(test)]
+mod gitlab_svc_tests;
+
 pub use agent::AgentServiceImpl;
 pub use config::ServerConfig;
+pub use gitlab_svc::GitLabServiceImpl;
 pub use health::HealthServiceImpl;
 pub use worktree_svc::WorktreeServiceImpl;
 
