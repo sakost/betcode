@@ -9,7 +9,7 @@ use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
 use tokio_stream::StreamExt;
 use tonic::{Request, Response, Status, Streaming};
-use tracing::{info, warn};
+use tracing::{info, instrument, warn};
 
 use betcode_proto::v1::agent_service_server::AgentService;
 use betcode_proto::v1::{
@@ -98,6 +98,7 @@ impl AgentService for AgentProxyService {
     type ConverseStream = EventStream;
     type ResumeSessionStream = EventStream;
 
+    #[instrument(skip(self, request), fields(rpc = "Converse"))]
     async fn converse(
         &self,
         request: Request<Streaming<AgentRequest>>,
@@ -212,6 +213,7 @@ impl AgentService for AgentProxyService {
         Ok(Response::new(Box::pin(ReceiverStream::new(out_rx))))
     }
 
+    #[instrument(skip(self, request), fields(rpc = "ListSessions"))]
     async fn list_sessions(
         &self,
         request: Request<ListSessionsRequest>,
@@ -228,6 +230,7 @@ impl AgentService for AgentProxyService {
         Ok(Response::new(resp))
     }
 
+    #[instrument(skip(self, request), fields(rpc = "ResumeSession"))]
     async fn resume_session(
         &self,
         request: Request<ResumeSessionRequest>,
@@ -294,6 +297,7 @@ impl AgentService for AgentProxyService {
         Ok(Response::new(Box::pin(ReceiverStream::new(rx))))
     }
 
+    #[instrument(skip(self, request), fields(rpc = "CompactSession"))]
     async fn compact_session(
         &self,
         request: Request<CompactSessionRequest>,
@@ -310,6 +314,7 @@ impl AgentService for AgentProxyService {
         Ok(Response::new(resp))
     }
 
+    #[instrument(skip(self, request), fields(rpc = "CancelTurn"))]
     async fn cancel_turn(
         &self,
         request: Request<CancelTurnRequest>,
@@ -326,6 +331,7 @@ impl AgentService for AgentProxyService {
         Ok(Response::new(resp))
     }
 
+    #[instrument(skip(self, request), fields(rpc = "RequestInputLock"))]
     async fn request_input_lock(
         &self,
         request: Request<InputLockRequest>,

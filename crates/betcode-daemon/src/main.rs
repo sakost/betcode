@@ -59,18 +59,30 @@ struct Args {
     /// Path to CA certificate for verifying the relay's TLS certificate (PEM).
     #[arg(long, env = "BETCODE_RELAY_CA_CERT")]
     relay_ca_cert: Option<PathBuf>,
+
+    /// Output logs as JSON (for structured log aggregation).
+    #[arg(long)]
+    log_json: bool,
 }
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    tracing_subscriber::registry()
-        .with(tracing_subscriber::EnvFilter::new(
-            std::env::var("RUST_LOG").unwrap_or_else(|_| "betcode_daemon=info".into()),
-        ))
-        .with(tracing_subscriber::fmt::layer())
-        .init();
-
     let args = Args::parse();
+
+    let env_filter = tracing_subscriber::EnvFilter::new(
+        std::env::var("RUST_LOG").unwrap_or_else(|_| "betcode_daemon=info".into()),
+    );
+    if args.log_json {
+        tracing_subscriber::registry()
+            .with(env_filter)
+            .with(tracing_subscriber::fmt::layer().json())
+            .init();
+    } else {
+        tracing_subscriber::registry()
+            .with(env_filter)
+            .with(tracing_subscriber::fmt::layer())
+            .init();
+    }
 
     info!(
         version = env!("CARGO_PKG_VERSION"),

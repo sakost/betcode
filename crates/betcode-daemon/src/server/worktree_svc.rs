@@ -3,7 +3,7 @@
 use std::path::Path;
 
 use tonic::{Request, Response, Status};
-use tracing::info;
+use tracing::{info, instrument};
 
 use betcode_proto::v1::{
     worktree_service_server::WorktreeService, CreateWorktreeRequest, GetWorktreeRequest,
@@ -49,6 +49,7 @@ fn to_detail(info: WorktreeInfo) -> WorktreeDetail {
 
 #[tonic::async_trait]
 impl WorktreeService for WorktreeServiceImpl {
+    #[instrument(skip(self, request), fields(rpc = "CreateWorktree"))]
     async fn create_worktree(
         &self,
         request: Request<CreateWorktreeRequest>,
@@ -89,6 +90,7 @@ impl WorktreeService for WorktreeServiceImpl {
         Ok(Response::new(to_detail(info)))
     }
 
+    #[instrument(skip(self, request), fields(rpc = "RemoveWorktree"))]
     async fn remove_worktree(
         &self,
         request: Request<RemoveWorktreeRequest>,
@@ -108,6 +110,7 @@ impl WorktreeService for WorktreeServiceImpl {
         Ok(Response::new(RemoveWorktreeResponse { removed }))
     }
 
+    #[instrument(skip(self, request), fields(rpc = "ListWorktrees"))]
     async fn list_worktrees(
         &self,
         request: Request<ListWorktreesRequest>,
@@ -131,6 +134,7 @@ impl WorktreeService for WorktreeServiceImpl {
         Ok(Response::new(ListWorktreesResponse { worktrees }))
     }
 
+    #[instrument(skip(self, request), fields(rpc = "GetWorktree"))]
     async fn get_worktree(
         &self,
         request: Request<GetWorktreeRequest>,

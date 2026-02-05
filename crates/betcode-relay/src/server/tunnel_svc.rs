@@ -6,7 +6,7 @@ use std::sync::Arc;
 use tokio::sync::mpsc;
 use tokio_stream::{wrappers::ReceiverStream, StreamExt};
 use tonic::{Request, Response, Status, Streaming};
-use tracing::{error, info, warn};
+use tracing::{error, info, instrument, warn};
 
 use betcode_proto::v1::tunnel_service_server::TunnelService;
 use betcode_proto::v1::{
@@ -44,6 +44,7 @@ impl TunnelServiceImpl {
 impl TunnelService for TunnelServiceImpl {
     type OpenTunnelStream = TunnelStream;
 
+    #[instrument(skip(self, request), fields(rpc = "OpenTunnel"))]
     async fn open_tunnel(
         &self,
         request: Request<Streaming<TunnelFrame>>,
@@ -173,6 +174,7 @@ impl TunnelService for TunnelServiceImpl {
         Ok(Response::new(Box::pin(out_stream)))
     }
 
+    #[instrument(skip(self, request), fields(rpc = "Register"))]
     async fn register(
         &self,
         request: Request<TunnelRegisterRequest>,
@@ -207,6 +209,7 @@ impl TunnelService for TunnelServiceImpl {
         }))
     }
 
+    #[instrument(skip(self, request), fields(rpc = "Heartbeat"))]
     async fn heartbeat(
         &self,
         request: Request<TunnelHeartbeat>,

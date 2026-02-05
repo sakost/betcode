@@ -1,7 +1,7 @@
 //! MachineService gRPC implementation.
 
 use tonic::{Request, Response, Status};
-use tracing::info;
+use tracing::{info, instrument};
 
 use betcode_proto::v1::machine_service_server::MachineService;
 use betcode_proto::v1::{
@@ -47,6 +47,7 @@ fn machine_to_proto(m: &crate::storage::Machine) -> MachineInfo {
 
 #[tonic::async_trait]
 impl MachineService for MachineServiceImpl {
+    #[instrument(skip(self, request), fields(rpc = "RegisterMachine"))]
     async fn register_machine(
         &self,
         request: Request<RegisterMachineRequest>,
@@ -73,6 +74,7 @@ impl MachineService for MachineServiceImpl {
         }))
     }
 
+    #[instrument(skip(self, request), fields(rpc = "ListMachines"))]
     async fn list_machines(
         &self,
         request: Request<ListMachinesRequest>,
@@ -109,6 +111,7 @@ impl MachineService for MachineServiceImpl {
         }))
     }
 
+    #[instrument(skip(self, request), fields(rpc = "RemoveMachine"))]
     async fn remove_machine(
         &self,
         request: Request<RemoveMachineRequest>,
@@ -141,6 +144,7 @@ impl MachineService for MachineServiceImpl {
         Ok(Response::new(RemoveMachineResponse { removed }))
     }
 
+    #[instrument(skip(self, request), fields(rpc = "GetMachine"))]
     async fn get_machine(
         &self,
         request: Request<GetMachineRequest>,

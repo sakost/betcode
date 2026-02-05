@@ -21,6 +21,7 @@ pub use worktree_svc::WorktreeServiceImpl;
 
 use std::net::SocketAddr;
 use std::sync::Arc;
+use std::time::Duration;
 use thiserror::Error;
 use tonic::transport::Server;
 use tracing::info;
@@ -92,6 +93,8 @@ impl GrpcServer {
         info!(%addr, "Starting gRPC server on TCP");
 
         Server::builder()
+            .http2_keepalive_interval(Some(Duration::from_secs(30)))
+            .http2_keepalive_timeout(Some(Duration::from_secs(10)))
             .add_service(AgentServiceServer::new(agent_service))
             .add_service(HealthServer::new(health_service.clone()))
             .add_service(BetCodeHealthServer::new(health_service))
@@ -130,6 +133,8 @@ impl GrpcServer {
         info!(path = %path.display(), "Starting gRPC server on Unix socket");
 
         Server::builder()
+            .http2_keepalive_interval(Some(Duration::from_secs(30)))
+            .http2_keepalive_timeout(Some(Duration::from_secs(10)))
             .add_service(AgentServiceServer::new(agent_service))
             .add_service(HealthServer::new(health_service.clone()))
             .add_service(BetCodeHealthServer::new(health_service))

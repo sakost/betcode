@@ -3,7 +3,7 @@
 use std::sync::Arc;
 
 use tonic::{Request, Response, Status};
-use tracing::{info, warn};
+use tracing::{info, instrument, warn};
 
 use betcode_proto::v1::auth_service_server::AuthService;
 use betcode_proto::v1::{
@@ -28,6 +28,7 @@ impl AuthServiceImpl {
 
 #[tonic::async_trait]
 impl AuthService for AuthServiceImpl {
+    #[instrument(skip(self, request), fields(rpc = "Login"))]
     async fn login(
         &self,
         request: Request<LoginRequest>,
@@ -75,6 +76,7 @@ impl AuthService for AuthServiceImpl {
         }))
     }
 
+    #[instrument(skip(self, request), fields(rpc = "Register"))]
     async fn register(
         &self,
         request: Request<RegisterRequest>,
@@ -132,6 +134,7 @@ impl AuthService for AuthServiceImpl {
         }))
     }
 
+    #[instrument(skip(self, request), fields(rpc = "RefreshToken"))]
     async fn refresh_token(
         &self,
         request: Request<RefreshTokenRequest>,
@@ -185,6 +188,7 @@ impl AuthService for AuthServiceImpl {
         }))
     }
 
+    #[instrument(skip(self, request), fields(rpc = "RevokeToken"))]
     async fn revoke_token(
         &self,
         request: Request<RevokeTokenRequest>,

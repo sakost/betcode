@@ -101,7 +101,9 @@ impl TunnelClient {
         shutdown: &mut tokio::sync::watch::Receiver<bool>,
     ) -> Result<(), TunnelClientError> {
         let mut endpoint = Channel::from_shared(self.config.relay_url.clone())
-            .map_err(|e| TunnelClientError::Connection(e.to_string()))?;
+            .map_err(|e| TunnelClientError::Connection(e.to_string()))?
+            .http2_keep_alive_interval(std::time::Duration::from_secs(30))
+            .keep_alive_timeout(std::time::Duration::from_secs(10));
 
         // Configure TLS if CA cert is provided
         if let Some(ca_path) = &self.config.ca_cert_path {

@@ -6,7 +6,7 @@ use std::sync::Arc;
 use tokio::sync::mpsc;
 use tokio_stream::{wrappers::ReceiverStream, Stream, StreamExt};
 use tonic::{Request, Response, Status, Streaming};
-use tracing::{error, info, warn};
+use tracing::{error, info, instrument, warn};
 
 use betcode_proto::v1::{
     agent_service_server::AgentService, AgentEvent, AgentRequest, CancelTurnRequest,
@@ -49,6 +49,7 @@ impl AgentService for AgentServiceImpl {
     type ConverseStream = AgentEventStream;
     type ResumeSessionStream = AgentEventStream;
 
+    #[instrument(skip(self, request), fields(rpc = "Converse"))]
     async fn converse(
         &self,
         request: Request<Streaming<AgentRequest>>,
@@ -100,6 +101,7 @@ impl AgentService for AgentServiceImpl {
         Ok(Response::new(Box::pin(out_stream)))
     }
 
+    #[instrument(skip(self, request), fields(rpc = "ListSessions"))]
     async fn list_sessions(
         &self,
         request: Request<ListSessionsRequest>,
@@ -149,6 +151,7 @@ impl AgentService for AgentServiceImpl {
         }))
     }
 
+    #[instrument(skip(self, request), fields(rpc = "ResumeSession"))]
     async fn resume_session(
         &self,
         request: Request<ResumeSessionRequest>,
@@ -208,6 +211,7 @@ impl AgentService for AgentServiceImpl {
         Ok(Response::new(Box::pin(out_stream)))
     }
 
+    #[instrument(skip(self, request), fields(rpc = "CompactSession"))]
     async fn compact_session(
         &self,
         request: Request<CompactSessionRequest>,
@@ -276,6 +280,7 @@ impl AgentService for AgentServiceImpl {
         }))
     }
 
+    #[instrument(skip(self, request), fields(rpc = "CancelTurn"))]
     async fn cancel_turn(
         &self,
         request: Request<CancelTurnRequest>,
@@ -289,6 +294,7 @@ impl AgentService for AgentServiceImpl {
         Ok(Response::new(CancelTurnResponse { was_active }))
     }
 
+    #[instrument(skip(self, request), fields(rpc = "RequestInputLock"))]
     async fn request_input_lock(
         &self,
         request: Request<InputLockRequest>,

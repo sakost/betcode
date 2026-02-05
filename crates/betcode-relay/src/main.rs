@@ -73,18 +73,30 @@ struct Args {
     /// Path to TLS private key file (PEM). Mutually exclusive with --dev-tls.
     #[arg(long, requires = "tls_cert")]
     tls_key: Option<PathBuf>,
+
+    /// Output logs as JSON (for structured log aggregation).
+    #[arg(long)]
+    log_json: bool,
 }
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    tracing_subscriber::registry()
-        .with(tracing_subscriber::EnvFilter::new(
-            std::env::var("RUST_LOG").unwrap_or_else(|_| "betcode_relay=info".into()),
-        ))
-        .with(tracing_subscriber::fmt::layer())
-        .init();
-
     let args = Args::parse();
+
+    let env_filter = tracing_subscriber::EnvFilter::new(
+        std::env::var("RUST_LOG").unwrap_or_else(|_| "betcode_relay=info".into()),
+    );
+    if args.log_json {
+        tracing_subscriber::registry()
+            .with(env_filter)
+            .with(tracing_subscriber::fmt::layer().json())
+            .init();
+    } else {
+        tracing_subscriber::registry()
+            .with(env_filter)
+            .with(tracing_subscriber::fmt::layer())
+            .init();
+    }
 
     info!(
         version = env!("CARGO_PKG_VERSION"),
@@ -144,7 +156,9 @@ async fn main() -> anyhow::Result<()> {
 
     let tls_config = tls_mode.to_server_tls_config()?;
 
-    let mut builder = Server::builder();
+    let mut builder = Server::builder()
+        .http2_keepalive_interval(Some(Duration::from_secs(30)))
+        .http2_keepalive_timeout(Some(Duration::from_secs(10)));
     if let Some(tls) = tls_config {
         builder = builder.tls_config(tls)?;
         info!(addr = %args.addr, "Relay server starting with TLS");

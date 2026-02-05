@@ -109,7 +109,9 @@ impl DaemonConnection {
         let endpoint = Endpoint::from_shared(self.config.addr.clone())
             .map_err(|e| ConnectionError::InvalidAddress(e.to_string()))?
             .connect_timeout(self.config.connect_timeout)
-            .timeout(self.config.request_timeout);
+            .timeout(self.config.request_timeout)
+            .http2_keep_alive_interval(Duration::from_secs(30))
+            .keep_alive_timeout(Duration::from_secs(10));
 
         let channel = endpoint.connect().await.map_err(|e| {
             self.state = ConnectionState::Disconnected;

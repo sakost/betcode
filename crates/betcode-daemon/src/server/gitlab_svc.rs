@@ -5,7 +5,7 @@
 use std::sync::Arc;
 
 use tonic::{Request, Response, Status};
-use tracing::info;
+use tracing::{info, instrument};
 
 use betcode_proto::v1::{
     git_lab_service_server::GitLabService, GetIssueRequest, GetIssueResponse,
@@ -32,6 +32,7 @@ impl GitLabServiceImpl {
 
 #[tonic::async_trait]
 impl GitLabService for GitLabServiceImpl {
+    #[instrument(skip(self, request), fields(rpc = "ListMergeRequests"))]
     async fn list_merge_requests(
         &self,
         request: Request<ListMergeRequestsRequest>,
@@ -63,6 +64,7 @@ impl GitLabService for GitLabServiceImpl {
         }))
     }
 
+    #[instrument(skip(self, request), fields(rpc = "GetMergeRequest"))]
     async fn get_merge_request(
         &self,
         request: Request<GetMergeRequestRequest>,
@@ -81,6 +83,7 @@ impl GitLabService for GitLabServiceImpl {
         }))
     }
 
+    #[instrument(skip(self, request), fields(rpc = "ListPipelines"))]
     async fn list_pipelines(
         &self,
         request: Request<ListPipelinesRequest>,
@@ -109,6 +112,7 @@ impl GitLabService for GitLabServiceImpl {
         Ok(Response::new(ListPipelinesResponse { pipelines, total }))
     }
 
+    #[instrument(skip(self, request), fields(rpc = "GetPipeline"))]
     async fn get_pipeline(
         &self,
         request: Request<GetPipelineRequest>,
@@ -127,6 +131,7 @@ impl GitLabService for GitLabServiceImpl {
         }))
     }
 
+    #[instrument(skip(self, request), fields(rpc = "ListIssues"))]
     async fn list_issues(
         &self,
         request: Request<ListIssuesRequest>,
@@ -155,6 +160,7 @@ impl GitLabService for GitLabServiceImpl {
         Ok(Response::new(ListIssuesResponse { issues, total }))
     }
 
+    #[instrument(skip(self, request), fields(rpc = "GetIssue"))]
     async fn get_issue(
         &self,
         request: Request<GetIssueRequest>,
