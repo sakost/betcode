@@ -20,6 +20,7 @@ use betcode_cli::app::{App, AppMode};
 use betcode_cli::auth_cmd::{self, AuthAction};
 use betcode_cli::config::CliConfig;
 use betcode_cli::connection::{ConnectionConfig, DaemonConnection};
+use betcode_cli::gitlab_cmd::{self, GitLabAction};
 use betcode_cli::headless::{self, HeadlessConfig};
 use betcode_cli::machine_cmd::{self, MachineAction};
 use betcode_cli::ui;
@@ -88,6 +89,11 @@ enum Commands {
         #[command(subcommand)]
         action: MachineAction,
     },
+    /// GitLab project operations (MRs, pipelines, issues)
+    Gitlab {
+        #[command(subcommand)]
+        action: GitLabAction,
+    },
 }
 
 #[tokio::main]
@@ -155,6 +161,8 @@ async fn main() -> anyhow::Result<()> {
     // Dispatch remaining subcommands or chat mode
     if let Some(Commands::Worktree { action }) = cli.command {
         worktree_cmd::run(&mut conn, action).await?;
+    } else if let Some(Commands::Gitlab { action }) = cli.command {
+        gitlab_cmd::run(&mut conn, action).await?;
     } else if let Some(prompt) = cli.prompt {
         // Headless mode
         let working_dir = cli.working_dir.unwrap_or_else(|| {

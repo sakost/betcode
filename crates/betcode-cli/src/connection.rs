@@ -10,10 +10,14 @@ use tonic::transport::{Channel, Endpoint};
 use tracing::{error, info, warn};
 
 use betcode_proto::v1::{
-    agent_service_client::AgentServiceClient, worktree_service_client::WorktreeServiceClient,
-    AgentEvent, AgentRequest, CancelTurnRequest, CancelTurnResponse, CreateWorktreeRequest,
-    GetWorktreeRequest, ListSessionsRequest, ListSessionsResponse, ListWorktreesRequest,
-    ListWorktreesResponse, RemoveWorktreeRequest, RemoveWorktreeResponse, WorktreeDetail,
+    agent_service_client::AgentServiceClient, git_lab_service_client::GitLabServiceClient,
+    worktree_service_client::WorktreeServiceClient, AgentEvent, AgentRequest, CancelTurnRequest,
+    CancelTurnResponse, CreateWorktreeRequest, GetIssueRequest, GetIssueResponse,
+    GetMergeRequestRequest, GetMergeRequestResponse, GetPipelineRequest, GetPipelineResponse,
+    GetWorktreeRequest, ListIssuesRequest, ListIssuesResponse, ListMergeRequestsRequest,
+    ListMergeRequestsResponse, ListPipelinesRequest, ListPipelinesResponse, ListSessionsRequest,
+    ListSessionsResponse, ListWorktreesRequest, ListWorktreesResponse, RemoveWorktreeRequest,
+    RemoveWorktreeResponse, WorktreeDetail,
 };
 
 /// Connection configuration.
@@ -82,6 +86,7 @@ pub struct DaemonConnection {
     config: ConnectionConfig,
     client: Option<AgentServiceClient<Channel>>,
     worktree_client: Option<WorktreeServiceClient<Channel>>,
+    gitlab_client: Option<GitLabServiceClient<Channel>>,
     state: ConnectionState,
 }
 
@@ -92,6 +97,7 @@ impl DaemonConnection {
             config,
             client: None,
             worktree_client: None,
+            gitlab_client: None,
             state: ConnectionState::Disconnected,
         }
     }
@@ -111,7 +117,8 @@ impl DaemonConnection {
         })?;
 
         self.client = Some(AgentServiceClient::new(channel.clone()));
-        self.worktree_client = Some(WorktreeServiceClient::new(channel));
+        self.worktree_client = Some(WorktreeServiceClient::new(channel.clone()));
+        self.gitlab_client = Some(GitLabServiceClient::new(channel));
         self.state = ConnectionState::Connected;
 
         info!(addr = %self.config.addr, relay = self.config.is_relay(), "Connected");
@@ -300,6 +307,163 @@ impl DaemonConnection {
             .await
             .map_err(|e| ConnectionError::RpcFailed(e.to_string()))?;
 
+        Ok(response.into_inner())
+    }
+
+    // =========================================================================
+    // GitLab operations
+    // =========================================================================
+
+    /// List merge requests for a project.
+    pub async fn list_merge_requests(
+        &mut self,
+        project: &str,
+        state_filter: i32,
+        limit: u32,
+    ) -> Result<ListMergeRequestsResponse, ConnectionError> {
+        let auth_token = self.config.auth_token.clone();
+        let machine_id = self.config.machine_id.clone();
+        let client = self
+            .gitlab_client
+            .as_mut()
+            .ok_or(ConnectionError::NotConnected)?;
+        let mut request = tonic::Request::new(ListMergeRequestsRequest {
+            project: project.to_string(),
+            state_filter,
+            limit,
+            offset: 0,
+        });
+        apply_relay_meta(&mut request, &auth_token, &machine_id);
+        let response = client
+            .list_merge_requests(request)
+            .await
+            .map_err(|e| ConnectionError::RpcFailed(e.to_string()))?;
+        Ok(response.into_inner())
+    }
+
+    /// Get a single merge request by IID.
+    pub async fn get_merge_request(
+        &mut self,
+        project: &str,
+        iid: u64,
+    ) -> Result<GetMergeRequestResponse, ConnectionError> {
+        let auth_token = self.config.auth_token.clone();
+        let machine_id = self.config.machine_id.clone();
+        let client = self
+            .gitlab_client
+            .as_mut()
+            .ok_or(ConnectionError::NotConnected)?;
+        let mut request = tonic::Request::new(GetMergeRequestRequest {
+            project: project.to_string(),
+            iid,
+        });
+        apply_relay_meta(&mut request, &auth_token, &machine_id);
+        let response = client
+            .get_merge_request(request)
+            .await
+            .map_err(|e| ConnectionError::RpcFailed(e.to_string()))?;
+        Ok(response.into_inner())
+    }
+
+    /// List pipelines for a project.
+    pub async fn list_pipelines(
+        &mut self,
+        project: &str,
+        status_filter: i32,
+        limit: u32,
+    ) -> Result<ListPipelinesResponse, ConnectionError> {
+        let auth_token = self.config.auth_token.clone();
+        let machine_id = self.config.machine_id.clone();
+        let client = self
+            .gitlab_client
+            .as_mut()
+            .ok_or(ConnectionError::NotConnected)?;
+        let mut request = tonic::Request::new(ListPipelinesRequest {
+            project: project.to_string(),
+            status_filter,
+            limit,
+            offset: 0,
+        });
+        apply_relay_meta(&mut request, &auth_token, &machine_id);
+        let response = client
+            .list_pipelines(request)
+            .await
+            .map_err(|e| ConnectionError::RpcFailed(e.to_string()))?;
+        Ok(response.into_inner())
+    }
+
+    /// Get a single pipeline by ID.
+    pub async fn get_pipeline(
+        &mut self,
+        project: &str,
+        pipeline_id: u64,
+    ) -> Result<GetPipelineResponse, ConnectionError> {
+        let auth_token = self.config.auth_token.clone();
+        let machine_id = self.config.machine_id.clone();
+        let client = self
+            .gitlab_client
+            .as_mut()
+            .ok_or(ConnectionError::NotConnected)?;
+        let mut request = tonic::Request::new(GetPipelineRequest {
+            project: project.to_string(),
+            pipeline_id,
+        });
+        apply_relay_meta(&mut request, &auth_token, &machine_id);
+        let response = client
+            .get_pipeline(request)
+            .await
+            .map_err(|e| ConnectionError::RpcFailed(e.to_string()))?;
+        Ok(response.into_inner())
+    }
+
+    /// List issues for a project.
+    pub async fn list_issues(
+        &mut self,
+        project: &str,
+        state_filter: i32,
+        limit: u32,
+    ) -> Result<ListIssuesResponse, ConnectionError> {
+        let auth_token = self.config.auth_token.clone();
+        let machine_id = self.config.machine_id.clone();
+        let client = self
+            .gitlab_client
+            .as_mut()
+            .ok_or(ConnectionError::NotConnected)?;
+        let mut request = tonic::Request::new(ListIssuesRequest {
+            project: project.to_string(),
+            state_filter,
+            limit,
+            offset: 0,
+        });
+        apply_relay_meta(&mut request, &auth_token, &machine_id);
+        let response = client
+            .list_issues(request)
+            .await
+            .map_err(|e| ConnectionError::RpcFailed(e.to_string()))?;
+        Ok(response.into_inner())
+    }
+
+    /// Get a single issue by IID.
+    pub async fn get_issue(
+        &mut self,
+        project: &str,
+        iid: u64,
+    ) -> Result<GetIssueResponse, ConnectionError> {
+        let auth_token = self.config.auth_token.clone();
+        let machine_id = self.config.machine_id.clone();
+        let client = self
+            .gitlab_client
+            .as_mut()
+            .ok_or(ConnectionError::NotConnected)?;
+        let mut request = tonic::Request::new(GetIssueRequest {
+            project: project.to_string(),
+            iid,
+        });
+        apply_relay_meta(&mut request, &auth_token, &machine_id);
+        let response = client
+            .get_issue(request)
+            .await
+            .map_err(|e| ConnectionError::RpcFailed(e.to_string()))?;
         Ok(response.into_inner())
     }
 
