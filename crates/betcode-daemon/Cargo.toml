@@ -29,3 +29,4 @@ tokio-stream = "0.1.18"
 clap = { workspace = true, features = ["derive", "env"] }
 dirs = "6"
 async-stream = "0.3"
+reqwest.workspace = true

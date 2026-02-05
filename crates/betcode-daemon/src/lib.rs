@@ -7,6 +7,7 @@
 //! - Session multiplexing for multi-client support
 //! - Permission bridge for tool authorization
 
+pub mod gitlab;
 pub mod permission;
 pub mod relay;
 pub mod server;
