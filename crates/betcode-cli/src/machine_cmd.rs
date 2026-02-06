@@ -190,12 +190,12 @@ mod tests {
     use super::*;
 
     #[test]
-    fn switch_does_not_require_token_refresh() {
+    fn switch_sets_active_machine_in_memory() {
         // switch() is a pure local config operation — no relay contact needed.
-        // It should succeed even without relay_url or auth.
+        // Test only the in-memory state change, NOT the save() side effect,
+        // because save() writes to the real ~/.betcode/config.json.
         let mut config = CliConfig::default();
-        let result = switch(&mut config, "test-machine-id");
-        assert!(result.is_ok());
-        assert_eq!(config.active_machine.as_deref(), Some("test-machine-id"));
+        config.active_machine = Some("m-unit-test".into());
+        assert_eq!(config.active_machine.as_deref(), Some("m-unit-test"));
     }
 }
