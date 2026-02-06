@@ -9,7 +9,7 @@ use ratatui::Frame;
 use crate::app::{App, AppMode, MessageRole};
 
 /// Draw the full UI.
-pub fn draw(frame: &mut Frame, app: &App) {
+pub fn draw(frame: &mut Frame, app: &mut App) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
@@ -60,7 +60,7 @@ fn draw_header(frame: &mut Frame, app: &App, area: Rect) {
     frame.render_widget(header, area);
 }
 
-fn draw_messages(frame: &mut Frame, app: &App, area: Rect) {
+fn draw_messages(frame: &mut Frame, app: &mut App, area: Rect) {
     let mut lines: Vec<Line> = Vec::new();
 
     for msg in &app.messages {
@@ -75,14 +75,12 @@ fn draw_messages(frame: &mut Frame, app: &App, area: Rect) {
         let content_lines: Vec<&str> = msg.content.split('\n').collect();
 
         if content_lines.is_empty() || (content_lines.len() == 1 && content_lines[0].is_empty()) {
-            // Single-line (possibly empty) message
             let cursor = if msg.streaming { "█" } else { "" };
             lines.push(Line::from(vec![
                 Span::styled(prefix, prefix_style),
                 Span::styled(cursor, Style::default().fg(Color::White)),
             ]));
         } else {
-            // First line gets the prefix
             let cursor = if msg.streaming && content_lines.len() == 1 {
                 "█"
             } else {
@@ -94,7 +92,6 @@ fn draw_messages(frame: &mut Frame, app: &App, area: Rect) {
                 Span::styled(cursor, Style::default().fg(Color::White)),
             ]));
 
-            // Subsequent lines get indentation matching prefix width
             let indent = " ".repeat(prefix.len());
             for (i, content_line) in content_lines.iter().enumerate().skip(1) {
                 let cursor = if msg.streaming && i == content_lines.len() - 1 {
@@ -111,16 +108,35 @@ fn draw_messages(frame: &mut Frame, app: &App, area: Rect) {
         }
     }
 
-    // Calculate scroll: show the most recent lines that fit
-    let inner_height = area.height.saturating_sub(2) as usize; // minus borders
-    let scroll = if lines.len() > inner_height {
-        (lines.len() - inner_height) as u16
+    let inner_height = area.height.saturating_sub(2); // minus borders
+    let total = lines.len() as u16;
+
+    // Update app state so scroll methods know the bounds
+    app.viewport_height = inner_height;
+    app.total_lines = total;
+
+    // Compute absolute scroll position from bottom-relative offset
+    let max_scroll = total.saturating_sub(inner_height);
+    let scroll = if app.scroll_pinned {
+        // Auto-scroll: pin to bottom
+        max_scroll
     } else {
-        0
+        // Manual scroll: offset is distance from bottom
+        max_scroll.saturating_sub(app.scroll_offset)
+    };
+
+    let title = if !app.scroll_pinned {
+        format!(
+            "Conversation [scroll: {}/{}]",
+            max_scroll.saturating_sub(scroll) + 1,
+            max_scroll
+        )
+    } else {
+        "Conversation".to_string()
     };
 
     let messages = Paragraph::new(lines)
-        .block(Block::default().borders(Borders::ALL).title("Conversation"))
+        .block(Block::default().borders(Borders::ALL).title(title))
         .wrap(Wrap { trim: false })
         .scroll((scroll, 0));
 
@@ -245,9 +261,9 @@ mod tests {
     fn render_empty_app() {
         let backend = TestBackend::new(80, 24);
         let mut terminal = Terminal::new(backend).unwrap();
-        let app = App::new();
+        let mut app = App::new();
 
-        terminal.draw(|frame| draw(frame, &app)).unwrap();
+        terminal.draw(|frame| draw(frame, &mut app)).unwrap();
     }
 
     #[test]
@@ -260,6 +276,6 @@ mod tests {
         app.append_text("Hi there!");
         app.finish_streaming();
 
-        terminal.draw(|frame| draw(frame, &app)).unwrap();
+        terminal.draw(|frame| draw(frame, &mut app)).unwrap();
     }
 }

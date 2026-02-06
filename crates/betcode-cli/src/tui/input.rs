@@ -23,7 +23,7 @@ pub async fn handle_term_event(
             } else if app.mode == AppMode::PermissionPrompt {
                 handle_permission_key(app, tx, key.code).await;
             } else {
-                handle_input_key(app, tx, key.code).await;
+                handle_input_key(app, tx, key).await;
             }
         }
         TermEvent::Resize(_, _) => { /* terminal auto-handles resize on next draw */ }
@@ -63,9 +63,13 @@ async fn handle_permission_key(
 async fn handle_input_key(
     app: &mut App,
     tx: &mpsc::Sender<AgentRequest>,
-    code: KeyCode,
+    key: crossterm::event::KeyEvent,
 ) {
-    match code {
+    let shift = key
+        .modifiers
+        .contains(crossterm::event::KeyModifiers::SHIFT);
+
+    match key.code {
         KeyCode::Enter => {
             if let Some(text) = app.submit_input() {
                 let _ = tx
@@ -79,6 +83,7 @@ async fn handle_input_key(
                     })
                     .await;
                 app.agent_busy = true;
+                app.scroll_to_bottom();
             }
         }
         KeyCode::Char(c) => {
@@ -97,8 +102,13 @@ async fn handle_input_key(
         KeyCode::Right => {
             app.cursor_pos = (app.cursor_pos + 1).min(app.input.len());
         }
+        KeyCode::Up if shift => app.scroll_up(1),
+        KeyCode::Down if shift => app.scroll_down(1),
         KeyCode::Up => app.history_up(),
         KeyCode::Down => app.history_down(),
+        KeyCode::PageUp => app.scroll_up(app.viewport_height.max(1)),
+        KeyCode::PageDown => app.scroll_down(app.viewport_height.max(1)),
+        KeyCode::End if shift => app.scroll_to_bottom(),
         _ => {}
     }
 }

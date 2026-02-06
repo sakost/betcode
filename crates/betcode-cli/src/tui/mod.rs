@@ -118,7 +118,7 @@ pub async fn run(
     let result: anyhow::Result<()> = loop {
         tokio::select! {
             _ = tick.tick() => {
-                terminal.draw(|f| ui::draw(f, &app))?;
+                terminal.draw(|f| ui::draw(f, &mut app))?;
             }
             Some(term_event) = term_rx.recv() => {
                 input::handle_term_event(&mut app, &request_tx, term_event).await;

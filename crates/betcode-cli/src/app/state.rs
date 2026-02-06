@@ -55,7 +55,14 @@ pub struct App {
     pub cursor_pos: usize,
     pub input_history: VecDeque<String>,
     pub history_index: Option<usize>,
+    /// Manual scroll offset from the bottom (0 = pinned to bottom).
     pub scroll_offset: u16,
+    /// Whether the user has manually scrolled up (disables auto-scroll).
+    pub scroll_pinned: bool,
+    /// Height of the message viewport (set each frame by the renderer).
+    pub viewport_height: u16,
+    /// Total line count of rendered messages (set each frame by the renderer).
+    pub total_lines: u16,
     pub should_quit: bool,
     pub status: String,
     pub token_usage: Option<TokenUsage>,
@@ -75,12 +82,38 @@ impl App {
             input_history: VecDeque::with_capacity(100),
             history_index: None,
             scroll_offset: 0,
+            scroll_pinned: true,
+            viewport_height: 0,
+            total_lines: 0,
             should_quit: false,
             status: "Connecting...".to_string(),
             token_usage: None,
             pending_permission: None,
             agent_busy: false,
         }
+    }
+
+    /// Scroll up by `n` lines.
+    pub fn scroll_up(&mut self, n: u16) {
+        let max_scroll = self.total_lines.saturating_sub(self.viewport_height);
+        self.scroll_offset = self.scroll_offset.saturating_add(n).min(max_scroll);
+        if self.scroll_offset > 0 {
+            self.scroll_pinned = false;
+        }
+    }
+
+    /// Scroll down by `n` lines.
+    pub fn scroll_down(&mut self, n: u16) {
+        self.scroll_offset = self.scroll_offset.saturating_sub(n);
+        if self.scroll_offset == 0 {
+            self.scroll_pinned = true;
+        }
+    }
+
+    /// Snap scroll to the bottom (most recent messages).
+    pub fn scroll_to_bottom(&mut self) {
+        self.scroll_offset = 0;
+        self.scroll_pinned = true;
     }
 
     pub fn add_user_message(&mut self, content: String) {
