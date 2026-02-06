@@ -12,6 +12,7 @@ use betcode_proto::v1::{
     GetMachineRequest, ListMachinesRequest, MachineStatus, RegisterMachineRequest,
 };
 
+use crate::auth_cmd;
 use crate::config::CliConfig;
 
 /// Machine subcommand actions.
@@ -39,6 +40,11 @@ pub enum MachineAction {
 
 /// Execute a machine subcommand.
 pub async fn run(action: MachineAction, config: &mut CliConfig) -> anyhow::Result<()> {
+    // Refresh token before relay operations (Switch is local-only)
+    if !matches!(action, MachineAction::Switch { .. }) {
+        auth_cmd::ensure_valid_token(config).await?;
+    }
+
     match action {
         MachineAction::Register { id, name } => register(config, id, &name).await,
         MachineAction::List => list(config).await,
@@ -74,7 +80,7 @@ async fn connect_relay(config: &CliConfig) -> anyhow::Result<Channel> {
 }
 
 async fn register(
-    config: &mut CliConfig,
+    config: &CliConfig,
     id: Option<String>,
     name: &str,
 ) -> anyhow::Result<()> {
@@ -95,10 +101,8 @@ async fn register(
         writeln!(out, "Machine registered:")?;
         writeln!(out, "  ID:   {}", m.machine_id)?;
         writeln!(out, "  Name: {}", m.name)?;
-        // Auto-set as active machine
-        config.active_machine = Some(m.machine_id);
-        config.save()?;
-        writeln!(out, "  Set as active machine")?;
+        writeln!(out, "\nTo use this machine, run:")?;
+        writeln!(out, "  betcode machine switch {}", m.machine_id)?;
     }
     Ok(())
 }
@@ -179,4 +183,19 @@ async fn status(config: &CliConfig) -> anyhow::Result<()> {
         None => writeln!(out, "No active machine (using local daemon)")?,
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn switch_does_not_require_token_refresh() {
+        // switch() is a pure local config operation — no relay contact needed.
+        // It should succeed even without relay_url or auth.
+        let mut config = CliConfig::default();
+        let result = switch(&mut config, "test-machine-id");
+        assert!(result.is_ok());
+        assert_eq!(config.active_machine.as_deref(), Some("test-machine-id"));
+    }
 }
