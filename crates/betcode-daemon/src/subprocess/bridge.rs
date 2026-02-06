@@ -136,12 +136,10 @@ impl EventBridge {
                 Delta::Unknown(_) => vec![],
             },
             StreamEventType::ContentBlockStop { .. } => {
-                let mut event = self.next_event();
-                event.event = Some(proto::agent_event::Event::TextDelta(TextDelta {
-                    text: String::new(),
-                    is_complete: true,
-                }));
-                vec![event]
+                // No event emitted — the assistant message already triggers
+                // TurnComplete and emitting an empty TextDelta here causes
+                // the TUI to render a blank "Claude:" line after the response.
+                vec![]
             }
             StreamEventType::MessageStart => {
                 let mut event = self.next_event();
