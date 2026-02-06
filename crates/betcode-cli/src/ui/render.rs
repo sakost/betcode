@@ -3,7 +3,7 @@
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Clear, List, ListItem, Paragraph, Wrap};
+use ratatui::widgets::{Block, Borders, Clear, Paragraph, Wrap};
 use ratatui::Frame;
 
 use crate::app::{App, AppMode, MessageRole};
@@ -61,33 +61,68 @@ fn draw_header(frame: &mut Frame, app: &App, area: Rect) {
 }
 
 fn draw_messages(frame: &mut Frame, app: &App, area: Rect) {
-    let items: Vec<ListItem> = app
-        .messages
-        .iter()
-        .map(|msg| {
-            let (prefix, color) = match msg.role {
-                MessageRole::User => ("You: ", Color::Green),
-                MessageRole::Assistant => ("Claude: ", Color::Blue),
-                MessageRole::System => ("System: ", Color::Yellow),
-                MessageRole::Tool => ("", Color::DarkGray),
-            };
+    let mut lines: Vec<Line> = Vec::new();
 
+    for msg in &app.messages {
+        let (prefix, color) = match msg.role {
+            MessageRole::User => ("You: ", Color::Green),
+            MessageRole::Assistant => ("Claude: ", Color::Blue),
+            MessageRole::System => ("System: ", Color::Yellow),
+            MessageRole::Tool => ("", Color::DarkGray),
+        };
+
+        let prefix_style = Style::default().fg(color).add_modifier(Modifier::BOLD);
+        let content_lines: Vec<&str> = msg.content.split('\n').collect();
+
+        if content_lines.is_empty() || (content_lines.len() == 1 && content_lines[0].is_empty()) {
+            // Single-line (possibly empty) message
             let cursor = if msg.streaming { "█" } else { "" };
-            let line = Line::from(vec![
-                Span::styled(
-                    prefix,
-                    Style::default().fg(color).add_modifier(Modifier::BOLD),
-                ),
-                Span::raw(&msg.content),
+            lines.push(Line::from(vec![
+                Span::styled(prefix, prefix_style),
                 Span::styled(cursor, Style::default().fg(Color::White)),
-            ]);
+            ]));
+        } else {
+            // First line gets the prefix
+            let cursor = if msg.streaming && content_lines.len() == 1 {
+                "█"
+            } else {
+                ""
+            };
+            lines.push(Line::from(vec![
+                Span::styled(prefix, prefix_style),
+                Span::raw(content_lines[0]),
+                Span::styled(cursor, Style::default().fg(Color::White)),
+            ]));
 
-            ListItem::new(line)
-        })
-        .collect();
+            // Subsequent lines get indentation matching prefix width
+            let indent = " ".repeat(prefix.len());
+            for (i, content_line) in content_lines.iter().enumerate().skip(1) {
+                let cursor = if msg.streaming && i == content_lines.len() - 1 {
+                    "█"
+                } else {
+                    ""
+                };
+                lines.push(Line::from(vec![
+                    Span::raw(indent.clone()),
+                    Span::raw(*content_line),
+                    Span::styled(cursor, Style::default().fg(Color::White)),
+                ]));
+            }
+        }
+    }
 
-    let messages =
-        List::new(items).block(Block::default().borders(Borders::ALL).title("Conversation"));
+    // Calculate scroll: show the most recent lines that fit
+    let inner_height = area.height.saturating_sub(2) as usize; // minus borders
+    let scroll = if lines.len() > inner_height {
+        (lines.len() - inner_height) as u16
+    } else {
+        0
+    };
+
+    let messages = Paragraph::new(lines)
+        .block(Block::default().borders(Borders::ALL).title("Conversation"))
+        .wrap(Wrap { trim: false })
+        .scroll((scroll, 0));
 
     frame.render_widget(messages, area);
 }
