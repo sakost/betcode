@@ -27,10 +27,11 @@ pub const METHOD_CONVERSE: &str = "AgentService/Converse";
 pub const METHOD_RESUME_SESSION: &str = "AgentService/ResumeSession";
 
 /// Info about an active streaming session routed through the tunnel.
-#[allow(dead_code)]
 struct ActiveStream {
     session_id: String,
     client_id: String,
+    /// Deferred session config — subprocess is only started on first UserMessage.
+    pending_config: Option<crate::relay::RelaySessionConfig>,
 }
 
 /// Handles incoming tunnel frames by dispatching to local gRPC services.
@@ -335,17 +336,20 @@ impl TunnelRequestHandler {
 
     /// Handle an incoming StreamData frame for an active streaming session.
     /// Routes user messages, permissions, etc. to the relay.
+    ///
+    /// On the first `UserMessage`, if the subprocess hasn't been started yet
+    /// (pending_config is Some), starts it and immediately sends the message.
     pub async fn handle_incoming_stream_data(&self, request_id: &str, data: &[u8]) {
-        let stream = self.active_streams.read().await;
-        let active = match stream.get(request_id) {
-            Some(a) => a,
-            None => {
-                debug!(request_id = %request_id, "StreamData for unknown active stream");
-                return;
+        let sid = {
+            let stream = self.active_streams.read().await;
+            match stream.get(request_id) {
+                Some(a) => a.session_id.clone(),
+                None => {
+                    debug!(request_id = %request_id, "StreamData for unknown active stream");
+                    return;
+                }
             }
         };
-        let sid = active.session_id.clone();
-        drop(stream);
 
         let req = match AgentRequest::decode(data) {
             Ok(r) => r,
@@ -354,6 +358,40 @@ impl TunnelRequestHandler {
                 return;
             }
         };
+
+        // Check if we need to start the subprocess (deferred from handle_converse).
+        // Take the config under a write lock so only the first message triggers start.
+        let pending = {
+            let mut streams = self.active_streams.write().await;
+            streams
+                .get_mut(request_id)
+                .and_then(|a| a.pending_config.take())
+        };
+        if let Some(config) = pending {
+            debug!(
+                request_id = %request_id,
+                session_id = %sid,
+                "Starting deferred subprocess on first user input"
+            );
+            if let Err(e) = self.relay.start_session(config).await {
+                error!(
+                    request_id = %request_id,
+                    session_id = %sid,
+                    error = %e,
+                    "Deferred start_session failed"
+                );
+                let _ = self
+                    .outbound_tx
+                    .send(Self::error_response(
+                        request_id,
+                        TunnelErrorCode::Internal,
+                        &format!("Start session failed: {}", e),
+                    ))
+                    .await;
+                self.active_streams.write().await.remove(request_id);
+                return;
+            }
+        }
 
         use betcode_proto::v1::agent_request::Request;
         match req.request {
@@ -471,16 +509,9 @@ impl TunnelRequestHandler {
             }
         };
 
-        // Track active stream
-        self.active_streams.write().await.insert(
-            request_id.to_string(),
-            ActiveStream {
-                session_id: sid.clone(),
-                client_id: client_id.clone(),
-            },
-        );
-
-        // Start relay session
+        // Build session config but defer subprocess start until first UserMessage.
+        // Without deferral the subprocess starts with no prompt, times out waiting
+        // for stdin, and exits before the user types anything in TUI mode.
         let config = crate::relay::RelaySessionConfig {
             session_id: sid.clone(),
             working_directory: working_dir,
@@ -488,18 +519,16 @@ impl TunnelRequestHandler {
             resume_session,
             worktree_id: start_conv.worktree_id,
         };
-        if let Err(e) = self.relay.start_session(config).await {
-            let _ = self
-                .outbound_tx
-                .send(Self::error_response(
-                    request_id,
-                    TunnelErrorCode::Internal,
-                    &format!("Start session failed: {}", e),
-                ))
-                .await;
-            self.active_streams.write().await.remove(request_id);
-            return;
-        }
+
+        // Track active stream with pending config
+        self.active_streams.write().await.insert(
+            request_id.to_string(),
+            ActiveStream {
+                session_id: sid.clone(),
+                client_id: client_id.clone(),
+                pending_config: Some(config),
+            },
+        );
 
         // Spawn task to forward broadcast events as StreamData frames
         let tx = self.outbound_tx.clone();
@@ -512,27 +541,51 @@ impl TunnelRequestHandler {
 
         tokio::spawn(async move {
             let mut seq = 0u64;
-            while let Ok(event) = event_rx.recv().await {
-                let mut buf = Vec::with_capacity(event.encoded_len());
-                if event.encode(&mut buf).is_err() {
-                    continue;
-                }
-                let frame = TunnelFrame {
-                    request_id: rid.clone(),
-                    frame_type: FrameType::StreamData as i32,
-                    timestamp: Some(prost_types::Timestamp::from(std::time::SystemTime::now())),
-                    payload: Some(betcode_proto::v1::tunnel_frame::Payload::StreamData(
-                        StreamPayload {
-                            method: String::new(),
-                            data: buf,
-                            sequence: seq,
-                            metadata: HashMap::new(),
-                        },
-                    )),
-                };
-                seq += 1;
-                if tx.send(frame).await.is_err() {
-                    break;
+            debug!(request_id = %rid, session_id = %sid_spawn, "Event forwarder task started, waiting for broadcast events");
+            loop {
+                match event_rx.recv().await {
+                    Ok(event) => {
+                        debug!(
+                            request_id = %rid,
+                            seq,
+                            event_type = ?event.event.as_ref().map(|e| std::mem::discriminant(e)),
+                            "Forwarding broadcast event to tunnel"
+                        );
+                        let mut buf = Vec::with_capacity(event.encoded_len());
+                        if event.encode(&mut buf).is_err() {
+                            continue;
+                        }
+                        let frame = TunnelFrame {
+                            request_id: rid.clone(),
+                            frame_type: FrameType::StreamData as i32,
+                            timestamp: Some(prost_types::Timestamp::from(
+                                std::time::SystemTime::now(),
+                            )),
+                            payload: Some(
+                                betcode_proto::v1::tunnel_frame::Payload::StreamData(
+                                    StreamPayload {
+                                        method: String::new(),
+                                        data: buf,
+                                        sequence: seq,
+                                        metadata: HashMap::new(),
+                                    },
+                                ),
+                            ),
+                        };
+                        seq += 1;
+                        if tx.send(frame).await.is_err() {
+                            warn!(request_id = %rid, "Outbound channel closed, stopping event forwarder");
+                            break;
+                        }
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                        warn!(request_id = %rid, skipped = n, "Broadcast receiver lagged, events lost");
+                        continue;
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                        debug!(request_id = %rid, "Broadcast channel closed, ending event forwarder");
+                        break;
+                    }
                 }
             }
 

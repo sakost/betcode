@@ -30,7 +30,8 @@ pub struct HeadlessConfig {
 
 /// Run headless mode.
 pub async fn run(conn: &mut DaemonConnection, config: HeadlessConfig) -> Result<(), HeadlessError> {
-    let (request_tx, mut event_rx) = conn.converse().await.map_err(HeadlessError::Connection)?;
+    let (request_tx, mut event_rx, stream_handle) =
+        conn.converse().await.map_err(HeadlessError::Connection)?;
 
     // Generate session ID if not provided
     let session_id = config
@@ -71,22 +72,28 @@ pub async fn run(conn: &mut DaemonConnection, config: HeadlessConfig) -> Result<
     info!(session_id, "Headless mode started");
 
     // Process events until turn complete
-    while let Some(result) = event_rx.recv().await {
-        match result {
-            Ok(event) => {
-                let done = process_headless_event(event, &request_tx, config.auto_accept).await?;
-                if done {
-                    break;
+    let result: Result<(), HeadlessError> = async {
+        while let Some(result) = event_rx.recv().await {
+            match result {
+                Ok(event) => {
+                    let done =
+                        process_headless_event(event, &request_tx, config.auto_accept).await?;
+                    if done {
+                        break;
+                    }
+                }
+                Err(e) => {
+                    error!(?e, "Stream error");
+                    return Err(HeadlessError::StreamError(e.to_string()));
                 }
             }
-            Err(e) => {
-                error!(?e, "Stream error");
-                return Err(HeadlessError::StreamError(e.to_string()));
-            }
         }
+        Ok(())
     }
+    .await;
 
-    Ok(())
+    stream_handle.abort();
+    result
 }
 
 /// Process a single event in headless mode. Returns true if done.

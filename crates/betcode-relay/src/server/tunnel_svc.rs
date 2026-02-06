@@ -6,7 +6,7 @@ use std::sync::Arc;
 use tokio::sync::mpsc;
 use tokio_stream::{wrappers::ReceiverStream, StreamExt};
 use tonic::{Request, Response, Status, Streaming};
-use tracing::{error, info, instrument, warn};
+use tracing::{debug, error, info, instrument, warn};
 
 use betcode_proto::v1::tunnel_service_server::TunnelService;
 use betcode_proto::v1::{
@@ -123,13 +123,20 @@ impl TunnelService for TunnelServiceImpl {
 
             // Process incoming frames from daemon
             let conn_ref = Arc::clone(&conn);
+            let mut daemon_frame_count = 0u64;
             while let Some(result) = in_stream.next().await {
+                daemon_frame_count += 1;
                 match result {
                     Ok(frame) => {
                         let frame_type = frame.frame_type;
                         let rid = frame.request_id.clone();
 
                         if frame_type == FrameType::StreamEnd as i32 {
+                            debug!(
+                                request_id = %rid, machine_id = %machine_id,
+                                daemon_frame_count,
+                                "Received StreamEnd from daemon"
+                            );
                             // StreamEnd: deliver final frame to stream channel, then close it.
                             // If no stream channel, try unary pending as fallback.
                             if conn_ref.has_stream_pending(&rid).await {
@@ -139,6 +146,13 @@ impl TunnelService for TunnelServiceImpl {
                                 warn!(request_id = %rid, "No pending waiter for StreamEnd");
                             }
                         } else if frame_type == FrameType::StreamData as i32 {
+                            let has_stream = conn_ref.has_stream_pending(&rid).await;
+                            debug!(
+                                request_id = %rid, machine_id = %machine_id,
+                                has_stream_pending = has_stream,
+                                daemon_frame_count,
+                                "Received StreamData from daemon, dispatching"
+                            );
                             // StreamData: try stream channel first, fall back to unary
                             if !conn_ref.send_stream_frame(&rid, frame.clone()).await
                                 && !conn_ref.complete_pending(&rid, frame).await

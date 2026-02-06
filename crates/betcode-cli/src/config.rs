@@ -64,9 +64,9 @@ impl CliConfig {
         self.auth = None;
     }
 
-    /// Whether this config points to a relay (vs local daemon).
+    /// Whether this config has all fields needed for relay mode.
     pub fn is_relay_mode(&self) -> bool {
-        self.relay_url.is_some()
+        self.relay_url.is_some() && self.auth.is_some() && self.active_machine.is_some()
     }
 }
 

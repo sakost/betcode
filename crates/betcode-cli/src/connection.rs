@@ -128,12 +128,17 @@ impl DaemonConnection {
     }
 
     /// Start a bidirectional conversation stream.
+    ///
+    /// Returns a sender for requests, a receiver for events, and a handle to
+    /// the background stream reader task. Abort the handle on shutdown to avoid
+    /// waiting for the server to close its end of the stream.
     pub async fn converse(
         &mut self,
     ) -> Result<
         (
             mpsc::Sender<AgentRequest>,
             mpsc::Receiver<Result<AgentEvent, tonic::Status>>,
+            tokio::task::JoinHandle<()>,
         ),
         ConnectionError,
     > {
@@ -159,7 +164,7 @@ impl DaemonConnection {
         let (event_tx, event_rx) = mpsc::channel::<Result<AgentEvent, tonic::Status>>(128);
 
         // Spawn task to forward events from the stream
-        tokio::spawn(async move {
+        let stream_handle = tokio::spawn(async move {
             loop {
                 match event_stream.message().await {
                     Ok(Some(event)) => {
@@ -181,7 +186,7 @@ impl DaemonConnection {
             }
         });
 
-        Ok((request_tx, event_rx))
+        Ok((request_tx, event_rx, stream_handle))
     }
 
     /// List sessions.

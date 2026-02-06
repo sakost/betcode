@@ -116,9 +116,16 @@ impl SessionRelay {
     ) -> Result<(), RelayError> {
         let handle = self.get_active_handle(session_id).await?;
 
+        // Claude Code --input-format stream-json expects this JSONL format on stdin.
+        // See: https://github.com/anthropics/claude-code/issues/5034
         let msg = serde_json::json!({
-            "type": "user_message",
-            "content": content,
+            "type": "user",
+            "message": {
+                "role": "user",
+                "content": content,
+            },
+            "session_id": "default",
+            "parent_tool_use_id": null,
         });
         let line =
             serde_json::to_string(&msg).map_err(|e| RelayError::Serialization(e.to_string()))?;

@@ -1,0 +1,104 @@
+//! Input handling for TUI key events.
+
+use crossterm::event::KeyCode;
+use tokio::sync::mpsc;
+
+use crate::app::{App, AppMode};
+use betcode_proto::v1::{AgentRequest, PermissionDecision, PermissionResponse, UserMessage};
+
+use super::TermEvent;
+
+/// Process a terminal event, updating app state and optionally sending gRPC requests.
+pub async fn handle_term_event(
+    app: &mut App,
+    tx: &mpsc::Sender<AgentRequest>,
+    event: TermEvent,
+) {
+    match event {
+        TermEvent::Key(key) => {
+            if key.modifiers.contains(crossterm::event::KeyModifiers::CONTROL)
+                && key.code == KeyCode::Char('c')
+            {
+                app.should_quit = true;
+            } else if app.mode == AppMode::PermissionPrompt {
+                handle_permission_key(app, tx, key.code).await;
+            } else {
+                handle_input_key(app, tx, key.code).await;
+            }
+        }
+        TermEvent::Resize(_, _) => { /* terminal auto-handles resize on next draw */ }
+    }
+}
+
+/// Handle a key press during a permission prompt.
+async fn handle_permission_key(
+    app: &mut App,
+    tx: &mpsc::Sender<AgentRequest>,
+    code: KeyCode,
+) {
+    let decision = match code {
+        KeyCode::Char('y') | KeyCode::Char('Y') => Some(PermissionDecision::AllowOnce),
+        KeyCode::Char('n') | KeyCode::Char('N') => Some(PermissionDecision::Deny),
+        KeyCode::Char('a') | KeyCode::Char('A') => Some(PermissionDecision::AllowSession),
+        _ => None,
+    };
+
+    if let (Some(decision), Some(ref perm)) = (decision, &app.pending_permission) {
+        let _ = tx
+            .send(AgentRequest {
+                request: Some(betcode_proto::v1::agent_request::Request::Permission(
+                    PermissionResponse {
+                        request_id: perm.request_id.clone(),
+                        decision: decision.into(),
+                    },
+                )),
+            })
+            .await;
+        app.pending_permission = None;
+        app.mode = AppMode::Normal;
+    }
+}
+
+/// Handle a key press in normal input mode.
+async fn handle_input_key(
+    app: &mut App,
+    tx: &mpsc::Sender<AgentRequest>,
+    code: KeyCode,
+) {
+    match code {
+        KeyCode::Enter => {
+            if let Some(text) = app.submit_input() {
+                let _ = tx
+                    .send(AgentRequest {
+                        request: Some(betcode_proto::v1::agent_request::Request::Message(
+                            UserMessage {
+                                content: text,
+                                attachments: Vec::new(),
+                            },
+                        )),
+                    })
+                    .await;
+                app.agent_busy = true;
+            }
+        }
+        KeyCode::Char(c) => {
+            app.input.insert(app.cursor_pos, c);
+            app.cursor_pos += 1;
+        }
+        KeyCode::Backspace => {
+            if app.cursor_pos > 0 {
+                app.cursor_pos -= 1;
+                app.input.remove(app.cursor_pos);
+            }
+        }
+        KeyCode::Left => {
+            app.cursor_pos = app.cursor_pos.saturating_sub(1);
+        }
+        KeyCode::Right => {
+            app.cursor_pos = (app.cursor_pos + 1).min(app.input.len());
+        }
+        KeyCode::Up => app.history_up(),
+        KeyCode::Down => app.history_down(),
+        _ => {}
+    }
+}

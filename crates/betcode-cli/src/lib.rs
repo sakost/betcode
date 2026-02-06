@@ -11,5 +11,6 @@ pub mod gitlab_cmd;
 pub mod gitlab_fmt;
 pub mod headless;
 pub mod machine_cmd;
+pub mod tui;
 pub mod ui;
 pub mod worktree_cmd;

@@ -148,8 +148,16 @@ async fn converse_proxy_task(
 
     // Forward daemon events to client (in current task)
     let mid = machine_id.to_string();
+    info!(request_id = %request_id, machine_id = %mid, "Converse proxy waiting for daemon events");
+    let mut event_count = 0u64;
     while let Some(frame) = event_rx.recv().await {
-        match FrameType::try_from(frame.frame_type) {
+        let ft = frame.frame_type;
+        event_count += 1;
+        info!(
+            request_id = %request_id, frame_type = ft, event_count,
+            "Converse proxy received frame from daemon"
+        );
+        match FrameType::try_from(ft) {
             Ok(FrameType::StreamData) => {
                 if let Some(betcode_proto::v1::tunnel_frame::Payload::StreamData(p)) =
                     frame.payload
@@ -157,6 +165,7 @@ async fn converse_proxy_task(
                     match AgentEvent::decode(p.data.as_slice()) {
                         Ok(event) => {
                             if out_tx.send(Ok(event)).await.is_err() {
+                                warn!(request_id = %request_id, "Client receiver dropped");
                                 break;
                             }
                         }
@@ -174,10 +183,12 @@ async fn converse_proxy_task(
                 }
                 break;
             }
-            _ => {}
+            _ => {
+                info!(request_id = %request_id, frame_type = ft, "Ignoring non-StreamData frame");
+            }
         }
     }
-    info!(request_id = %request_id, "Converse proxy stream ended");
+    info!(request_id = %request_id, event_count, "Converse proxy stream ended");
     Ok(())
 }
 
