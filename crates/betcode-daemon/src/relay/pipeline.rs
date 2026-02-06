@@ -253,6 +253,7 @@ fn spawn_stdout_pipeline(
     tokio::spawn(async move {
         let mut bridge = EventBridge::new();
         let sid = session_id.clone();
+        let mut event_count = 0u64;
 
         while let Some(line) = stdout_rx.recv().await {
             let msg = match ndjson::parse_line(&line) {
@@ -266,6 +267,8 @@ fn spawn_stdout_pipeline(
             let events = bridge.convert(msg);
 
             for event in events {
+                event_count += 1;
+
                 // Update usage stats in DB when we get a UsageReport
                 if let Some(betcode_proto::v1::agent_event::Event::Usage(ref usage)) = event.event {
                     if let Err(e) = db
@@ -304,7 +307,27 @@ fn spawn_stdout_pipeline(
             }
         }
 
-        info!(session_id = %sid, "Stdout pipeline finished");
+        info!(session_id = %sid, event_count, "Stdout pipeline finished");
+
+        // If subprocess exited without producing any events, send an error to the client
+        // so it doesn't hang waiting forever. Common causes: missing CLI flags, bad config.
+        if event_count == 0 {
+            warn!(session_id = %sid, "Subprocess exited with zero events — sending error to client");
+            let error_event = AgentEvent {
+                sequence: 0,
+                timestamp: Some(prost_types::Timestamp::from(std::time::SystemTime::now())),
+                parent_tool_use_id: String::new(),
+                event: Some(betcode_proto::v1::agent_event::Event::Error(
+                    betcode_proto::v1::ErrorEvent {
+                        code: "subprocess_failed".to_string(),
+                        message: "Claude subprocess exited without producing output. Check daemon logs for stderr details.".to_string(),
+                        is_fatal: true,
+                        details: Default::default(),
+                    },
+                )),
+            };
+            let _ = event_forwarder.send(error_event).await;
+        }
 
         // Only update DB status if the session is still in the active map
         // (cancel_session removes it and updates status itself)

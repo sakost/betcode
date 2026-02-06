@@ -99,6 +99,7 @@ impl SubprocessManager {
             .arg("stream-json")
             .arg("--input-format")
             .arg("stream-json")
+            .arg("--verbose")
             .arg("--permission-prompt-tool")
             .arg("stdio")
             .arg("--include-partial-messages")
@@ -119,6 +120,13 @@ impl SubprocessManager {
         }
 
         // Spawn process
+        info!(
+            working_dir = %config.working_directory.display(),
+            has_prompt = config.prompt.is_some(),
+            resume_session = ?config.resume_session,
+            model = ?config.model,
+            "Spawning claude subprocess"
+        );
         let mut child = cmd.spawn().map_err(|e| SubprocessError::SpawnFailed {
             reason: e.to_string(),
         })?;
@@ -170,6 +178,20 @@ impl SubprocessManager {
             }
             info!(process_id = %pid, "stdout reader finished");
         });
+
+        // Set up stderr reader for diagnostics
+        let stderr = child.stderr.take();
+        if let Some(stderr) = stderr {
+            let pid_err = process_id.clone();
+            tokio::spawn(async move {
+                let reader = BufReader::new(stderr);
+                let mut lines = reader.lines();
+                while let Ok(Some(line)) = lines.next_line().await {
+                    warn!(process_id = %pid_err, "stderr: {}", line);
+                }
+                debug!(process_id = %pid_err, "stderr reader finished");
+            });
+        }
 
         // Store process state
         let handle = ProcessHandle {

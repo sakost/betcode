@@ -458,10 +458,12 @@ impl TunnelRequestHandler {
         };
 
         let sid = start_conv.session_id.clone();
+        // Only pass a model to the subprocess if the client explicitly requests one.
+        // When None, Claude Code uses its own default based on the user's API key.
         let model = if start_conv.model.is_empty() {
-            "claude-sonnet-4".to_string()
+            None
         } else {
-            start_conv.model.clone()
+            Some(start_conv.model.clone())
         };
         let working_dir: std::path::PathBuf = start_conv.working_directory.clone().into();
 
@@ -471,7 +473,7 @@ impl TunnelRequestHandler {
             Err(_) => {
                 if let Err(e) = self
                     .db
-                    .create_session(&sid, &model, &start_conv.working_directory)
+                    .create_session(&sid, model.as_deref().unwrap_or("default"), &start_conv.working_directory)
                     .await
                 {
                     let _ = self
@@ -515,7 +517,7 @@ impl TunnelRequestHandler {
         let config = crate::relay::RelaySessionConfig {
             session_id: sid.clone(),
             working_directory: working_dir,
-            model: Some(model),
+            model,
             resume_session,
             worktree_id: start_conv.worktree_id,
         };
