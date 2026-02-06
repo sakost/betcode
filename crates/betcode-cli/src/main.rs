@@ -127,8 +127,20 @@ async fn main() -> anyhow::Result<()> {
         _ => {}
     }
 
-    // Warn if --relay was given but relay mode prerequisites are missing
-    if cli_config.relay_url.is_some() && !cli_config.is_relay_mode() {
+    // For relay mode: refresh token first, then check prerequisites
+    if cli_config.relay_url.is_some() {
+        if cli_config.auth.is_some() {
+            // Try to refresh the access token silently
+            match auth_cmd::ensure_valid_token(&mut cli_config).await {
+                Ok(()) => {}
+                Err(e) => {
+                    eprintln!("Warning: token refresh failed: {}", e);
+                    // Don't bail — the existing token might still work,
+                    // or the relay will reject it with a clear error.
+                }
+            }
+        }
+
         if cli_config.auth.is_none() {
             anyhow::bail!(
                 "Relay URL set but not logged in. Run: betcode --relay {} auth login -u <user> -p <pass>",
@@ -140,13 +152,6 @@ async fn main() -> anyhow::Result<()> {
                 "Relay URL set but no active machine. Run: betcode --relay {} machine list",
                 cli_config.relay_url.as_ref().unwrap()
             );
-        }
-    }
-
-    // Refresh token before relay operations
-    if cli_config.is_relay_mode() {
-        if let Err(e) = auth_cmd::ensure_valid_token(&mut cli_config).await {
-            eprintln!("Warning: token refresh failed: {}", e);
         }
     }
 
