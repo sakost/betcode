@@ -4,7 +4,7 @@ use crossterm::event::KeyCode;
 use tokio::sync::mpsc;
 
 use crate::app::{App, AppMode};
-use betcode_proto::v1::{AgentRequest, PermissionDecision, PermissionResponse, UserMessage};
+use betcode_proto::v1::AgentRequest;
 
 use super::TermEvent;
 
@@ -20,42 +20,27 @@ pub async fn handle_term_event(
                 && key.code == KeyCode::Char('c')
             {
                 app.should_quit = true;
-            } else if app.mode == AppMode::PermissionPrompt {
-                handle_permission_key(app, tx, key.code).await;
             } else {
-                handle_input_key(app, tx, key).await;
+                match app.mode {
+                    AppMode::PermissionPrompt => {
+                        super::permission_input::handle_permission_key(app, tx, key.code).await;
+                    }
+                    AppMode::PermissionEditInput
+                    | AppMode::PermissionComment
+                    | AppMode::PermissionDenyMessage => {
+                        super::permission_input::handle_permission_edit_key(app, tx, key.code)
+                            .await;
+                    }
+                    AppMode::UserQuestion => {
+                        super::question_input::handle_question_key(app, tx, key.code).await;
+                    }
+                    AppMode::Normal | AppMode::SessionList => {
+                        handle_input_key(app, tx, key).await;
+                    }
+                }
             }
         }
         TermEvent::Resize(_, _) => { /* terminal auto-handles resize on next draw */ }
-    }
-}
-
-/// Handle a key press during a permission prompt.
-async fn handle_permission_key(
-    app: &mut App,
-    tx: &mpsc::Sender<AgentRequest>,
-    code: KeyCode,
-) {
-    let decision = match code {
-        KeyCode::Char('y') | KeyCode::Char('Y') => Some(PermissionDecision::AllowOnce),
-        KeyCode::Char('n') | KeyCode::Char('N') => Some(PermissionDecision::Deny),
-        KeyCode::Char('a') | KeyCode::Char('A') => Some(PermissionDecision::AllowSession),
-        _ => None,
-    };
-
-    if let (Some(decision), Some(ref perm)) = (decision, &app.pending_permission) {
-        let _ = tx
-            .send(AgentRequest {
-                request: Some(betcode_proto::v1::agent_request::Request::Permission(
-                    PermissionResponse {
-                        request_id: perm.request_id.clone(),
-                        decision: decision.into(),
-                    },
-                )),
-            })
-            .await;
-        app.pending_permission = None;
-        app.mode = AppMode::Normal;
     }
 }
 
@@ -75,7 +60,7 @@ async fn handle_input_key(
                 let _ = tx
                     .send(AgentRequest {
                         request: Some(betcode_proto::v1::agent_request::Request::Message(
-                            UserMessage {
+                            betcode_proto::v1::UserMessage {
                                 content: text,
                                 attachments: Vec::new(),
                             },

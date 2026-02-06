@@ -142,6 +142,8 @@ async fn process_headless_event(
                             PermissionResponse {
                                 request_id: perm.request_id,
                                 decision: PermissionDecision::AllowOnce.into(),
+                                updated_input: None,
+                                message: String::new(),
                             },
                         )),
                     })
@@ -158,6 +160,8 @@ async fn process_headless_event(
                             PermissionResponse {
                                 request_id: perm.request_id,
                                 decision: PermissionDecision::Deny.into(),
+                                updated_input: None,
+                                message: String::new(),
                             },
                         )),
                     })

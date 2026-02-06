@@ -4,6 +4,12 @@
 //! tokio runtime. Communication via `tokio::sync::mpsc` channels.
 
 mod input;
+mod permission_input;
+#[cfg(test)]
+mod permission_tests;
+mod question_input;
+#[cfg(test)]
+mod question_tests;
 
 use std::io;
 use std::time::Duration;
