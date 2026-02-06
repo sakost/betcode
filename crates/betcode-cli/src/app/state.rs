@@ -304,6 +304,9 @@ impl App {
                 let msg = format!("[Error: {} - {}]", err.code, err.message);
                 self.add_system_message(MessageRole::System, msg);
             }
+            Some(Event::UserInput(input)) => {
+                self.add_user_message(input.content);
+            }
             Some(Event::TurnComplete(_)) => {
                 // Finish any open streaming message
                 if let Some(msg) = self.messages.last_mut() {
@@ -805,5 +808,56 @@ mod tests {
 
         app.finish_history_load();
         assert!(!app.messages[0].streaming, "finish_history_load should close streaming");
+    }
+
+    #[test]
+    fn history_user_input_adds_user_message() {
+        use betcode_proto::v1::agent_event::Event;
+        let mut app = App::new();
+
+        app.load_history_event(make_event(Event::UserInput(betcode_proto::v1::UserInput {
+            content: "Hello Claude".to_string(),
+        })));
+        app.finish_history_load();
+
+        assert_eq!(app.messages.len(), 1);
+        assert_eq!(app.messages[0].role, MessageRole::User);
+        assert_eq!(app.messages[0].content, "Hello Claude");
+    }
+
+    #[test]
+    fn history_user_input_interleaved_with_assistant() {
+        use betcode_proto::v1::agent_event::Event;
+        let mut app = App::new();
+
+        // User prompt → assistant reply → user prompt → assistant reply
+        app.load_history_event(make_event(Event::UserInput(betcode_proto::v1::UserInput {
+            content: "What is 2+2?".to_string(),
+        })));
+        app.load_history_event(make_event(Event::TextDelta(betcode_proto::v1::TextDelta {
+            text: "4".to_string(),
+            is_complete: true,
+        })));
+        app.load_history_event(make_event(Event::TurnComplete(betcode_proto::v1::TurnComplete {
+            stop_reason: "end_turn".to_string(),
+        })));
+        app.load_history_event(make_event(Event::UserInput(betcode_proto::v1::UserInput {
+            content: "And 3+3?".to_string(),
+        })));
+        app.load_history_event(make_event(Event::TextDelta(betcode_proto::v1::TextDelta {
+            text: "6".to_string(),
+            is_complete: true,
+        })));
+        app.finish_history_load();
+
+        assert_eq!(app.messages.len(), 4);
+        assert_eq!(app.messages[0].role, MessageRole::User);
+        assert_eq!(app.messages[0].content, "What is 2+2?");
+        assert_eq!(app.messages[1].role, MessageRole::Assistant);
+        assert_eq!(app.messages[1].content, "4");
+        assert_eq!(app.messages[2].role, MessageRole::User);
+        assert_eq!(app.messages[2].content, "And 3+3?");
+        assert_eq!(app.messages[3].role, MessageRole::Assistant);
+        assert_eq!(app.messages[3].content, "6");
     }
 }

@@ -1,6 +1,8 @@
 //! Relay module types.
 
 use std::path::PathBuf;
+use std::sync::atomic::AtomicU64;
+use std::sync::Arc;
 
 /// Configuration for starting a relay session.
 #[derive(Debug, Clone)]
@@ -27,6 +29,8 @@ pub struct RelayHandle {
     pub session_id: String,
     /// Sender for stdin lines to the subprocess.
     pub stdin_tx: tokio::sync::mpsc::Sender<String>,
+    /// Shared sequence counter for interleaving user input and agent events.
+    pub sequence_counter: Arc<AtomicU64>,
 }
 
 /// Errors from relay operations.

@@ -212,6 +212,9 @@ fn print_history_event(event: &AgentEvent) {
         Some(Event::ToolCallResult(result)) if result.is_error => {
             eprintln!("[Tool Error: {}]", result.output);
         }
+        Some(Event::UserInput(input)) => {
+            eprintln!("You: {}", input.content);
+        }
         Some(Event::Error(err)) => {
             eprintln!("[Error: {} - {}]", err.code, err.message);
         }

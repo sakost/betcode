@@ -105,6 +105,7 @@ message AgentEvent {
     UsageReport usage = 19;
     PlanModeChange plan_mode = 20;
     TurnComplete turn_complete = 21;
+    UserInput user_input = 22;
   }
 }
 
@@ -197,6 +198,11 @@ message PlanModeChange {
 // TurnComplete indicates the agent finished a turn.
 message TurnComplete {
   string stop_reason = 1;
+}
+
+// UserInput records a user's prompt for session replay.
+message UserInput {
+  string content = 1;
 }
 
 // =============================================================================

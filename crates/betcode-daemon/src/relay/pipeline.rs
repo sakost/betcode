@@ -8,6 +8,7 @@
 //! ```
 
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
 use tokio::sync::{mpsc, RwLock};
@@ -82,10 +83,20 @@ impl SessionRelay {
             .spawn(spawn_config, stdout_tx)
             .await?;
 
+        // Shared sequence counter between stdout pipeline and user message storage.
+        // Initialized from DB max so resumed sessions don't collide.
+        let start_seq = self
+            .db
+            .max_message_sequence(&session_id)
+            .await
+            .unwrap_or(0) as u64;
+        let sequence_counter = Arc::new(AtomicU64::new(start_seq));
+
         let relay_handle = RelayHandle {
             process_id: process_handle.id.clone(),
             session_id: session_id.clone(),
             stdin_tx: process_handle.stdin_tx.clone(),
+            sequence_counter: Arc::clone(&sequence_counter),
         };
 
         // Spawn the NDJSON reader pipeline
@@ -96,6 +107,7 @@ impl SessionRelay {
             self.db.clone(),
             Arc::clone(&self.sessions),
             Arc::clone(&self.subprocess_manager),
+            sequence_counter,
         );
 
         // Store the relay handle
@@ -109,12 +121,32 @@ impl SessionRelay {
     }
 
     /// Send a user message to the subprocess via stdin.
+    ///
+    /// Also stores a `UserInput` event in the DB so the message appears on resume.
     pub async fn send_user_message(
         &self,
         session_id: &str,
         content: &str,
     ) -> Result<(), RelayError> {
         let handle = self.get_active_handle(session_id).await?;
+
+        // Atomically allocate a sequence number for the user input event.
+        let seq = handle.sequence_counter.fetch_add(1, Ordering::AcqRel) + 1;
+
+        // Store a UserInput event so it appears in session history on resume.
+        let event = AgentEvent {
+            sequence: seq,
+            timestamp: Some(prost_types::Timestamp::from(std::time::SystemTime::now())),
+            parent_tool_use_id: String::new(),
+            event: Some(betcode_proto::v1::agent_event::Event::UserInput(
+                betcode_proto::v1::UserInput {
+                    content: content.to_string(),
+                },
+            )),
+        };
+        if let Err(e) = store_event(&self.db, session_id, &event).await {
+            warn!(session_id, error = %e, "Failed to store user input event");
+        }
 
         // Claude Code --input-format stream-json expects this JSONL format on stdin.
         // See: https://github.com/anthropics/claude-code/issues/5034
@@ -138,7 +170,7 @@ impl SessionRelay {
                 session_id: session_id.to_string(),
             })?;
 
-        debug!(session_id, "Sent user message to subprocess");
+        debug!(session_id, seq, "Sent user message to subprocess");
         Ok(())
     }
 
@@ -249,14 +281,12 @@ fn spawn_stdout_pipeline(
     db: Database,
     sessions: Arc<RwLock<HashMap<String, RelayHandle>>>,
     subprocess_manager: Arc<SubprocessManager>,
+    sequence_counter: Arc<AtomicU64>,
 ) {
     tokio::spawn(async move {
         let sid = session_id.clone();
-        // Resume sequence from DB so new events don't collide with stored ones
-        let start_seq = db
-            .max_message_sequence(&sid)
-            .await
-            .unwrap_or(0) as u64;
+        // Read the shared counter (may have been advanced by send_user_message).
+        let start_seq = sequence_counter.load(Ordering::Acquire);
         let mut bridge = EventBridge::with_start_sequence(start_seq);
         let mut event_count = 0u64;
 
@@ -268,6 +298,14 @@ fn spawn_stdout_pipeline(
                     continue;
                 }
             };
+
+            // Check if send_user_message advanced the counter since our last batch.
+            let latest_seq = sequence_counter.load(Ordering::Acquire);
+            if latest_seq > bridge.sequence() {
+                // Re-initialize bridge to skip past user input sequences.
+                // Safe: user messages only arrive between turns when pending_tools is empty.
+                bridge = EventBridge::with_start_sequence(latest_seq);
+            }
 
             let events = bridge.convert(msg);
 
@@ -297,6 +335,9 @@ fn spawn_stdout_pipeline(
                     return;
                 }
             }
+
+            // Sync the shared counter so send_user_message sees the latest sequence.
+            sequence_counter.store(bridge.sequence(), Ordering::Release);
 
             // Update subprocess and DB with Claude's session ID from SystemInit
             if let Some(info) = bridge.session_info() {
@@ -364,6 +405,7 @@ fn event_message_type(event: &AgentEvent) -> &'static str {
         Some(Event::UserQuestion(_)) => "control_request",
         Some(Event::TodoUpdate(_)) => "stream_event",
         Some(Event::PlanMode(_)) => "stream_event",
+        Some(Event::UserInput(_)) => "user",
         None => "stream_event",
     }
 }
