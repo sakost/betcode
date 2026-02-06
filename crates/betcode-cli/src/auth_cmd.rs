@@ -248,6 +248,74 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn ensure_valid_token_preserves_auth_on_failure() {
+        // When refresh fails (relay unreachable), auth must NOT be cleared.
+        // This is the bug that caused "not logged in" after token expiry.
+        let mut config = CliConfig {
+            relay_url: Some("http://127.0.0.1:1".into()),
+            auth: Some(make_auth()),
+            active_machine: Some("m1".into()),
+            ..Default::default()
+        };
+        let original_token = config.auth.as_ref().unwrap().access_token.clone();
+
+        let err = ensure_valid_token(&mut config).await;
+        assert!(err.is_err(), "Should fail when relay is unreachable");
+
+        // Auth must still be present with original values
+        assert!(
+            config.auth.is_some(),
+            "Auth should NOT be cleared on refresh failure"
+        );
+        assert_eq!(
+            config.auth.as_ref().unwrap().access_token,
+            original_token,
+            "Access token should be unchanged on refresh failure"
+        );
+        assert!(
+            config.is_relay_mode(),
+            "is_relay_mode() should still return true after failed refresh"
+        );
+    }
+
+    #[tokio::test]
+    async fn ensure_valid_token_preserves_auth_fields() {
+        // Verify all auth fields survive a failed refresh attempt
+        let mut config = CliConfig {
+            relay_url: Some("http://127.0.0.1:1".into()),
+            auth: Some(AuthConfig {
+                user_id: "user-123".into(),
+                username: "testuser".into(),
+                access_token: "expired_at".into(),
+                refresh_token: "expired_rt".into(),
+            }),
+            ..Default::default()
+        };
+
+        let _ = ensure_valid_token(&mut config).await;
+
+        let auth = config.auth.as_ref().expect("Auth must survive failed refresh");
+        assert_eq!(auth.user_id, "user-123");
+        assert_eq!(auth.username, "testuser");
+        assert_eq!(auth.access_token, "expired_at");
+        assert_eq!(auth.refresh_token, "expired_rt");
+    }
+
+    #[test]
+    fn relay_mode_with_expired_token_still_has_auth() {
+        // Simulates the scenario: user was logged in, token expired,
+        // config still has auth → is_relay_mode should be true
+        let config = CliConfig {
+            relay_url: Some("http://relay.test:443".into()),
+            auth: Some(make_auth()),
+            active_machine: Some("m1".into()),
+            ..Default::default()
+        };
+        assert!(config.is_relay_mode());
+        assert!(config.auth.is_some());
+    }
+
     #[test]
     fn status_shows_credentials_and_relay() {
         let config = CliConfig {
