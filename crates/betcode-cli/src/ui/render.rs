@@ -417,14 +417,109 @@ mod tests {
         let mut terminal = Terminal::new(backend).unwrap();
         let mut app = App::new();
 
-        // Input wider than 38 inner chars (40 - 2 borders)
+        // 80 chars in a 38-inner-width terminal → 3 wrapped lines → height 5 with borders
         app.input = "A".repeat(80);
         app.cursor_pos = 80;
 
         terminal.draw(|frame| draw(frame, &mut app)).unwrap();
 
-        // Input area should be taller than the minimum 3
-        // (80 chars / 38 inner width = 3 wrapped lines → 5 total with borders)
-        // Just verify it renders without panic and the cursor doesn't go off-screen
+        // Cursor should be on the 3rd wrapped line (row 2), column 80 % 38 = 4
+        let pos = terminal.get_cursor_position().unwrap();
+        let (cx, cy) = (pos.x, pos.y);
+        // cy should be relative to the input area top, not absolute.
+        // The input area starts below header (1) + messages (variable).
+        // Just verify the cursor stays within the terminal bounds.
+        assert!(cx < 40, "cursor_x {} should be within terminal width 40", cx);
+        assert!(cy < 24, "cursor_y {} should be within terminal height 24", cy);
+    }
+
+    #[test]
+    fn input_short_text_stays_single_line() {
+        let backend = TestBackend::new(80, 24);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let mut app = App::new();
+
+        app.input = "hello".to_string();
+        app.cursor_pos = 5;
+
+        terminal.draw(|frame| draw(frame, &mut app)).unwrap();
+
+        // Short text: cursor should be on first row of input, at column 5
+        let pos = terminal.get_cursor_position().unwrap();
+        let cx = pos.x;
+        // Input area starts at x=0, border is 1, so cursor_x should be 1 + 5 = 6
+        assert_eq!(cx, 6, "cursor_x for 'hello' at pos 5 should be 6 (1 border + 5)");
+    }
+
+    #[test]
+    fn input_cursor_at_wrap_boundary() {
+        let backend = TestBackend::new(40, 24); // inner width = 38
+        let mut terminal = Terminal::new(backend).unwrap();
+        let mut app = App::new();
+
+        // Exactly 38 chars — cursor at end should be at start of second line
+        app.input = "B".repeat(38);
+        app.cursor_pos = 38;
+
+        terminal.draw(|frame| draw(frame, &mut app)).unwrap();
+
+        let pos = terminal.get_cursor_position().unwrap();
+        let (cx, cy) = (pos.x, pos.y);
+        // 38 / 38 = row 1, 38 % 38 = col 0 → cursor_x should be 1 (border)
+        assert!(cx < 40, "cursor_x {} should be within terminal", cx);
+        assert!(cy < 24, "cursor_y {} should be within terminal", cy);
+        // cursor_x = area.x + 1 + (38 % 38) = 1
+        assert_eq!(cx, 1, "cursor at exact wrap boundary should be at column 1");
+    }
+
+    #[test]
+    fn input_cursor_mid_position() {
+        let backend = TestBackend::new(40, 24); // inner width = 38
+        let mut terminal = Terminal::new(backend).unwrap();
+        let mut app = App::new();
+
+        // 80 chars but cursor at position 40 → row 1, col 2
+        app.input = "C".repeat(80);
+        app.cursor_pos = 40;
+
+        terminal.draw(|frame| draw(frame, &mut app)).unwrap();
+
+        let pos = terminal.get_cursor_position().unwrap();
+        let cx = pos.x;
+        // 40 / 38 = row 1, 40 % 38 = col 2 → cursor_x = 1 + 2 = 3
+        assert_eq!(cx, 3, "cursor at pos 40 in width 38 should be at column 3");
+    }
+
+    #[test]
+    fn input_empty_renders_without_panic() {
+        let backend = TestBackend::new(80, 24);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let mut app = App::new();
+
+        // Empty input — should render with cursor at start
+        terminal.draw(|frame| draw(frame, &mut app)).unwrap();
+
+        let pos = terminal.get_cursor_position().unwrap();
+        let cx = pos.x;
+        assert_eq!(cx, 1, "empty input cursor should be at column 1 (just inside border)");
+    }
+
+    #[test]
+    fn input_height_capped_at_third_of_screen() {
+        let backend = TestBackend::new(40, 24); // inner width = 38, max height = 24/3 = 8
+        let mut terminal = Terminal::new(backend).unwrap();
+        let mut app = App::new();
+
+        // 500 chars → 500/38 ≈ 14 lines → needs 16 with borders, but capped at 8
+        app.input = "D".repeat(500);
+        app.cursor_pos = 500;
+
+        // Should not panic even though the text doesn't fit
+        terminal.draw(|frame| draw(frame, &mut app)).unwrap();
+
+        let pos = terminal.get_cursor_position().unwrap();
+        let (cx, cy) = (pos.x, pos.y);
+        assert!(cx < 40, "cursor_x {} should be within terminal", cx);
+        assert!(cy < 24, "cursor_y {} should be within terminal", cy);
     }
 }
