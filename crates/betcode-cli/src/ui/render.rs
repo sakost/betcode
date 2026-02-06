@@ -5,6 +5,7 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph, Wrap};
 use ratatui::Frame;
+use unicode_width::UnicodeWidthStr;
 
 use crate::app::{App, AppMode, MessageRole};
 
@@ -109,7 +110,29 @@ fn draw_messages(frame: &mut Frame, app: &mut App, area: Rect) {
     }
 
     let inner_height = area.height.saturating_sub(2); // minus borders
-    let total = lines.len() as u16;
+    let inner_width = area.width.saturating_sub(2) as usize; // minus borders
+
+    // Count wrapped visual lines using unicode display width
+    let total: u16 = lines
+        .iter()
+        .map(|line| {
+            if inner_width == 0 {
+                return 1u16;
+            }
+            let display_width: usize = line
+                .spans
+                .iter()
+                .map(|s| UnicodeWidthStr::width(s.content.as_ref()))
+                .sum();
+            // Each line takes at least 1 row; long lines wrap to ceil(width/inner_width)
+            1u16.max(
+                display_width
+                    .saturating_add(inner_width - 1)
+                    .checked_div(inner_width)
+                    .unwrap_or(1) as u16,
+            )
+        })
+        .sum();
 
     // Update app state so scroll methods know the bounds
     app.viewport_height = inner_height;
@@ -126,9 +149,10 @@ fn draw_messages(frame: &mut Frame, app: &mut App, area: Rect) {
     };
 
     let title = if !app.scroll_pinned {
+        let position = max_scroll.saturating_sub(scroll);
         format!(
             "Conversation [scroll: {}/{}]",
-            max_scroll.saturating_sub(scroll) + 1,
+            position.min(max_scroll),
             max_scroll
         )
     } else {
@@ -277,5 +301,83 @@ mod tests {
         app.finish_streaming();
 
         terminal.draw(|frame| draw(frame, &mut app)).unwrap();
+    }
+
+    #[test]
+    fn scroll_pinned_to_bottom_by_default() {
+        let backend = TestBackend::new(80, 24);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let mut app = App::new();
+
+        // Add enough messages to exceed viewport
+        for i in 0..30 {
+            app.add_user_message(format!("Message {}", i));
+        }
+
+        terminal.draw(|frame| draw(frame, &mut app)).unwrap();
+
+        assert!(app.scroll_pinned);
+        assert!(app.total_lines >= 30);
+    }
+
+    #[test]
+    fn scroll_indicator_values_are_valid() {
+        let backend = TestBackend::new(80, 24);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let mut app = App::new();
+
+        for i in 0..30 {
+            app.add_user_message(format!("Message {}", i));
+        }
+
+        terminal.draw(|frame| draw(frame, &mut app)).unwrap();
+
+        // Now scroll up
+        app.scroll_up(5);
+        assert!(!app.scroll_pinned);
+
+        // The scroll_offset should never exceed max_scroll
+        let max_scroll = app.total_lines.saturating_sub(app.viewport_height);
+        assert!(
+            app.scroll_offset <= max_scroll,
+            "scroll_offset {} should be <= max_scroll {}",
+            app.scroll_offset,
+            max_scroll,
+        );
+    }
+
+    #[test]
+    fn wrapped_lines_counted_correctly() {
+        let backend = TestBackend::new(40, 24); // narrow terminal
+        let mut terminal = Terminal::new(backend).unwrap();
+        let mut app = App::new();
+
+        // Add a message that will definitely wrap at width 40 (inner ~38)
+        app.add_user_message("A".repeat(100));
+
+        terminal.draw(|frame| draw(frame, &mut app)).unwrap();
+
+        // "You: " (5 chars) + 100 "A"s = 105 chars, inner width ~38
+        // Should wrap to ceil(105/38) = 3 lines
+        assert!(
+            app.total_lines >= 3,
+            "Expected at least 3 wrapped lines, got {}",
+            app.total_lines,
+        );
+    }
+
+    #[test]
+    fn scroll_to_bottom_resets_state() {
+        let mut app = App::new();
+        app.total_lines = 50;
+        app.viewport_height = 20;
+
+        app.scroll_up(10);
+        assert!(!app.scroll_pinned);
+        assert_eq!(app.scroll_offset, 10);
+
+        app.scroll_to_bottom();
+        assert!(app.scroll_pinned);
+        assert_eq!(app.scroll_offset, 0);
     }
 }
