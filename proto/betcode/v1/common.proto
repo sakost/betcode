@@ -17,6 +17,12 @@ enum PermissionDecision {
   PERMISSION_DECISION_ALLOW_ONCE = 1;
   PERMISSION_DECISION_ALLOW_SESSION = 2;
   PERMISSION_DECISION_DENY = 3;
+  // Allow with modified tool input (Tab → edit input).
+  PERMISSION_DECISION_ALLOW_WITH_EDIT = 4;
+  // Deny without interrupting the current turn.
+  PERMISSION_DECISION_DENY_NO_INTERRUPT = 5;
+  // Deny and interrupt the current turn.
+  PERMISSION_DECISION_DENY_WITH_INTERRUPT = 6;
 }
 
 // =============================================================================

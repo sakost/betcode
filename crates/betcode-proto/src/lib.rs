@@ -19,3 +19,6 @@ pub mod v1 {
 
 // Re-export v1 as the default API version for convenience
 pub use v1::*;
+
+// Re-export prost_types for downstream crates that need Struct/Value conversion
+pub use prost_types;

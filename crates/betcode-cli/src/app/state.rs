@@ -8,7 +8,16 @@ use betcode_proto::v1::AgentEvent;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AppMode {
     Normal,
+    /// Permission dialog with action keys (Y/A/Tab/N/X).
     PermissionPrompt,
+    /// Editing tool input before allowing (Tab).
+    PermissionEditInput,
+    /// Writing a follow-up comment to send after allowing (E).
+    PermissionComment,
+    /// Writing a deny message (N=continue, X=interrupt).
+    PermissionDenyMessage,
+    /// Claude asked a question with selectable options.
+    UserQuestion,
     SessionList,
 }
 
@@ -34,6 +43,34 @@ pub enum MessageRole {
 pub struct PendingPermission {
     pub request_id: String,
     pub tool_name: String,
+    pub description: String,
+    /// Original tool input from the PermissionRequest (Struct serialized to JSON).
+    pub original_input: Option<serde_json::Value>,
+    /// Text buffer for editing (tool input JSON / comment / deny message).
+    pub edit_buffer: String,
+    /// Cursor position in edit_buffer.
+    pub edit_cursor: usize,
+    /// Whether deny should interrupt the current turn (N=false, X=true).
+    pub deny_interrupt: bool,
+}
+
+/// Pending question from Claude (AskUserQuestion tool).
+#[derive(Debug, Clone)]
+pub struct PendingUserQuestion {
+    pub question_id: String,
+    pub question: String,
+    pub options: Vec<QuestionOptionDisplay>,
+    pub multi_select: bool,
+    /// Currently highlighted option index (arrow navigation).
+    pub highlight: usize,
+    /// Selected option indices (for multi-select).
+    pub selected: Vec<usize>,
+}
+
+/// Display-friendly question option.
+#[derive(Debug, Clone)]
+pub struct QuestionOptionDisplay {
+    pub label: String,
     pub description: String,
 }
 
@@ -67,6 +104,7 @@ pub struct App {
     pub status: String,
     pub token_usage: Option<TokenUsage>,
     pub pending_permission: Option<PendingPermission>,
+    pub pending_question: Option<PendingUserQuestion>,
     pub agent_busy: bool,
 }
 
@@ -89,6 +127,7 @@ impl App {
             status: "Connecting...".to_string(),
             token_usage: None,
             pending_permission: None,
+            pending_question: None,
             agent_busy: false,
         }
     }
@@ -195,11 +234,30 @@ impl App {
                 self.add_system_message(MessageRole::Tool, msg);
             }
             Some(Event::PermissionRequest(perm)) => {
+                let original_input = perm.input.map(struct_to_json);
                 self.mode = AppMode::PermissionPrompt;
                 self.pending_permission = Some(PendingPermission {
                     request_id: perm.request_id,
                     tool_name: perm.tool_name,
                     description: perm.description,
+                    original_input,
+                    edit_buffer: String::new(),
+                    edit_cursor: 0,
+                    deny_interrupt: true,
+                });
+            }
+            Some(Event::UserQuestion(q)) => {
+                self.mode = AppMode::UserQuestion;
+                self.pending_question = Some(PendingUserQuestion {
+                    question_id: q.question_id,
+                    question: q.question,
+                    options: q.options.into_iter().map(|opt| QuestionOptionDisplay {
+                        label: opt.label,
+                        description: opt.description,
+                    }).collect(),
+                    multi_select: q.multi_select,
+                    highlight: 0,
+                    selected: Vec::new(),
                 });
             }
             Some(Event::SessionInfo(info)) => {
@@ -373,11 +431,121 @@ impl App {
             }
         }
     }
+
+    // -- Permission edit helpers --
+
+    /// Initialize edit buffer from original tool input JSON and switch mode.
+    pub fn start_permission_edit(&mut self) {
+        if let Some(ref mut perm) = self.pending_permission {
+            perm.edit_buffer = perm
+                .original_input
+                .as_ref()
+                .and_then(|v| serde_json::to_string_pretty(v).ok())
+                .unwrap_or_default();
+            perm.edit_cursor = perm.edit_buffer.len();
+        }
+        self.mode = AppMode::PermissionEditInput;
+    }
+
+    /// Clear edit buffer and switch to comment or deny-message mode.
+    pub fn start_permission_text(&mut self, mode: AppMode, interrupt: bool) {
+        if let Some(ref mut perm) = self.pending_permission {
+            perm.edit_buffer.clear();
+            perm.edit_cursor = 0;
+            perm.deny_interrupt = interrupt;
+        }
+        self.mode = mode;
+    }
+
+    // -- User question helpers --
+
+    /// Move question highlight up or down.
+    pub fn move_question_highlight(&mut self, delta: isize) {
+        if let Some(ref mut q) = self.pending_question {
+            if q.options.is_empty() {
+                return;
+            }
+            let max = q.options.len() - 1;
+            let current = q.highlight as isize;
+            q.highlight = (current + delta).clamp(0, max as isize) as usize;
+        }
+    }
+
+    /// Toggle selection of the highlighted option (for multi-select) or set it (single-select).
+    pub fn select_question_option(&mut self, index: usize) {
+        if let Some(ref mut q) = self.pending_question {
+            if index >= q.options.len() {
+                return;
+            }
+            q.highlight = index;
+            if q.multi_select {
+                if let Some(pos) = q.selected.iter().position(|&i| i == index) {
+                    q.selected.remove(pos);
+                } else {
+                    q.selected.push(index);
+                }
+            } else {
+                q.selected = vec![index];
+            }
+        }
+    }
 }
 
 impl Default for App {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+/// Convert a prost_types::Struct to serde_json::Value.
+fn struct_to_json(s: betcode_proto::prost_types::Struct) -> serde_json::Value {
+    use betcode_proto::prost_types::value::Kind;
+    fn value_to_json(v: betcode_proto::prost_types::Value) -> serde_json::Value {
+        match v.kind {
+            Some(Kind::NullValue(_)) => serde_json::Value::Null,
+            Some(Kind::NumberValue(n)) => serde_json::json!(n),
+            Some(Kind::StringValue(s)) => serde_json::Value::String(s),
+            Some(Kind::BoolValue(b)) => serde_json::Value::Bool(b),
+            Some(Kind::StructValue(s)) => struct_to_json(s),
+            Some(Kind::ListValue(l)) => {
+                serde_json::Value::Array(l.values.into_iter().map(value_to_json).collect())
+            }
+            None => serde_json::Value::Null,
+        }
+    }
+    let map: serde_json::Map<String, serde_json::Value> = s
+        .fields
+        .into_iter()
+        .map(|(k, v)| (k, value_to_json(v)))
+        .collect();
+    serde_json::Value::Object(map)
+}
+
+/// Convert a serde_json::Value back to prost_types::Struct.
+pub fn json_to_struct(v: &serde_json::Value) -> betcode_proto::prost_types::Struct {
+    use betcode_proto::prost_types::{value::Kind, ListValue, Struct, Value};
+    fn json_to_value(v: &serde_json::Value) -> Value {
+        Value {
+            kind: Some(match v {
+                serde_json::Value::Null => Kind::NullValue(0),
+                serde_json::Value::Bool(b) => Kind::BoolValue(*b),
+                serde_json::Value::Number(n) => Kind::NumberValue(n.as_f64().unwrap_or(0.0)),
+                serde_json::Value::String(s) => Kind::StringValue(s.clone()),
+                serde_json::Value::Array(arr) => Kind::ListValue(ListValue {
+                    values: arr.iter().map(json_to_value).collect(),
+                }),
+                serde_json::Value::Object(_) => Kind::StructValue(json_to_struct(v)),
+            }),
+        }
+    }
+    match v {
+        serde_json::Value::Object(map) => Struct {
+            fields: map
+                .iter()
+                .map(|(k, v)| (k.clone(), json_to_value(v)))
+                .collect(),
+        },
+        _ => Struct::default(),
     }
 }
 

@@ -69,6 +69,10 @@ message UserMessage {
 message PermissionResponse {
   string request_id = 1;
   PermissionDecision decision = 2;
+  // Modified tool input (for ALLOW_WITH_EDIT).
+  google.protobuf.Struct updated_input = 3;
+  // Deny message or follow-up comment.
+  string message = 4;
 }
 
 // UserQuestionResponse is the user's answer to a question.
