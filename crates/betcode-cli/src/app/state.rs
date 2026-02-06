@@ -127,16 +127,28 @@ impl App {
 
         match event.event {
             Some(Event::TextDelta(delta)) => {
-                if self.messages.last().is_none_or(|m| !m.streaming) {
-                    self.start_assistant_message();
+                // Skip empty text deltas to avoid blank "Claude:" lines
+                if delta.text.is_empty() && !delta.is_complete {
+                    return;
                 }
-                self.append_text(&delta.text);
+                if !delta.text.is_empty() {
+                    if self.messages.last().is_none_or(|m| !m.streaming) {
+                        self.start_assistant_message();
+                    }
+                    self.append_text(&delta.text);
+                }
                 if delta.is_complete {
                     self.finish_streaming();
                 }
             }
             Some(Event::ToolCallStart(tool)) => {
-                let msg = format!("[Tool: {} - {}]", tool.tool_name, tool.description);
+                // Finish any open streaming message before tool output
+                self.finish_streaming();
+                let msg = if tool.description.is_empty() {
+                    format!("[Tool: {}]", tool.tool_name)
+                } else {
+                    format!("[Tool: {} - {}]", tool.tool_name, tool.description)
+                };
                 self.add_system_message(MessageRole::Tool, msg);
             }
             Some(Event::ToolCallResult(result)) => {
@@ -163,7 +175,11 @@ impl App {
                 self.status = format!("Session: {} | Model: {}", info.session_id, info.model);
             }
             Some(Event::StatusChange(sc)) => {
-                self.status = sc.message;
+                // Only update status text if the message is non-empty,
+                // otherwise we'd blank the session/model info from SessionInfo.
+                if !sc.message.is_empty() {
+                    self.status = sc.message;
+                }
                 self.agent_busy = sc.status == 1;
             }
             Some(Event::Usage(usage)) => {
@@ -305,5 +321,142 @@ mod tests {
     fn empty_submit_returns_none() {
         let mut app = App::new();
         assert_eq!(app.submit_input(), None);
+    }
+
+    fn make_event(event: betcode_proto::v1::agent_event::Event) -> AgentEvent {
+        AgentEvent {
+            sequence: 1,
+            timestamp: None,
+            parent_tool_use_id: String::new(),
+            event: Some(event),
+        }
+    }
+
+    #[test]
+    fn empty_text_delta_does_not_create_message() {
+        use betcode_proto::v1::agent_event::Event;
+        let mut app = App::new();
+        app.handle_event(make_event(Event::TextDelta(betcode_proto::v1::TextDelta {
+            text: String::new(),
+            is_complete: false,
+        })));
+        assert!(app.messages.is_empty(), "Empty text delta should not create a message");
+    }
+
+    #[test]
+    fn text_delta_creates_and_appends() {
+        use betcode_proto::v1::agent_event::Event;
+        let mut app = App::new();
+        app.handle_event(make_event(Event::TextDelta(betcode_proto::v1::TextDelta {
+            text: "Hello ".to_string(),
+            is_complete: false,
+        })));
+        assert_eq!(app.messages.len(), 1);
+        assert_eq!(app.messages[0].content, "Hello ");
+        assert!(app.messages[0].streaming);
+
+        app.handle_event(make_event(Event::TextDelta(betcode_proto::v1::TextDelta {
+            text: "world".to_string(),
+            is_complete: false,
+        })));
+        assert_eq!(app.messages.len(), 1);
+        assert_eq!(app.messages[0].content, "Hello world");
+    }
+
+    #[test]
+    fn tool_call_start_finishes_streaming_and_adds_tool_msg() {
+        use betcode_proto::v1::agent_event::Event;
+        let mut app = App::new();
+
+        // Start streaming text
+        app.handle_event(make_event(Event::TextDelta(betcode_proto::v1::TextDelta {
+            text: "Let me check.".to_string(),
+            is_complete: false,
+        })));
+        assert!(app.messages[0].streaming);
+
+        // Tool call arrives — should finish streaming first
+        app.handle_event(make_event(Event::ToolCallStart(betcode_proto::v1::ToolCallStart {
+            tool_id: "t1".to_string(),
+            tool_name: "Bash".to_string(),
+            input: None,
+            description: "ls -la".to_string(),
+        })));
+        assert_eq!(app.messages.len(), 2);
+        assert!(!app.messages[0].streaming); // streaming finished
+        assert_eq!(app.messages[0].role, MessageRole::Assistant);
+        assert_eq!(app.messages[1].role, MessageRole::Tool);
+        assert!(app.messages[1].content.contains("Bash"));
+        assert!(app.messages[1].content.contains("ls -la"));
+    }
+
+    #[test]
+    fn tool_call_start_empty_description_no_dash() {
+        use betcode_proto::v1::agent_event::Event;
+        let mut app = App::new();
+        app.handle_event(make_event(Event::ToolCallStart(betcode_proto::v1::ToolCallStart {
+            tool_id: "t1".to_string(),
+            tool_name: "Read".to_string(),
+            input: None,
+            description: String::new(),
+        })));
+        assert_eq!(app.messages[0].content, "[Tool: Read]");
+    }
+
+    #[test]
+    fn status_change_empty_message_preserves_status() {
+        use betcode_proto::v1::agent_event::Event;
+        let mut app = App::new();
+        app.status = "Session: abc | Model: claude".to_string();
+
+        app.handle_event(make_event(Event::StatusChange(betcode_proto::v1::StatusChange {
+            status: 1, // Thinking
+            message: String::new(),
+        })));
+        assert_eq!(app.status, "Session: abc | Model: claude");
+        assert!(app.agent_busy);
+    }
+
+    #[test]
+    fn status_change_with_message_updates_status() {
+        use betcode_proto::v1::agent_event::Event;
+        let mut app = App::new();
+        app.status = "old status".to_string();
+
+        app.handle_event(make_event(Event::StatusChange(betcode_proto::v1::StatusChange {
+            status: 0,
+            message: "new status".to_string(),
+        })));
+        assert_eq!(app.status, "new status");
+        assert!(!app.agent_busy);
+    }
+
+    #[test]
+    fn text_after_tool_creates_new_assistant_message() {
+        use betcode_proto::v1::agent_event::Event;
+        let mut app = App::new();
+
+        // Text → tool → text should create separate assistant messages
+        app.handle_event(make_event(Event::TextDelta(betcode_proto::v1::TextDelta {
+            text: "First".to_string(),
+            is_complete: false,
+        })));
+        app.handle_event(make_event(Event::ToolCallStart(betcode_proto::v1::ToolCallStart {
+            tool_id: "t1".to_string(),
+            tool_name: "Bash".to_string(),
+            input: None,
+            description: "ls".to_string(),
+        })));
+        app.handle_event(make_event(Event::TextDelta(betcode_proto::v1::TextDelta {
+            text: "Second".to_string(),
+            is_complete: false,
+        })));
+
+        assert_eq!(app.messages.len(), 3);
+        assert_eq!(app.messages[0].content, "First");
+        assert_eq!(app.messages[0].role, MessageRole::Assistant);
+        assert_eq!(app.messages[1].role, MessageRole::Tool);
+        assert_eq!(app.messages[2].content, "Second");
+        assert_eq!(app.messages[2].role, MessageRole::Assistant);
     }
 }

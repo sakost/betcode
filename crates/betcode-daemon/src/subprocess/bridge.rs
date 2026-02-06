@@ -5,7 +5,7 @@
 use betcode_core::ndjson::{
     AssistantMessage, ContentBlock, ControlRequest as NdjsonControlRequest,
     ControlRequestType as NdjsonControlRequestType, Delta, Message, SessionResult, StopReason,
-    StreamEvent, StreamEventType, SystemInit,
+    StreamEvent, StreamEventType, SystemInit, UserMessage,
 };
 use betcode_proto::v1::{
     self as proto, AgentEvent, AgentStatus, PermissionRequest, SessionInfo, StatusChange,
@@ -52,7 +52,7 @@ impl EventBridge {
             Message::StreamEvent(stream) => self.handle_stream_event(stream),
             Message::ControlRequest(req) => self.handle_control_request(req),
             Message::Result(result) => self.handle_result(result),
-            Message::User(_) => vec![], // User messages are echoes, no event needed
+            Message::User(user) => self.handle_user(user),
             Message::Unknown { msg_type, .. } => {
                 warn!(msg_type, "Unknown NDJSON message type");
                 vec![]
@@ -103,7 +103,7 @@ impl EventBridge {
                     tool_id: id.clone(),
                     tool_name: name.clone(),
                     input: Some(json_to_struct(input)),
-                    description: String::new(),
+                    description: tool_description(name, input),
                 }));
                 events.push(event);
             }
@@ -124,7 +124,7 @@ impl EventBridge {
     fn handle_stream_event(&mut self, stream: StreamEvent) -> Vec<AgentEvent> {
         match stream.event_type {
             StreamEventType::ContentBlockDelta { delta, .. } => match delta {
-                Delta::Text(text) => {
+                Delta::Text(text) if !text.is_empty() => {
                     let mut event = self.next_event();
                     event.event = Some(proto::agent_event::Event::TextDelta(TextDelta {
                         text,
@@ -132,6 +132,7 @@ impl EventBridge {
                     }));
                     vec![event]
                 }
+                Delta::Text(_) => vec![], // Skip empty text deltas
                 Delta::InputJson(_) => vec![], // Buffered internally
                 Delta::Unknown(_) => vec![],
             },
@@ -164,12 +165,13 @@ impl EventBridge {
     fn handle_control_request(&mut self, req: NdjsonControlRequest) -> Vec<AgentEvent> {
         match req.request {
             NdjsonControlRequestType::CanUseTool { tool_name, input } => {
+                let desc = tool_description(&tool_name, &input);
                 let mut event = self.next_event();
                 event.event = Some(proto::agent_event::Event::PermissionRequest(
                     PermissionRequest {
                         request_id: req.request_id,
                         tool_name,
-                        description: String::new(),
+                        description: desc,
                         input: Some(json_to_struct(&input)),
                     },
                 ));
@@ -180,6 +182,24 @@ impl EventBridge {
                 vec![]
             }
         }
+    }
+
+    fn handle_user(&mut self, user: UserMessage) -> Vec<AgentEvent> {
+        user.content
+            .into_iter()
+            .map(|tr| {
+                let mut event = self.next_event();
+                event.event = Some(proto::agent_event::Event::ToolCallResult(
+                    proto::ToolCallResult {
+                        tool_id: tr.tool_use_id,
+                        output: tr.content,
+                        is_error: tr.is_error,
+                        duration_ms: 0,
+                    },
+                ));
+                event
+            })
+            .collect()
     }
 
     fn handle_result(&mut self, result: SessionResult) -> Vec<AgentEvent> {
@@ -227,6 +247,68 @@ fn now_timestamp() -> Timestamp {
     Timestamp {
         seconds: now.as_secs() as i64,
         nanos: now.subsec_nanos() as i32,
+    }
+}
+
+/// Generate a human-readable description from tool name and input.
+fn tool_description(name: &str, input: &serde_json::Value) -> String {
+    let obj = match input.as_object() {
+        Some(o) => o,
+        None => return String::new(),
+    };
+
+    match name {
+        "Bash" => obj
+            .get("command")
+            .and_then(|v| v.as_str())
+            .map(|c| truncate_str(c, 120))
+            .unwrap_or_default(),
+        "Read" | "Write" => obj
+            .get("file_path")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string(),
+        "Edit" => obj
+            .get("file_path")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string(),
+        "Grep" => {
+            let pattern = obj.get("pattern").and_then(|v| v.as_str()).unwrap_or("");
+            let path = obj.get("path").and_then(|v| v.as_str()).unwrap_or(".");
+            format!("{} in {}", truncate_str(pattern, 60), path)
+        }
+        "Glob" => obj
+            .get("pattern")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string(),
+        "WebFetch" | "WebSearch" => obj
+            .get("url")
+            .or_else(|| obj.get("query"))
+            .and_then(|v| v.as_str())
+            .map(|s| truncate_str(s, 120))
+            .unwrap_or_default(),
+        "ToolSearch" => obj
+            .get("query")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string(),
+        _ => {
+            // For unknown tools, show first string value as summary
+            obj.values()
+                .find_map(|v| v.as_str())
+                .map(|s| truncate_str(s, 80))
+                .unwrap_or_default()
+        }
+    }
+}
+
+fn truncate_str(s: &str, max: usize) -> String {
+    if s.len() <= max {
+        s.to_string()
+    } else {
+        format!("{}...", &s[..max])
     }
 }
 
@@ -307,5 +389,225 @@ mod tests {
 
         let events = bridge.convert(Message::StreamEvent(stream));
         assert_eq!(events.len(), 1);
+        match &events[0].event {
+            Some(proto::agent_event::Event::TextDelta(td)) => {
+                assert_eq!(td.text, "Hello");
+                assert!(!td.is_complete);
+            }
+            other => panic!("Expected TextDelta, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn empty_text_delta_is_suppressed() {
+        let mut bridge = EventBridge::new();
+        let stream = StreamEvent {
+            event_type: StreamEventType::ContentBlockDelta {
+                index: 0,
+                delta: Delta::Text(String::new()),
+            },
+        };
+        let events = bridge.convert(Message::StreamEvent(stream));
+        assert!(events.is_empty(), "Empty text deltas should produce no events");
+    }
+
+    #[test]
+    fn content_block_stop_produces_no_event() {
+        let mut bridge = EventBridge::new();
+        let stream = StreamEvent {
+            event_type: StreamEventType::ContentBlockStop { index: 0 },
+        };
+        let events = bridge.convert(Message::StreamEvent(stream));
+        assert!(events.is_empty(), "ContentBlockStop should produce no events");
+    }
+
+    #[test]
+    fn assistant_with_tool_use_produces_tool_call_start() {
+        let mut bridge = EventBridge::new();
+        let msg = AssistantMessage {
+            content: vec![
+                ContentBlock::Text { text: "Let me run that.".to_string() },
+                ContentBlock::ToolUse {
+                    id: "tool_1".to_string(),
+                    name: "Bash".to_string(),
+                    input: serde_json::json!({"command": "ls -la"}),
+                },
+            ],
+            stop_reason: StopReason::ToolUse,
+            usage: Default::default(),
+        };
+        let events = bridge.convert(Message::Assistant(msg));
+        assert_eq!(events.len(), 1);
+        match &events[0].event {
+            Some(proto::agent_event::Event::ToolCallStart(tc)) => {
+                assert_eq!(tc.tool_name, "Bash");
+                assert_eq!(tc.tool_id, "tool_1");
+                assert_eq!(tc.description, "ls -la");
+            }
+            other => panic!("Expected ToolCallStart, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn assistant_end_turn_produces_turn_complete() {
+        let mut bridge = EventBridge::new();
+        let msg = AssistantMessage {
+            content: vec![ContentBlock::Text { text: "Done!".to_string() }],
+            stop_reason: StopReason::EndTurn,
+            usage: Default::default(),
+        };
+        let events = bridge.convert(Message::Assistant(msg));
+        assert_eq!(events.len(), 1);
+        assert!(matches!(&events[0].event, Some(proto::agent_event::Event::TurnComplete(_))));
+    }
+
+    #[test]
+    fn assistant_tool_use_no_turn_complete() {
+        let mut bridge = EventBridge::new();
+        let msg = AssistantMessage {
+            content: vec![ContentBlock::ToolUse {
+                id: "t1".to_string(),
+                name: "Read".to_string(),
+                input: serde_json::json!({"file_path": "/tmp/foo.rs"}),
+            }],
+            stop_reason: StopReason::ToolUse,
+            usage: Default::default(),
+        };
+        let events = bridge.convert(Message::Assistant(msg));
+        assert_eq!(events.len(), 1);
+        assert!(matches!(&events[0].event, Some(proto::agent_event::Event::ToolCallStart(_))));
+    }
+
+    #[test]
+    fn user_message_produces_tool_call_results() {
+        use betcode_core::ndjson::ToolResult;
+        let mut bridge = EventBridge::new();
+        let msg = UserMessage {
+            content: vec![
+                ToolResult {
+                    tool_use_id: "tool_1".to_string(),
+                    content: "file1.rs\nfile2.rs".to_string(),
+                    is_error: false,
+                },
+                ToolResult {
+                    tool_use_id: "tool_2".to_string(),
+                    content: "permission denied".to_string(),
+                    is_error: true,
+                },
+            ],
+        };
+        let events = bridge.convert(Message::User(msg));
+        assert_eq!(events.len(), 2);
+        match &events[0].event {
+            Some(proto::agent_event::Event::ToolCallResult(r)) => {
+                assert_eq!(r.tool_id, "tool_1");
+                assert!(!r.is_error);
+            }
+            other => panic!("Expected ToolCallResult, got {:?}", other),
+        }
+        match &events[1].event {
+            Some(proto::agent_event::Event::ToolCallResult(r)) => {
+                assert_eq!(r.tool_id, "tool_2");
+                assert!(r.is_error);
+            }
+            other => panic!("Expected ToolCallResult, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn tool_description_bash() {
+        let desc = tool_description("Bash", &serde_json::json!({"command": "cargo test"}));
+        assert_eq!(desc, "cargo test");
+    }
+
+    #[test]
+    fn tool_description_read() {
+        let desc = tool_description("Read", &serde_json::json!({"file_path": "/tmp/foo.rs"}));
+        assert_eq!(desc, "/tmp/foo.rs");
+    }
+
+    #[test]
+    fn tool_description_grep() {
+        let desc = tool_description("Grep", &serde_json::json!({"pattern": "fn main", "path": "src/"}));
+        assert_eq!(desc, "fn main in src/");
+    }
+
+    #[test]
+    fn tool_description_unknown_tool_uses_first_string() {
+        let desc = tool_description("SomeNewTool", &serde_json::json!({"query": "search term", "count": 5}));
+        assert_eq!(desc, "search term");
+    }
+
+    #[test]
+    fn tool_description_null_input() {
+        let desc = tool_description("Bash", &serde_json::Value::Null);
+        assert!(desc.is_empty());
+    }
+
+    #[test]
+    fn tool_description_truncates_long_command() {
+        let long_cmd = "x".repeat(200);
+        let desc = tool_description("Bash", &serde_json::json!({"command": long_cmd}));
+        assert!(desc.len() <= 124);
+        assert!(desc.ends_with("..."));
+    }
+
+    #[test]
+    fn permission_request_includes_description() {
+        let mut bridge = EventBridge::new();
+        let req = NdjsonControlRequest {
+            request_id: "req_1".to_string(),
+            request: NdjsonControlRequestType::CanUseTool {
+                tool_name: "Bash".to_string(),
+                input: serde_json::json!({"command": "rm -rf /tmp/test"}),
+            },
+        };
+        let events = bridge.convert(Message::ControlRequest(req));
+        assert_eq!(events.len(), 1);
+        match &events[0].event {
+            Some(proto::agent_event::Event::PermissionRequest(p)) => {
+                assert_eq!(p.tool_name, "Bash");
+                assert_eq!(p.description, "rm -rf /tmp/test");
+                assert_eq!(p.request_id, "req_1");
+            }
+            other => panic!("Expected PermissionRequest, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn input_json_delta_produces_no_event() {
+        let mut bridge = EventBridge::new();
+        let stream = StreamEvent {
+            event_type: StreamEventType::ContentBlockDelta {
+                index: 1,
+                delta: Delta::InputJson("{\"command\":".to_string()),
+            },
+        };
+        let events = bridge.convert(Message::StreamEvent(stream));
+        assert!(events.is_empty());
+    }
+
+    #[test]
+    fn sequence_increments_only_for_emitted_events() {
+        let mut bridge = EventBridge::new();
+
+        bridge.convert(Message::StreamEvent(StreamEvent {
+            event_type: StreamEventType::MessageStart,
+        }));
+        assert_eq!(bridge.sequence(), 1);
+
+        bridge.convert(Message::StreamEvent(StreamEvent {
+            event_type: StreamEventType::ContentBlockDelta {
+                index: 0,
+                delta: Delta::Text("hi".to_string()),
+            },
+        }));
+        assert_eq!(bridge.sequence(), 2);
+
+        // Events that produce nothing shouldn't increment
+        bridge.convert(Message::StreamEvent(StreamEvent {
+            event_type: StreamEventType::ContentBlockStop { index: 0 },
+        }));
+        assert_eq!(bridge.sequence(), 2);
     }
 }
