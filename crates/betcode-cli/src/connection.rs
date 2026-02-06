@@ -17,7 +17,7 @@ use betcode_proto::v1::{
     GetWorktreeRequest, ListIssuesRequest, ListIssuesResponse, ListMergeRequestsRequest,
     ListMergeRequestsResponse, ListPipelinesRequest, ListPipelinesResponse, ListSessionsRequest,
     ListSessionsResponse, ListWorktreesRequest, ListWorktreesResponse, RemoveWorktreeRequest,
-    RemoveWorktreeResponse, WorktreeDetail,
+    RemoveWorktreeResponse, ResumeSessionRequest, WorktreeDetail,
 };
 
 /// Connection configuration.
@@ -211,6 +211,42 @@ impl DaemonConnection {
             .map_err(|e| ConnectionError::RpcFailed(e.to_string()))?;
 
         Ok(response.into_inner())
+    }
+
+    /// Resume a session and replay historical events from a given sequence number.
+    ///
+    /// Returns all stored events for the session (from `from_sequence` onward).
+    /// Used to populate the UI with conversation history before starting a new turn.
+    pub async fn resume_session(
+        &mut self,
+        session_id: &str,
+        from_sequence: u64,
+    ) -> Result<Vec<AgentEvent>, ConnectionError> {
+        let auth_token = self.config.auth_token.clone();
+        let machine_id = self.config.machine_id.clone();
+        let client = self.client.as_mut().ok_or(ConnectionError::NotConnected)?;
+
+        let mut request = tonic::Request::new(ResumeSessionRequest {
+            session_id: session_id.to_string(),
+            from_sequence,
+        });
+        apply_relay_meta(&mut request, &auth_token, &machine_id);
+
+        let response = client
+            .resume_session(request)
+            .await
+            .map_err(|e| ConnectionError::RpcFailed(e.to_string()))?;
+
+        let mut stream = response.into_inner();
+        let mut events = Vec::new();
+        while let Some(event) = stream
+            .message()
+            .await
+            .map_err(|e| ConnectionError::RpcFailed(e.to_string()))?
+        {
+            events.push(event);
+        }
+        Ok(events)
     }
 
     /// Cancel the current turn in a session.

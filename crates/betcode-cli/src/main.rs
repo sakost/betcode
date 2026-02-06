@@ -49,6 +49,10 @@ struct Cli {
     #[arg(long)]
     machine: Option<String>,
 
+    /// Continue the most recent session in the current working directory
+    #[arg(short = 'c', long = "continue")]
+    continue_session: bool,
+
     /// Auto-accept all permission prompts (headless only)
     #[arg(long)]
     yes: bool,
@@ -173,6 +177,27 @@ async fn main() -> anyhow::Result<()> {
     let mut conn = DaemonConnection::new(conn_config);
     conn.connect().await?;
 
+    // Resolve --continue to a session ID
+    let mut session_id = cli.session;
+    if cli.continue_session && session_id.is_none() {
+        let working_dir = cli.working_dir.clone().unwrap_or_else(|| {
+            std::env::current_dir()
+                .unwrap()
+                .to_string_lossy()
+                .to_string()
+        });
+        let resp = conn.list_sessions(Some(&working_dir)).await?;
+        if let Some(latest) = resp.sessions.first() {
+            info!(session_id = %latest.id, "Continuing most recent session");
+            session_id = Some(latest.id.clone());
+        } else {
+            anyhow::bail!(
+                "No sessions found in {}. Start a new session first.",
+                working_dir
+            );
+        }
+    }
+
     // Dispatch remaining subcommands or chat mode
     if let Some(Commands::Worktree { action }) = cli.command {
         worktree_cmd::run(&mut conn, action).await?;
@@ -189,7 +214,7 @@ async fn main() -> anyhow::Result<()> {
 
         let config = HeadlessConfig {
             prompt,
-            session_id: cli.session,
+            session_id,
             working_directory: working_dir,
             model: cli.model,
             auto_accept: cli.yes,
@@ -198,7 +223,7 @@ async fn main() -> anyhow::Result<()> {
         headless::run(&mut conn, config).await?;
     } else {
         // Interactive TUI mode
-        betcode_cli::tui::run(&mut conn, &cli.session, &cli.working_dir, &cli.model).await?;
+        betcode_cli::tui::run(&mut conn, &session_id, &cli.working_dir, &cli.model).await?;
     }
 
     Ok(())

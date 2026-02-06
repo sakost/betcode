@@ -110,8 +110,30 @@ pub async fn run(
         }
     });
 
-    // 5. Main select! loop
+    // 5. Load conversation history if resuming an existing session
     let mut app = App::new();
+    if session_id.is_some() {
+        app.status = "Loading history...".to_string();
+        // Draw once to show the loading status
+        terminal.draw(|f| ui::draw(f, &mut app))?;
+
+        match conn.resume_session(&sid, 0).await {
+            Ok(events) => {
+                let count = events.len();
+                for event in events {
+                    app.load_history_event(event);
+                }
+                app.finish_history_load();
+                if count > 0 {
+                    app.scroll_to_bottom();
+                }
+            }
+            Err(e) => {
+                // Non-fatal: session may be new or history unavailable
+                tracing::warn!(?e, "Could not load session history");
+            }
+        }
+    }
     app.status = format!("Connected | Session: {}", &sid[..8.min(sid.len())]);
     let mut tick = tokio::time::interval(Duration::from_millis(50));
 

@@ -30,13 +30,29 @@ pub struct HeadlessConfig {
 
 /// Run headless mode.
 pub async fn run(conn: &mut DaemonConnection, config: HeadlessConfig) -> Result<(), HeadlessError> {
-    let (request_tx, mut event_rx, stream_handle) =
-        conn.converse().await.map_err(HeadlessError::Connection)?;
-
     // Generate session ID if not provided
     let session_id = config
         .session_id
         .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+
+    // Load and display history if continuing an existing session
+    match conn.resume_session(&session_id, 0).await {
+        Ok(events) if !events.is_empty() => {
+            eprintln!("[Resuming session {} ({} events)]", &session_id[..8.min(session_id.len())], events.len());
+            for event in &events {
+                print_history_event(event);
+            }
+            eprintln!("[--- End of history ---]");
+        }
+        Ok(_) => {} // No history, new session
+        Err(e) => {
+            // Non-fatal: session may be new
+            eprintln!("[Warning: could not load history: {}]", e);
+        }
+    }
+
+    let (request_tx, mut event_rx, stream_handle) =
+        conn.converse().await.map_err(HeadlessError::Connection)?;
 
     // Send start conversation
     request_tx
@@ -175,6 +191,32 @@ async fn process_headless_event(
     }
 
     Ok(false)
+}
+
+/// Print a historical event to stderr for headless context display.
+fn print_history_event(event: &AgentEvent) {
+    match &event.event {
+        Some(Event::TextDelta(delta)) if !delta.text.is_empty() => {
+            eprint!("{}", delta.text);
+            if delta.is_complete {
+                eprintln!();
+            }
+        }
+        Some(Event::ToolCallStart(tool)) => {
+            if tool.description.is_empty() {
+                eprintln!("[Tool: {}]", tool.tool_name);
+            } else {
+                eprintln!("[Tool: {} - {}]", tool.tool_name, tool.description);
+            }
+        }
+        Some(Event::ToolCallResult(result)) if result.is_error => {
+            eprintln!("[Tool Error: {}]", result.output);
+        }
+        Some(Event::Error(err)) => {
+            eprintln!("[Error: {} - {}]", err.code, err.message);
+        }
+        _ => {}
+    }
 }
 
 /// Headless mode errors.
