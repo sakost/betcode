@@ -23,10 +23,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .map(|p| format!("{}/{}", proto_root, p))
         .collect();
 
-    tonic_build::configure()
+    tonic_prost_build::configure()
         .build_server(true)
         .build_client(true)
-        .compile_protos(&proto_paths, &[proto_root])?;
+        .compile_protos(&proto_paths, &[proto_root.to_string()])?;
 
     Ok(())
 }
