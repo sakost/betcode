@@ -251,8 +251,13 @@ fn spawn_stdout_pipeline(
     subprocess_manager: Arc<SubprocessManager>,
 ) {
     tokio::spawn(async move {
-        let mut bridge = EventBridge::new();
         let sid = session_id.clone();
+        // Resume sequence from DB so new events don't collide with stored ones
+        let start_seq = db
+            .max_message_sequence(&sid)
+            .await
+            .unwrap_or(0) as u64;
+        let mut bridge = EventBridge::with_start_sequence(start_seq);
         let mut event_count = 0u64;
 
         while let Some(line) = stdout_rx.recv().await {

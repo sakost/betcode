@@ -33,10 +33,18 @@ impl Default for EventBridge {
 }
 
 impl EventBridge {
-    /// Create a new event bridge.
+    /// Create a new event bridge starting at sequence 0.
     pub fn new() -> Self {
+        Self::with_start_sequence(0)
+    }
+
+    /// Create a new event bridge continuing from a given sequence number.
+    ///
+    /// Used when resuming a session so new events don't collide with
+    /// already-stored events in the database.
+    pub fn with_start_sequence(start_sequence: u64) -> Self {
         Self {
-            sequence: 0,
+            sequence: start_sequence,
             pending_tools: HashMap::new(),
             session_info: None,
         }
@@ -356,6 +364,20 @@ mod tests {
     fn bridge_starts_at_sequence_zero() {
         let bridge = EventBridge::new();
         assert_eq!(bridge.sequence(), 0);
+    }
+
+    #[test]
+    fn bridge_with_start_sequence_continues_from_offset() {
+        let mut bridge = EventBridge::with_start_sequence(42);
+        assert_eq!(bridge.sequence(), 42);
+
+        // First event should be sequence 43
+        let events = bridge.convert(Message::StreamEvent(StreamEvent {
+            event_type: StreamEventType::MessageStart,
+        }));
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].sequence, 43);
+        assert_eq!(bridge.sequence(), 43);
     }
 
     #[test]
