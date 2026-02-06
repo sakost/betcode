@@ -11,19 +11,21 @@ use crate::app::{App, AppMode, MessageRole};
 
 /// Draw the full UI.
 pub fn draw(frame: &mut Frame, app: &mut App) {
-    // Compute input height: wrap the input text to the available inner width.
+    // Compute input height using the same wrapping logic as cursor positioning.
     let frame_width = frame.area().width;
     let inner_input_width = frame_width.saturating_sub(2) as usize; // minus borders
     let input_lines = if inner_input_width == 0 || app.input.is_empty() {
         1
     } else {
-        let display_width = UnicodeWidthStr::width(app.input.as_str());
-        1u16.max(
-            display_width
-                .saturating_add(inner_input_width - 1)
-                .checked_div(inner_input_width)
-                .unwrap_or(1) as u16,
-        )
+        let (last_row, last_col) =
+            compute_wrapped_cursor(&app.input, app.input.len(), inner_input_width);
+        // If cursor is at col 0 on a new row and text is non-empty,
+        // that row is empty — the text ends on the previous row.
+        if last_col == 0 && last_row > 0 {
+            last_row
+        } else {
+            last_row + 1
+        }
     };
     // +2 for borders, cap at half the screen so messages stay visible
     let max_input_height = frame.area().height / 3;
@@ -200,19 +202,11 @@ fn draw_input(frame: &mut Frame, app: &App, area: Rect) {
 
     frame.render_widget(input, area);
 
-    // Position cursor accounting for text wrapping.
-    let inner_width = area.width.saturating_sub(2) as usize; // minus borders
-    let cursor_display_width =
-        UnicodeWidthStr::width(&app.input[..app.cursor_pos.min(app.input.len())]);
-
-    let (cursor_row, cursor_col) = if inner_width == 0 {
-        (0u16, 0u16)
-    } else {
-        (
-            (cursor_display_width / inner_width) as u16,
-            (cursor_display_width % inner_width) as u16,
-        )
-    };
+    // Position cursor by walking character-by-character to match ratatui's
+    // Wrap { trim: false } line-breaking (word-aware wrapping).
+    let inner_width = area.width.saturating_sub(2) as usize;
+    let (cursor_row, cursor_col) =
+        compute_wrapped_cursor(&app.input, app.cursor_pos, inner_width);
 
     let cursor_x = area.x.saturating_add(1).saturating_add(cursor_col);
     let cursor_y = area.y.saturating_add(1).saturating_add(cursor_row);
@@ -220,6 +214,38 @@ fn draw_input(frame: &mut Frame, app: &App, area: Rect) {
     let cursor_x = cursor_x.min(area.x.saturating_add(area.width.saturating_sub(2)));
     let cursor_y = cursor_y.min(area.y.saturating_add(area.height.saturating_sub(2)));
     frame.set_cursor_position((cursor_x, cursor_y));
+}
+
+/// Compute (row, col) for the cursor position in wrapped text.
+///
+/// Simulates ratatui's `Wrap { trim: false }` word-aware wrapping:
+/// - Tracks current line width as characters are added
+/// - When a space is encountered and the line would overflow on the next
+///   non-space run, wraps at the last space boundary
+/// - For simplicity (input field, not prose), we use character-level wrapping:
+///   if adding a character exceeds the line width, start a new line.
+fn compute_wrapped_cursor(text: &str, cursor_pos: usize, inner_width: usize) -> (u16, u16) {
+    if inner_width == 0 {
+        return (0, 0);
+    }
+
+    let mut row = 0u16;
+    let mut col = 0u16;
+
+    for (byte_idx, ch) in text.char_indices() {
+        if byte_idx >= cursor_pos {
+            break;
+        }
+        let ch_width = UnicodeWidthStr::width(ch.encode_utf8(&mut [0; 4]) as &str) as u16;
+        if col + ch_width > inner_width as u16 {
+            row += 1;
+            col = ch_width;
+        } else {
+            col += ch_width;
+        }
+    }
+
+    (row, col)
 }
 
 fn draw_status_bar(frame: &mut Frame, app: &App, area: Rect) {
@@ -457,7 +483,8 @@ mod tests {
         let mut terminal = Terminal::new(backend).unwrap();
         let mut app = App::new();
 
-        // Exactly 38 chars — cursor at end should be at start of second line
+        // Exactly 38 chars — cursor at end sits at the rightmost position of line 1,
+        // NOT wrapped to the next line (no 39th char to trigger wrapping).
         app.input = "B".repeat(38);
         app.cursor_pos = 38;
 
@@ -465,11 +492,22 @@ mod tests {
 
         let pos = terminal.get_cursor_position().unwrap();
         let (cx, cy) = (pos.x, pos.y);
-        // 38 / 38 = row 1, 38 % 38 = col 0 → cursor_x should be 1 (border)
         assert!(cx < 40, "cursor_x {} should be within terminal", cx);
         assert!(cy < 24, "cursor_y {} should be within terminal", cy);
-        // cursor_x = area.x + 1 + (38 % 38) = 1
-        assert_eq!(cx, 1, "cursor at exact wrap boundary should be at column 1");
+        // 38 chars fills the line exactly → cursor at border + 38 = 39
+        // But clamped to max inner position: area.x + area.width - 2 = 38
+        assert_eq!(cx, 38, "cursor at end of full line should be at rightmost inner position");
+
+        // Now add one more char (39 total) — THIS triggers the wrap
+        app.input = "B".repeat(39);
+        app.cursor_pos = 39;
+
+        terminal.draw(|frame| draw(frame, &mut app)).unwrap();
+
+        let pos = terminal.get_cursor_position().unwrap();
+        let cx = pos.x;
+        // 39th char wraps to second line → cursor at border + 1 = 2
+        assert_eq!(cx, 2, "cursor after first wrap should be at column 2");
     }
 
     #[test]

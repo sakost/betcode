@@ -175,6 +175,10 @@ impl SessionRelay {
     }
 
     /// Send a permission response (control_response) to the subprocess.
+    ///
+    /// Format must match the Claude Agent SDK control protocol:
+    /// allow → `{ behavior: "allow", updatedInput: {} }`
+    /// deny  → `{ behavior: "deny", message: "User denied", interrupt: true }`
     pub async fn send_permission_response(
         &self,
         session_id: &str,
@@ -182,14 +186,26 @@ impl SessionRelay {
         granted: bool,
     ) -> Result<(), RelayError> {
         let handle = self.get_active_handle(session_id).await?;
-        let behavior = if granted { "allow" } else { "deny" };
+
+        let response = if granted {
+            serde_json::json!({
+                "behavior": "allow",
+                "updatedInput": {}
+            })
+        } else {
+            serde_json::json!({
+                "behavior": "deny",
+                "message": "User denied permission",
+                "interrupt": true
+            })
+        };
 
         let msg = serde_json::json!({
             "type": "control_response",
             "response": {
                 "subtype": "success",
                 "request_id": request_id,
-                "response": { "behavior": behavior }
+                "response": response
             }
         });
         let line =
