@@ -8,13 +8,24 @@ use tonic::transport::Channel;
 use tonic::Request;
 
 use betcode_proto::v1::machine_service_client::MachineServiceClient;
-use betcode_proto::v1::{GetMachineRequest, ListMachinesRequest, MachineStatus};
+use betcode_proto::v1::{
+    GetMachineRequest, ListMachinesRequest, MachineStatus, RegisterMachineRequest,
+};
 
 use crate::config::CliConfig;
 
 /// Machine subcommand actions.
 #[derive(clap::Subcommand, Debug)]
 pub enum MachineAction {
+    /// Register a new machine with the relay.
+    Register {
+        /// Machine ID (auto-generated UUID if omitted).
+        #[arg(long)]
+        id: Option<String>,
+        /// Human-readable machine name.
+        #[arg(long)]
+        name: String,
+    },
     /// List all registered machines.
     List,
     /// Switch active machine for relay routing.
@@ -29,6 +40,7 @@ pub enum MachineAction {
 /// Execute a machine subcommand.
 pub async fn run(action: MachineAction, config: &mut CliConfig) -> anyhow::Result<()> {
     match action {
+        MachineAction::Register { id, name } => register(config, id, &name).await,
         MachineAction::List => list(config).await,
         MachineAction::Switch { machine_id } => switch(config, &machine_id),
         MachineAction::Status => status(config).await,
@@ -59,6 +71,36 @@ async fn connect_relay(config: &CliConfig) -> anyhow::Result<Channel> {
         .connect()
         .await
         .map_err(|e| anyhow::anyhow!("Failed to connect to relay: {}", e))
+}
+
+async fn register(
+    config: &mut CliConfig,
+    id: Option<String>,
+    name: &str,
+) -> anyhow::Result<()> {
+    let machine_id = id.unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+    let channel = connect_relay(config).await?;
+    let mut client = MachineServiceClient::new(channel);
+    let request = make_authed_request(
+        RegisterMachineRequest {
+            machine_id: machine_id.clone(),
+            name: name.to_string(),
+            metadata: Default::default(),
+        },
+        config,
+    )?;
+    let resp = client.register_machine(request).await?.into_inner();
+    let mut out = io::stdout();
+    if let Some(m) = resp.machine {
+        writeln!(out, "Machine registered:")?;
+        writeln!(out, "  ID:   {}", m.machine_id)?;
+        writeln!(out, "  Name: {}", m.name)?;
+        // Auto-set as active machine
+        config.active_machine = Some(m.machine_id);
+        config.save()?;
+        writeln!(out, "  Set as active machine")?;
+    }
+    Ok(())
 }
 
 async fn list(config: &CliConfig) -> anyhow::Result<()> {

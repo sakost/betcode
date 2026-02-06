@@ -6,7 +6,7 @@
 use std::io;
 
 use clap::Parser;
-use crossterm::event::{self, Event, KeyCode, KeyModifiers};
+use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
 use crossterm::execute;
 use crossterm::terminal::{
     disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,
@@ -267,16 +267,15 @@ async fn run_tui_loop<B: ratatui::backend::Backend>(
         if has_terminal_event {
             let ev = tokio::task::block_in_place(event::read)?;
             if let Event::Key(key) = ev {
-                // Ctrl+C to quit
-                if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('c') {
+                if !matches!(key.kind, KeyEventKind::Press | KeyEventKind::Repeat) {
+                    // Ignore Release events (Windows emits Press + Release per keystroke)
+                } else if key.modifiers.contains(KeyModifiers::CONTROL)
+                    && key.code == KeyCode::Char('c')
+                {
                     app.should_quit = true;
-                }
-                // Handle permission prompts
-                else if app.mode == AppMode::PermissionPrompt {
+                } else if app.mode == AppMode::PermissionPrompt {
                     handle_permission_key(&mut app, &request_tx, key.code).await;
-                }
-                // Normal input mode
-                else {
+                } else {
                     handle_input_key(&mut app, &request_tx, key.code).await;
                 }
             }

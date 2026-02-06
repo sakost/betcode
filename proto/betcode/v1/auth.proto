@@ -7,8 +7,6 @@ syntax = "proto3";
 
 package betcode.v1;
 
-import "google/protobuf/timestamp.proto";
-
 // AuthService provides authentication for relay clients.
 service AuthService {
   // Login with credentials, returns access + refresh tokens.
