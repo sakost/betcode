@@ -88,6 +88,7 @@ impl KeyExchangeState {
 /// This is a convenience function mainly useful for testing. In production,
 /// each side creates a `KeyExchangeState`, sends its public bytes, and
 /// calls `complete()` with the peer's public bytes.
+#[cfg(any(test, feature = "test-utils"))]
 pub fn perform_key_exchange() -> Result<(CryptoSession, CryptoSession), CryptoError> {
     let client_state = KeyExchangeState::new();
     let server_state = KeyExchangeState::new();
@@ -188,6 +189,33 @@ mod tests {
 
         assert_eq!(state.identity_fingerprint().unwrap(), expected_fp);
         assert_eq!(state.public_bytes().len(), 32);
+    }
+
+    #[test]
+    fn constant_time_str_eq_equal_strings() {
+        assert!(constant_time_str_eq("hello", "hello"));
+        assert!(constant_time_str_eq("", ""));
+    }
+
+    #[test]
+    fn constant_time_str_eq_different_lengths() {
+        assert!(!constant_time_str_eq("short", "longer_string"));
+        assert!(!constant_time_str_eq("abc", "ab"));
+        assert!(!constant_time_str_eq("", "x"));
+    }
+
+    #[test]
+    fn constant_time_str_eq_same_length_different_content() {
+        assert!(!constant_time_str_eq("aaaa", "aaab"));
+        assert!(!constant_time_str_eq("abcd", "abce"));
+    }
+
+    #[test]
+    fn constant_time_str_eq_fingerprint_format() {
+        let fp = "aa:bb:cc:dd:ee:ff:00:11:22:33:44:55:66:77:88:99:aa:bb:cc:dd:ee:ff:00:11:22:33:44:55:66:77:88:99";
+        assert!(constant_time_str_eq(fp, fp));
+        let fp_diff = "aa:bb:cc:dd:ee:ff:00:11:22:33:44:55:66:77:88:99:aa:bb:cc:dd:ee:ff:00:11:22:33:44:55:66:77:88:9a";
+        assert!(!constant_time_str_eq(fp, fp_diff));
     }
 
     #[test]

@@ -777,3 +777,86 @@ async fn exchange_keys_without_identity_still_works() {
         panic!("wrong payload");
     }
 }
+
+#[tokio::test]
+async fn concurrent_key_exchanges_do_not_corrupt_session() {
+    let (h, _rx) = make_handler_with_identity().await;
+    let h = Arc::new(h);
+
+    // Launch 5 concurrent key exchanges
+    let mut handles = Vec::new();
+    for i in 0..5 {
+        let handler = Arc::clone(&h);
+        handles.push(tokio::spawn(async move {
+            let client_state = KeyExchangeState::new();
+            let client_pub = client_state.public_bytes();
+
+            let req = KeyExchangeRequest {
+                machine_id: "test-machine".into(),
+                identity_pubkey: Vec::new(),
+                fingerprint: String::new(),
+                ephemeral_pubkey: client_pub.to_vec(),
+            };
+
+            let r = handler
+                .handle_frame(req_frame(
+                    &format!("kex-concurrent-{}", i),
+                    METHOD_EXCHANGE_KEYS,
+                    encode(&req),
+                ))
+                .await;
+            assert_eq!(r.len(), 1);
+            assert_eq!(r[0].frame_type, FrameType::Response as i32);
+
+            // Parse response and complete exchange
+            if let Some(betcode_proto::v1::tunnel_frame::Payload::StreamData(p)) = &r[0].payload {
+                let resp = KeyExchangeResponse::decode(
+                    p.encrypted.as_ref().unwrap().ciphertext.as_slice(),
+                )
+                .unwrap();
+                let session = client_state
+                    .complete(&resp.daemon_ephemeral_pubkey)
+                    .unwrap();
+                (i, session)
+            } else {
+                panic!("wrong payload for exchange {}", i);
+            }
+        }));
+    }
+
+    // Collect all results — all should succeed (no panics)
+    let mut results = Vec::new();
+    for h in handles {
+        results.push(h.await.unwrap());
+    }
+
+    // The last exchange to complete is the one installed. Verify the handler
+    // has a valid crypto session by sending an encrypted request with it.
+    // We can't know which exchange "won", but the handler should not be in
+    // a corrupt state. Try each session until one works.
+    let list_req = ListSessionsRequest {
+        working_directory: String::new(),
+        worktree_id: String::new(),
+        limit: 10,
+        offset: 0,
+    };
+    let mut any_succeeded = false;
+    for (_i, session) in &results {
+        let r = h
+            .handle_frame(encrypted_req_frame(
+                "verify-after-concurrent",
+                METHOD_LIST_SESSIONS,
+                encode(&list_req),
+                session,
+            ))
+            .await;
+        if r.len() == 1 && r[0].frame_type == FrameType::Response as i32 {
+            any_succeeded = true;
+            break;
+        }
+    }
+    assert!(
+        any_succeeded,
+        "None of the concurrent exchange sessions could decrypt — handler state corrupted"
+    );
+}

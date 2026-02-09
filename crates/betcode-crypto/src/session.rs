@@ -19,6 +19,9 @@ use crate::error::CryptoError;
 /// HKDF info string for session key derivation.
 const HKDF_INFO: &[u8] = b"betcode-e2e-session-v1";
 
+/// HKDF salt for domain separation (recommended by RFC 5869).
+const HKDF_SALT: &[u8] = b"betcode-e2e-hkdf-salt-v1";
+
 /// Nonce size for ChaCha20-Poly1305.
 pub const NONCE_SIZE: usize = 12;
 
@@ -49,7 +52,7 @@ impl CryptoSession {
     /// The shared secret is passed through HKDF-SHA256 to derive the
     /// symmetric encryption key.
     pub fn from_shared_secret(shared_secret: &[u8; 32]) -> Result<Self, CryptoError> {
-        let hk = Hkdf::<Sha256>::new(None, shared_secret);
+        let hk = Hkdf::<Sha256>::new(Some(HKDF_SALT), shared_secret);
         let mut key_bytes = [0u8; 32];
         hk.expand(HKDF_INFO, &mut key_bytes)
             .map_err(|e| CryptoError::KeyDerivationFailed(e.to_string()))?;
@@ -145,6 +148,7 @@ impl CryptoSession {
     }
 
     /// Get the current nonce counter value (for testing).
+    #[cfg(any(test, feature = "test-utils"))]
     pub fn nonce_counter(&self) -> u32 {
         self.nonce_counter.load(Ordering::Relaxed)
     }
@@ -154,8 +158,9 @@ impl CryptoSession {
 ///
 /// **Note:** The caller is responsible for zeroizing the returned key bytes
 /// when they are no longer needed.
+#[cfg(any(test, feature = "test-utils"))]
 pub fn derive_session_key(shared_secret: &[u8; 32]) -> Result<[u8; 32], CryptoError> {
-    let hk = Hkdf::<Sha256>::new(None, shared_secret);
+    let hk = Hkdf::<Sha256>::new(Some(HKDF_SALT), shared_secret);
     let mut key = [0u8; 32];
     hk.expand(HKDF_INFO, &mut key)
         .map_err(|e| CryptoError::KeyDerivationFailed(e.to_string()))?;
@@ -163,6 +168,7 @@ pub fn derive_session_key(shared_secret: &[u8; 32]) -> Result<[u8; 32], CryptoEr
 }
 
 /// Perform X25519 ECDH and return the raw shared secret.
+#[cfg(any(test, feature = "test-utils"))]
 pub fn ecdh(local_secret: &StaticSecret, remote_public: &PublicKey) -> [u8; 32] {
     *local_secret.diffie_hellman(remote_public).as_bytes()
 }
@@ -170,6 +176,7 @@ pub fn ecdh(local_secret: &StaticSecret, remote_public: &PublicKey) -> [u8; 32] 
 /// Create a matched pair of CryptoSessions for testing.
 ///
 /// Returns (client_session, server_session) that can encrypt/decrypt each other's data.
+#[cfg(any(test, feature = "test-utils"))]
 pub fn test_session_pair() -> Result<(CryptoSession, CryptoSession), CryptoError> {
     let client_secret = StaticSecret::random_from_rng(OsRng);
     let client_public = PublicKey::from(&client_secret);
@@ -361,6 +368,43 @@ mod tests {
             result,
             Err(CryptoError::InvalidNonceLength { .. })
         ));
+    }
+
+    #[test]
+    fn concurrent_nonce_generation_produces_unique_nonces() {
+        use std::sync::Arc;
+        use std::thread;
+
+        let (session, _) = test_session_pair().unwrap();
+        let session = Arc::new(session);
+        let num_threads = 8;
+        let per_thread = 500;
+
+        let handles: Vec<_> = (0..num_threads)
+            .map(|_| {
+                let s = Arc::clone(&session);
+                thread::spawn(move || {
+                    let mut nonces = Vec::with_capacity(per_thread);
+                    for _ in 0..per_thread {
+                        let enc = s.encrypt(b"x").unwrap();
+                        nonces.push(enc.nonce);
+                    }
+                    nonces
+                })
+            })
+            .collect();
+
+        let mut all_nonces = std::collections::HashSet::new();
+        for h in handles {
+            for nonce in h.join().unwrap() {
+                assert!(
+                    all_nonces.insert(nonce),
+                    "nonce collision in concurrent test"
+                );
+            }
+        }
+        assert_eq!(all_nonces.len(), num_threads * per_thread);
+        assert_eq!(session.nonce_counter() as usize, num_threads * per_thread);
     }
 
     #[test]

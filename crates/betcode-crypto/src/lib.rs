@@ -18,12 +18,14 @@ pub mod identity;
 pub mod session;
 
 pub use error::CryptoError;
-pub use exchange::{
-    constant_time_str_eq, perform_key_exchange, verify_fingerprint, KeyExchangeState,
-};
+#[cfg(any(test, feature = "test-utils"))]
+pub use exchange::perform_key_exchange;
+pub use exchange::{constant_time_str_eq, verify_fingerprint, KeyExchangeState};
 pub use fingerprint_store::{FingerprintCheck, FingerprintStore};
 pub use fingerprint_visual::{
     compare_fingerprints, fingerprint_randomart, format_fingerprint_display,
 };
 pub use identity::{fingerprint_of, IdentityKeyPair};
-pub use session::{test_session_pair, CryptoSession, EncryptedData, NONCE_SIZE};
+#[cfg(any(test, feature = "test-utils"))]
+pub use session::test_session_pair;
+pub use session::{CryptoSession, EncryptedData, NONCE_SIZE};

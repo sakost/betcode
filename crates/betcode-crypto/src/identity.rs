@@ -102,10 +102,16 @@ impl IdentityKeyPair {
     }
 
     /// Load a keypair from a file containing the 32-byte secret key.
+    ///
+    /// Reads directly into a fixed-size array to avoid heap-allocated `Vec`
+    /// whose prior allocations may leave key material in freed memory.
     pub fn load_from_file(path: &Path) -> Result<Self, CryptoError> {
-        let mut bytes = std::fs::read(path)?;
-        let result = Self::from_secret_bytes(&bytes);
-        bytes.zeroize();
+        use std::io::Read;
+        let mut file = std::fs::File::open(path)?;
+        let mut buf = [0u8; 32];
+        file.read_exact(&mut buf)?;
+        let result = Self::from_secret_bytes(&buf);
+        buf.zeroize();
         result
     }
 

@@ -133,13 +133,19 @@ impl TunnelRequestHandler {
             Some(crypto) => crypto
                 .decrypt(&enc.ciphertext, &enc.nonce)
                 .map_err(|e| format!("Decryption failed: {}", e)),
-            None => Ok(enc.ciphertext.clone()),
+            None => {
+                warn!("Decrypting payload without crypto session — data is not E2E encrypted");
+                Ok(enc.ciphertext.clone())
+            }
         }
     }
 
     /// Encrypt data into an EncryptedPayload using the session key, or passthrough.
     async fn encrypt_payload(&self, data: &[u8]) -> Result<EncryptedPayload, String> {
         let crypto = self.crypto.read().await;
+        if crypto.is_none() {
+            warn!("Encrypting payload without crypto session — data is not E2E encrypted");
+        }
         make_encrypted_payload(crypto.as_deref(), data)
     }
 
