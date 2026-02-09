@@ -4,7 +4,7 @@
 //! detect man-in-the-middle attacks by comparing against previously
 //! seen fingerprints.
 
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 use std::path::Path;
 
 use serde::{Deserialize, Serialize};
@@ -31,7 +31,8 @@ pub struct KnownDaemon {
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct FingerprintStore {
     /// Map from machine_id to known daemon entry.
-    pub daemons: HashMap<String, KnownDaemon>,
+    /// Uses BTreeMap for deterministic JSON serialization order.
+    pub daemons: BTreeMap<String, KnownDaemon>,
 }
 
 /// Result of checking a daemon's fingerprint against the store.
@@ -101,19 +102,34 @@ impl FingerprintStore {
     }
 
     /// Mark a daemon's fingerprint as explicitly verified by the user.
-    pub fn mark_verified(&mut self, machine_id: &str) {
+    ///
+    /// Returns `true` if the daemon was found and marked, `false` if unknown.
+    pub fn mark_verified(&mut self, machine_id: &str) -> bool {
         if let Some(entry) = self.daemons.get_mut(machine_id) {
             entry.verified = true;
+            true
+        } else {
+            false
         }
     }
 
     /// Update a daemon's fingerprint (after user confirms the change).
-    pub fn update_fingerprint(&mut self, machine_id: &str, new_fingerprint: &str, now: i64) {
+    ///
+    /// Returns `true` if the daemon was found and updated, `false` if unknown.
+    pub fn update_fingerprint(
+        &mut self,
+        machine_id: &str,
+        new_fingerprint: &str,
+        now: i64,
+    ) -> bool {
         if let Some(entry) = self.daemons.get_mut(machine_id) {
             entry.fingerprint = new_fingerprint.to_string();
             entry.first_seen = now;
             entry.last_seen = now;
             entry.verified = false;
+            true
+        } else {
+            false
         }
     }
 
@@ -161,7 +177,7 @@ mod tests {
         let mut store = FingerprintStore::default();
         store.record("m1", "aa:bb:cc", 1000);
         assert!(!store.daemons["m1"].verified);
-        store.mark_verified("m1");
+        assert!(store.mark_verified("m1"));
         assert!(store.daemons["m1"].verified);
     }
 
@@ -242,18 +258,16 @@ mod tests {
     }
 
     #[test]
-    fn mark_verified_noop_for_unknown_machine() {
+    fn mark_verified_returns_false_for_unknown_machine() {
         let mut store = FingerprintStore::default();
-        // Should not panic or error for unknown machine_id
-        store.mark_verified("nonexistent");
+        assert!(!store.mark_verified("nonexistent"));
         assert!(store.daemons.is_empty());
     }
 
     #[test]
-    fn update_fingerprint_noop_for_unknown_machine() {
+    fn update_fingerprint_returns_false_for_unknown_machine() {
         let mut store = FingerprintStore::default();
-        // Should not panic or error for unknown machine_id
-        store.update_fingerprint("nonexistent", "aa:bb:cc", 1000);
+        assert!(!store.update_fingerprint("nonexistent", "aa:bb:cc", 1000));
         assert!(store.daemons.is_empty());
     }
 

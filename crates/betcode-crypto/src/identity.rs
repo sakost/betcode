@@ -105,7 +105,25 @@ impl IdentityKeyPair {
     ///
     /// Reads directly into a fixed-size array to avoid heap-allocated `Vec`
     /// whose prior allocations may leave key material in freed memory.
+    ///
+    /// On Unix, verifies file permissions are 0600 (owner-only) before reading.
     pub fn load_from_file(path: &Path) -> Result<Self, CryptoError> {
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let metadata = std::fs::metadata(path)?;
+            let mode = metadata.permissions().mode() & 0o777;
+            if mode != 0o600 {
+                return Err(CryptoError::IoError(std::io::Error::new(
+                    std::io::ErrorKind::PermissionDenied,
+                    format!(
+                        "Identity key file has insecure permissions: {:o} (expected 600)",
+                        mode
+                    ),
+                )));
+            }
+        }
+
         use std::io::Read;
         let mut file = std::fs::File::open(path)?;
         let mut buf = [0u8; 32];
@@ -250,6 +268,11 @@ mod tests {
 
         // Write 16 bytes instead of 32 — read_exact should fail
         std::fs::write(&path, &[0u8; 16]).unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+        }
         let result = IdentityKeyPair::load_from_file(&path);
         assert!(result.is_err());
 
@@ -260,6 +283,72 @@ mod tests {
     fn load_nonexistent_file_returns_error() {
         let result = IdentityKeyPair::load_from_file(Path::new("/nonexistent/identity.key"));
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn load_truncated_file_fails_gracefully() {
+        let dir = std::env::temp_dir().join(format!("betcode-test-{}", rand::random::<u64>()));
+        let path = dir.join("identity.key");
+        std::fs::create_dir_all(&dir).unwrap();
+
+        // Simulate partial write (20 bytes instead of 32)
+        std::fs::write(&path, &[0u8; 20]).unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+        }
+
+        let result = IdentityKeyPair::load_from_file(&path);
+        assert!(result.is_err());
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn load_file_with_trailing_garbage_still_works() {
+        use std::io::Write;
+
+        let dir = std::env::temp_dir().join(format!("betcode-test-{}", rand::random::<u64>()));
+        let path = dir.join("identity.key");
+
+        let kp = IdentityKeyPair::generate();
+        kp.save_to_file(&path).unwrap();
+
+        // Append garbage after valid 32 bytes
+        let mut file = std::fs::OpenOptions::new()
+            .append(true)
+            .open(&path)
+            .unwrap();
+        file.write_all(b"GARBAGE_DATA").unwrap();
+
+        // read_exact only reads first 32 bytes — should still work
+        let loaded = IdentityKeyPair::load_from_file(&path).unwrap();
+        assert_eq!(loaded.public_bytes(), kp.public_bytes());
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn load_rejects_world_readable_permissions() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = std::env::temp_dir().join(format!("betcode-test-{}", rand::random::<u64>()));
+        let path = dir.join("identity.key");
+
+        let kp = IdentityKeyPair::generate();
+        kp.save_to_file(&path).unwrap();
+
+        // Make world-readable
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+
+        let result = IdentityKeyPair::load_from_file(&path);
+        assert!(result.is_err());
+
+        // Restore for cleanup
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]

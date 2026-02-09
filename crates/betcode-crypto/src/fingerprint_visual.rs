@@ -12,8 +12,20 @@ const WIDTH: usize = 17;
 /// Height of the randomart box (inner area).
 const HEIGHT: usize = 9;
 
-/// Characters used to represent field values (from least to most visited).
+/// Characters representing cell visit density, ordered from sparse to dense.
+///
+/// Based on OpenSSH's randomart character set. Each character maps to a
+/// visit count: space (0 visits), `.` (1), `o` (2), etc. The last two
+/// characters (`S` and `E`) are reserved as position markers for the
+/// bishop's start and end positions, respectively.
 const CHARS: &[u8] = b" .o+=*BOX@%&#/^SE";
+
+/// Index of the 'S' (start) marker in CHARS.
+const START_MARKER_IDX: u8 = CHARS.len() as u8 - 2;
+/// Index of the 'E' (end) marker in CHARS.
+const END_MARKER_IDX: u8 = CHARS.len() as u8 - 1;
+/// Maximum visit count index before the reserved marker positions.
+const MAX_VISIT_IDX: u8 = START_MARKER_IDX - 1;
 
 /// Generate an ASCII randomart image from a fingerprint string.
 ///
@@ -41,16 +53,15 @@ pub fn fingerprint_randomart(fingerprint: &str, title: &str) -> String {
             x = (x as i32 + dx).clamp(0, (WIDTH - 1) as i32) as usize;
             y = (y as i32 + dy).clamp(0, (HEIGHT - 1) as i32) as usize;
 
-            let max_idx = CHARS.len() as u8 - 3; // Reserve last 2 for start/end markers
-            if field[y][x] < max_idx {
+            if field[y][x] < MAX_VISIT_IDX {
                 field[y][x] += 1;
             }
         }
     }
 
     // Mark start and end positions
-    field[HEIGHT / 2][WIDTH / 2] = CHARS.len() as u8 - 2; // 'S' for start
-    field[y][x] = CHARS.len() as u8 - 1; // 'E' for end
+    field[HEIGHT / 2][WIDTH / 2] = START_MARKER_IDX;
+    field[y][x] = END_MARKER_IDX;
 
     // Build the output string
     let title_display = if title.len() > WIDTH {
@@ -249,6 +260,37 @@ mod tests {
         // Should be all dashes between the + markers
         assert!(first_line.starts_with('+'));
         assert!(first_line.ends_with('+'));
+    }
+
+    #[test]
+    fn randomart_single_bit_difference_produces_different_art() {
+        let fp1 = "aa:bb:cc:dd:ee:ff:00:11:22:33:44:55:66:77:88:99:aa:bb:cc:dd:ee:ff:00:11:22:33:44:55:66:77:88:99";
+        let fp2 = "aa:bb:cc:dd:ee:ff:00:11:22:33:44:55:66:77:88:99:aa:bb:cc:dd:ee:ff:00:11:22:33:44:55:66:77:88:98";
+
+        let art1 = fingerprint_randomart(fp1, "test");
+        let art2 = fingerprint_randomart(fp2, "test");
+
+        assert_ne!(
+            art1, art2,
+            "single-byte change should produce different art"
+        );
+
+        // Count differing characters in the inner area (excluding borders)
+        let lines1: Vec<&str> = art1.lines().skip(1).take(HEIGHT).collect();
+        let lines2: Vec<&str> = art2.lines().skip(1).take(HEIGHT).collect();
+        let mut diff_count = 0;
+        for (l1, l2) in lines1.iter().zip(lines2.iter()) {
+            for (c1, c2) in l1.chars().zip(l2.chars()) {
+                if c1 != c2 {
+                    diff_count += 1;
+                }
+            }
+        }
+        assert!(
+            diff_count > 5,
+            "small input change should produce multiple visual differences, got {}",
+            diff_count
+        );
     }
 
     #[test]

@@ -32,13 +32,7 @@ impl Default for KeyExchangeState {
 impl KeyExchangeState {
     /// Start a new key exchange by generating an ephemeral keypair.
     pub fn new() -> Self {
-        let ephemeral_secret = StaticSecret::random_from_rng(OsRng);
-        let ephemeral_public = PublicKey::from(&ephemeral_secret);
-        Self {
-            ephemeral_secret,
-            ephemeral_public,
-            identity: None,
-        }
+        Self::with_identity_opt(None)
     }
 
     /// Start a new key exchange with an identity keypair.
@@ -46,12 +40,16 @@ impl KeyExchangeState {
     /// Accepts `Arc<IdentityKeyPair>` to avoid reconstructing the keypair
     /// from raw secret bytes, which would unnecessarily expose key material.
     pub fn with_identity(identity: Arc<IdentityKeyPair>) -> Self {
+        Self::with_identity_opt(Some(identity))
+    }
+
+    fn with_identity_opt(identity: Option<Arc<IdentityKeyPair>>) -> Self {
         let ephemeral_secret = StaticSecret::random_from_rng(OsRng);
         let ephemeral_public = PublicKey::from(&ephemeral_secret);
         Self {
             ephemeral_secret,
             ephemeral_public,
-            identity: Some(identity),
+            identity,
         }
     }
 
@@ -69,14 +67,13 @@ impl KeyExchangeState {
     ///
     /// Performs X25519 ECDH and derives a CryptoSession with HKDF.
     pub fn complete(self, peer_public_bytes: &[u8]) -> Result<CryptoSession, CryptoError> {
-        if peer_public_bytes.len() != 32 {
-            return Err(CryptoError::InvalidKeyLength {
-                expected: 32,
-                actual: peer_public_bytes.len(),
-            });
-        }
-        let mut arr = [0u8; 32];
-        arr.copy_from_slice(peer_public_bytes);
+        let arr: [u8; 32] =
+            peer_public_bytes
+                .try_into()
+                .map_err(|_| CryptoError::InvalidKeyLength {
+                    expected: 32,
+                    actual: peer_public_bytes.len(),
+                })?;
         let peer_public = PublicKey::from(arr);
 
         CryptoSession::from_keypairs(&self.ephemeral_secret, &peer_public)

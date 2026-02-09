@@ -41,6 +41,14 @@ const ESTIMATED_TOKENS_PER_MESSAGE: u32 = 100;
 /// Expected X25519 public key length in bytes.
 const X25519_PUBKEY_LEN: usize = 32;
 
+/// Prefix for tunnel client IDs.
+const TUNNEL_CLIENT_ID_PREFIX: &str = "tunnel";
+
+/// Generate a unique client ID for tunnel connections.
+fn generate_tunnel_client_id() -> String {
+    format!("{}-{}", TUNNEL_CLIENT_ID_PREFIX, uuid::Uuid::new_v4())
+}
+
 /// Info about an active streaming session routed through the tunnel.
 struct ActiveStream {
     session_id: String,
@@ -414,7 +422,7 @@ impl TunnelRequestHandler {
                 )]
             }
         };
-        let client_id = format!("tunnel-{}", uuid::Uuid::new_v4());
+        let client_id = generate_tunnel_client_id();
         match self
             .db
             .acquire_input_lock(&req.session_id, &client_id)
@@ -603,7 +611,7 @@ impl TunnelRequestHandler {
             .update_session_status(&sid, crate::storage::SessionStatus::Active)
             .await;
 
-        let client_id = format!("tunnel-{}", uuid::Uuid::new_v4());
+        let client_id = generate_tunnel_client_id();
         let handle = match self.multiplexer.subscribe(&sid, &client_id, "tunnel").await {
             Ok(h) => h,
             Err(e) => {

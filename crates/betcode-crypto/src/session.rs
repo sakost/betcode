@@ -46,16 +46,30 @@ pub struct CryptoSession {
     nonce_counter: AtomicU32,
 }
 
+/// Derive a 32-byte key from a shared secret via HKDF-SHA256.
+///
+/// The caller is responsible for zeroizing the returned bytes.
+fn hkdf_derive(shared_secret: &[u8; 32]) -> Result<[u8; 32], CryptoError> {
+    let hk = Hkdf::<Sha256>::new(Some(HKDF_SALT), shared_secret);
+    let mut key = [0u8; 32];
+    hk.expand(HKDF_INFO, &mut key)
+        .map_err(|e| CryptoError::KeyDerivationFailed(e.to_string()))?;
+    Ok(key)
+}
+
+impl Drop for CryptoSession {
+    fn drop(&mut self) {
+        self.nonce_prefix.zeroize();
+    }
+}
+
 impl CryptoSession {
     /// Create a session from a raw 32-byte shared secret.
     ///
     /// The shared secret is passed through HKDF-SHA256 to derive the
     /// symmetric encryption key.
     pub fn from_shared_secret(shared_secret: &[u8; 32]) -> Result<Self, CryptoError> {
-        let hk = Hkdf::<Sha256>::new(Some(HKDF_SALT), shared_secret);
-        let mut key_bytes = [0u8; 32];
-        hk.expand(HKDF_INFO, &mut key_bytes)
-            .map_err(|e| CryptoError::KeyDerivationFailed(e.to_string()))?;
+        let mut key_bytes = hkdf_derive(shared_secret)?;
 
         let key = Key::from_slice(&key_bytes);
         let cipher = ChaCha20Poly1305::new(key);
@@ -160,11 +174,7 @@ impl CryptoSession {
 /// when they are no longer needed.
 #[cfg(any(test, feature = "test-utils"))]
 pub fn derive_session_key(shared_secret: &[u8; 32]) -> Result<[u8; 32], CryptoError> {
-    let hk = Hkdf::<Sha256>::new(Some(HKDF_SALT), shared_secret);
-    let mut key = [0u8; 32];
-    hk.expand(HKDF_INFO, &mut key)
-        .map_err(|e| CryptoError::KeyDerivationFailed(e.to_string()))?;
-    Ok(key)
+    hkdf_derive(shared_secret)
 }
 
 /// Perform X25519 ECDH and return the raw shared secret.
@@ -418,6 +428,39 @@ mod tests {
             "expected NonceExhausted, got {:?}",
             result
         );
+    }
+
+    #[test]
+    fn nonce_exhaustion_concurrent_near_limit() {
+        use std::sync::Arc;
+        use std::thread;
+
+        let (session, _) = test_session_pair().unwrap();
+        let session = Arc::new(session);
+        // Set counter close to limit
+        session
+            .nonce_counter
+            .store(u32::MAX - 100, Ordering::Relaxed);
+
+        let handles: Vec<_> = (0..200)
+            .map(|_| {
+                let s = Arc::clone(&session);
+                thread::spawn(move || s.encrypt(b"x"))
+            })
+            .collect();
+
+        let mut success = 0u32;
+        let mut exhausted = 0u32;
+        for h in handles {
+            match h.join().unwrap() {
+                Ok(_) => success += 1,
+                Err(CryptoError::NonceExhausted) => exhausted += 1,
+                Err(e) => panic!("unexpected error: {:?}", e),
+            }
+        }
+        // Exactly 100 should succeed (counters MAX-100 through MAX-1)
+        assert_eq!(success, 100);
+        assert_eq!(exhausted, 100);
     }
 
     #[test]
