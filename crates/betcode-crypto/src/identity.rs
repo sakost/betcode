@@ -103,8 +103,10 @@ impl IdentityKeyPair {
 
     /// Load a keypair from a file containing the 32-byte secret key.
     pub fn load_from_file(path: &Path) -> Result<Self, CryptoError> {
-        let bytes = std::fs::read(path)?;
-        Self::from_secret_bytes(&bytes)
+        let mut bytes = std::fs::read(path)?;
+        let result = Self::from_secret_bytes(&bytes);
+        bytes.zeroize();
+        result
     }
 
     /// Load from file, or generate a new keypair and save it.

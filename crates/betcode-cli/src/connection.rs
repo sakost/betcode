@@ -14,10 +14,15 @@ use betcode_proto::v1::{
     worktree_service_client::WorktreeServiceClient, AgentEvent, AgentRequest, CancelTurnRequest,
     CancelTurnResponse, CreateWorktreeRequest, GetIssueRequest, GetIssueResponse,
     GetMergeRequestRequest, GetMergeRequestResponse, GetPipelineRequest, GetPipelineResponse,
-    GetWorktreeRequest, ListIssuesRequest, ListIssuesResponse, ListMergeRequestsRequest,
-    ListMergeRequestsResponse, ListPipelinesRequest, ListPipelinesResponse, ListSessionsRequest,
-    ListSessionsResponse, ListWorktreesRequest, ListWorktreesResponse, RemoveWorktreeRequest,
-    RemoveWorktreeResponse, ResumeSessionRequest, WorktreeDetail,
+    GetWorktreeRequest, KeyExchangeRequest, ListIssuesRequest, ListIssuesResponse,
+    ListMergeRequestsRequest, ListMergeRequestsResponse, ListPipelinesRequest,
+    ListPipelinesResponse, ListSessionsRequest, ListSessionsResponse, ListWorktreesRequest,
+    ListWorktreesResponse, RemoveWorktreeRequest, RemoveWorktreeResponse, ResumeSessionRequest,
+    WorktreeDetail,
+};
+
+use betcode_crypto::{
+    CryptoSession, FingerprintCheck, FingerprintStore, IdentityKeyPair, KeyExchangeState,
 };
 
 /// Connection configuration.
@@ -33,6 +38,12 @@ pub struct ConnectionConfig {
     pub auth_token: Option<String>,
     /// Machine ID for relay routing (sent as x-machine-id header).
     pub machine_id: Option<String>,
+    /// Path to the client X25519 identity key file for E2E encryption.
+    /// Defaults to `~/.betcode/client_identity.key`.
+    pub identity_key_path: Option<std::path::PathBuf>,
+    /// Path to the known daemons fingerprint store.
+    /// Defaults to `~/.betcode/known_daemons.json`.
+    pub fingerprint_store_path: Option<std::path::PathBuf>,
 }
 
 impl ConnectionConfig {
@@ -50,6 +61,8 @@ impl Default for ConnectionConfig {
             request_timeout: Duration::from_secs(30),
             auth_token: None,
             machine_id: None,
+            identity_key_path: None,
+            fingerprint_store_path: None,
         }
     }
 }
@@ -88,17 +101,62 @@ pub struct DaemonConnection {
     worktree_client: Option<WorktreeServiceClient<Channel>>,
     gitlab_client: Option<GitLabServiceClient<Channel>>,
     state: ConnectionState,
+    /// E2E crypto session, established via key exchange for relay connections.
+    crypto: Option<std::sync::Arc<CryptoSession>>,
+    /// Client identity keypair for E2E encryption key exchange.
+    identity: Option<std::sync::Arc<IdentityKeyPair>>,
+    /// TOFU fingerprint store for known daemons.
+    fingerprint_store: FingerprintStore,
+    /// Path where the fingerprint store is persisted.
+    fingerprint_store_path: std::path::PathBuf,
 }
 
 impl DaemonConnection {
     /// Create a new connection (not yet connected).
     pub fn new(config: ConnectionConfig) -> Self {
+        let fp_path = config.fingerprint_store_path.clone().unwrap_or_else(|| {
+            dirs::home_dir()
+                .unwrap_or_else(|| std::path::PathBuf::from("."))
+                .join(".betcode")
+                .join("known_daemons.json")
+        });
+        let fp_store = FingerprintStore::load(&fp_path).unwrap_or_default();
+
+        let identity = Self::load_identity(&config);
+
         Self {
             config,
             client: None,
             worktree_client: None,
             gitlab_client: None,
             state: ConnectionState::Disconnected,
+            crypto: None,
+            identity,
+            fingerprint_store: fp_store,
+            fingerprint_store_path: fp_path,
+        }
+    }
+
+    /// Load or generate the client identity keypair.
+    fn load_identity(config: &ConnectionConfig) -> Option<std::sync::Arc<IdentityKeyPair>> {
+        if !config.is_relay() {
+            return None;
+        }
+        let path = config.identity_key_path.clone().unwrap_or_else(|| {
+            dirs::home_dir()
+                .unwrap_or_else(|| std::path::PathBuf::from("."))
+                .join(".betcode")
+                .join("client_identity.key")
+        });
+        match IdentityKeyPair::load_or_generate(&path) {
+            Ok(kp) => {
+                info!(fingerprint = %kp.fingerprint(), "Loaded client identity keypair");
+                Some(std::sync::Arc::new(kp))
+            }
+            Err(e) => {
+                warn!(?e, "Failed to load client identity key, proceeding without");
+                None
+            }
         }
     }
 
@@ -125,6 +183,139 @@ impl DaemonConnection {
 
         info!(addr = %self.config.addr, relay = self.config.is_relay(), "Connected");
         Ok(())
+    }
+
+    /// Perform E2E key exchange with the daemon via the relay.
+    ///
+    /// Generates an ephemeral X25519 keypair, sends the public key to the daemon,
+    /// receives the daemon's ephemeral key, and derives a shared CryptoSession.
+    /// Also performs TOFU fingerprint verification against the known daemons store.
+    /// Must be called after `connect()` and before `converse()` for relay connections.
+    ///
+    /// Returns `(daemon_fingerprint, fingerprint_check)`.
+    pub async fn exchange_keys(
+        &mut self,
+        machine_id: &str,
+    ) -> Result<(String, FingerprintCheck), ConnectionError> {
+        let auth_token = self.config.auth_token.clone();
+        let machine_id_meta = self.config.machine_id.clone();
+        let client = self.client.as_mut().ok_or(ConnectionError::NotConnected)?;
+
+        let state = match &self.identity {
+            Some(id) => KeyExchangeState::with_identity(std::sync::Arc::clone(id)),
+            None => KeyExchangeState::new(),
+        };
+        let our_pubkey = state.public_bytes();
+
+        let (identity_pubkey, fingerprint_str) = match &self.identity {
+            Some(id) => (id.public_bytes().to_vec(), id.fingerprint()),
+            None => (Vec::new(), String::new()),
+        };
+
+        let mut request = tonic::Request::new(KeyExchangeRequest {
+            machine_id: machine_id.to_string(),
+            identity_pubkey,
+            fingerprint: fingerprint_str,
+            ephemeral_pubkey: our_pubkey.to_vec(),
+        });
+        apply_relay_meta(&mut request, &auth_token, &machine_id_meta);
+
+        let response = client
+            .exchange_keys(request)
+            .await
+            .map_err(|e| ConnectionError::RpcFailed(format!("Key exchange failed: {}", e)))?;
+
+        let resp = response.into_inner();
+        let session = state
+            .complete(&resp.daemon_ephemeral_pubkey)
+            .map_err(|e| ConnectionError::RpcFailed(format!("Key derivation failed: {}", e)))?;
+
+        let daemon_fingerprint = resp.daemon_fingerprint.clone();
+
+        // Check TOFU fingerprint store
+        let fp_check = self
+            .fingerprint_store
+            .check(machine_id, &daemon_fingerprint);
+
+        match &fp_check {
+            FingerprintCheck::TrustOnFirstUse => {
+                let now = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_secs() as i64;
+                self.fingerprint_store
+                    .record(machine_id, &daemon_fingerprint, now);
+                if let Err(e) = self.fingerprint_store.save(&self.fingerprint_store_path) {
+                    warn!(?e, "Failed to save fingerprint store");
+                }
+                info!(
+                    daemon_fingerprint = %daemon_fingerprint,
+                    machine_id = %machine_id,
+                    "TOFU: first connection, fingerprint recorded"
+                );
+            }
+            FingerprintCheck::Matched => {
+                let now = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_secs() as i64;
+                self.fingerprint_store
+                    .record(machine_id, &daemon_fingerprint, now);
+                let _ = self.fingerprint_store.save(&self.fingerprint_store_path);
+                info!(
+                    daemon_fingerprint = %daemon_fingerprint,
+                    "Daemon fingerprint verified (matches known)"
+                );
+            }
+            FingerprintCheck::Mismatch { expected, actual } => {
+                warn!(
+                    machine_id = %machine_id,
+                    expected = %expected,
+                    actual = %actual,
+                    "DAEMON FINGERPRINT MISMATCH — possible MITM attack!"
+                );
+                // Don't install the crypto session — caller decides what to do
+                return Ok((daemon_fingerprint, fp_check));
+            }
+        }
+
+        self.crypto = Some(std::sync::Arc::new(session));
+
+        Ok((daemon_fingerprint, fp_check))
+    }
+
+    /// Accept a fingerprint mismatch (e.g., after user confirms the daemon key changed).
+    ///
+    /// Updates the stored fingerprint and allows future connections.
+    pub fn accept_fingerprint_change(&mut self, machine_id: &str, new_fingerprint: &str) {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs() as i64;
+        self.fingerprint_store
+            .update_fingerprint(machine_id, new_fingerprint, now);
+        let _ = self.fingerprint_store.save(&self.fingerprint_store_path);
+    }
+
+    /// Mark a daemon's fingerprint as explicitly verified.
+    pub fn verify_fingerprint(&mut self, machine_id: &str) {
+        self.fingerprint_store.mark_verified(machine_id);
+        let _ = self.fingerprint_store.save(&self.fingerprint_store_path);
+    }
+
+    /// Whether a crypto session has been established.
+    pub fn has_crypto(&self) -> bool {
+        self.crypto.is_some()
+    }
+
+    /// Get the client identity fingerprint, if loaded.
+    pub fn client_fingerprint(&self) -> Option<String> {
+        self.identity.as_ref().map(|id| id.fingerprint())
+    }
+
+    /// Get a reference to the fingerprint store.
+    pub fn fingerprint_store(&self) -> &FingerprintStore {
+        &self.fingerprint_store
     }
 
     /// Start a bidirectional conversation stream.
@@ -551,6 +742,8 @@ mod tests {
         assert_eq!(config.addr, "http://127.0.0.1:50051");
         assert_eq!(config.connect_timeout, Duration::from_secs(5));
         assert!(!config.is_relay());
+        assert!(config.identity_key_path.is_none());
+        assert!(config.fingerprint_store_path.is_none());
     }
 
     #[test]
@@ -598,5 +791,54 @@ mod tests {
         apply_relay_meta(&mut req, &None, &None);
         assert!(req.metadata().get("authorization").is_none());
         assert!(req.metadata().get("x-machine-id").is_none());
+    }
+
+    #[test]
+    fn new_connection_has_no_crypto() {
+        let conn = DaemonConnection::new(ConnectionConfig::default());
+        assert!(!conn.has_crypto());
+    }
+
+    #[test]
+    fn local_connection_has_no_identity() {
+        let conn = DaemonConnection::new(ConnectionConfig::default());
+        assert!(conn.client_fingerprint().is_none());
+    }
+
+    #[test]
+    fn relay_connection_loads_identity() {
+        let dir = std::env::temp_dir().join(format!("betcode-cli-id-{}", uuid::Uuid::new_v4()));
+        let key_path = dir.join("client_identity.key");
+        let fp_path = dir.join("known_daemons.json");
+
+        let config = ConnectionConfig {
+            auth_token: Some("tok".into()),
+            machine_id: Some("m1".into()),
+            identity_key_path: Some(key_path.clone()),
+            fingerprint_store_path: Some(fp_path),
+            ..Default::default()
+        };
+        let conn = DaemonConnection::new(config);
+        assert!(conn.client_fingerprint().is_some());
+        assert!(key_path.exists());
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn fingerprint_store_starts_empty() {
+        let conn = DaemonConnection::new(ConnectionConfig::default());
+        assert!(conn.fingerprint_store().daemons.is_empty());
+    }
+
+    #[tokio::test]
+    async fn exchange_keys_without_connection_returns_error() {
+        let mut conn = DaemonConnection::new(ConnectionConfig::default());
+        let result = conn.exchange_keys("m1").await;
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            ConnectionError::NotConnected => {}
+            other => panic!("Expected NotConnected, got {:?}", other),
+        }
     }
 }

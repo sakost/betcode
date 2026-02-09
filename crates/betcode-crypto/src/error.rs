@@ -21,6 +21,9 @@ pub enum CryptoError {
     #[error("Serialization error: {0}")]
     SerializationError(String),
 
+    #[error("Nonce counter exhausted — session must be rekeyed")]
+    NonceExhausted,
+
     #[error("IO error: {0}")]
     IoError(#[from] std::io::Error),
 }

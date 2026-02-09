@@ -12,10 +12,18 @@
 
 pub mod error;
 pub mod exchange;
+pub mod fingerprint_store;
+pub mod fingerprint_visual;
 pub mod identity;
 pub mod session;
 
 pub use error::CryptoError;
-pub use exchange::{perform_key_exchange, verify_fingerprint, KeyExchangeState};
+pub use exchange::{
+    constant_time_str_eq, perform_key_exchange, verify_fingerprint, KeyExchangeState,
+};
+pub use fingerprint_store::{FingerprintCheck, FingerprintStore};
+pub use fingerprint_visual::{
+    compare_fingerprints, fingerprint_randomart, format_fingerprint_display,
+};
 pub use identity::{fingerprint_of, IdentityKeyPair};
-pub use session::{CryptoSession, EncryptedData, NONCE_SIZE, test_session_pair};
+pub use session::{test_session_pair, CryptoSession, EncryptedData, NONCE_SIZE};

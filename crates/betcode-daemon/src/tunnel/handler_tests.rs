@@ -7,7 +7,15 @@ async fn make_handler() -> TunnelRequestHandler {
     let mux = Arc::new(SessionMultiplexer::with_defaults());
     let relay = Arc::new(SessionRelay::new(sub, Arc::clone(&mux), db.clone()));
     let (outbound_tx, _outbound_rx) = mpsc::channel(128);
-    TunnelRequestHandler::new("test-machine".into(), relay, mux, db, outbound_tx, None)
+    TunnelRequestHandler::new(
+        "test-machine".into(),
+        relay,
+        mux,
+        db,
+        outbound_tx,
+        None,
+        None,
+    )
 }
 
 fn req_frame(rid: &str, method: &str, data: Vec<u8>) -> TunnelFrame {
@@ -124,7 +132,9 @@ async fn list_sessions_empty() {
     assert_eq!(r.len(), 1);
     assert_eq!(r[0].frame_type, FrameType::Response as i32);
     if let Some(betcode_proto::v1::tunnel_frame::Payload::StreamData(p)) = &r[0].payload {
-        let resp = ListSessionsResponse::decode(p.encrypted.as_ref().unwrap().ciphertext.as_slice()).unwrap();
+        let resp =
+            ListSessionsResponse::decode(p.encrypted.as_ref().unwrap().ciphertext.as_slice())
+                .unwrap();
         assert_eq!(resp.sessions.len(), 0);
     } else {
         panic!("wrong payload");
@@ -143,7 +153,8 @@ async fn cancel_turn_no_session() {
     assert_eq!(r.len(), 1);
     assert_eq!(r[0].frame_type, FrameType::Response as i32);
     if let Some(betcode_proto::v1::tunnel_frame::Payload::StreamData(p)) = &r[0].payload {
-        let resp = CancelTurnResponse::decode(p.encrypted.as_ref().unwrap().ciphertext.as_slice()).unwrap();
+        let resp = CancelTurnResponse::decode(p.encrypted.as_ref().unwrap().ciphertext.as_slice())
+            .unwrap();
         assert!(!resp.was_active);
     } else {
         panic!("wrong payload");
@@ -163,7 +174,9 @@ async fn compact_session_no_messages() {
     assert_eq!(r.len(), 1);
     assert_eq!(r[0].frame_type, FrameType::Response as i32);
     if let Some(betcode_proto::v1::tunnel_frame::Payload::StreamData(p)) = &r[0].payload {
-        let resp = CompactSessionResponse::decode(p.encrypted.as_ref().unwrap().ciphertext.as_slice()).unwrap();
+        let resp =
+            CompactSessionResponse::decode(p.encrypted.as_ref().unwrap().ciphertext.as_slice())
+                .unwrap();
         assert_eq!(resp.messages_before, 0);
     } else {
         panic!("wrong payload");
@@ -183,7 +196,8 @@ async fn request_input_lock_grants() {
     assert_eq!(r.len(), 1);
     assert_eq!(r[0].frame_type, FrameType::Response as i32);
     if let Some(betcode_proto::v1::tunnel_frame::Payload::StreamData(p)) = &r[0].payload {
-        let resp = InputLockResponse::decode(p.encrypted.as_ref().unwrap().ciphertext.as_slice()).unwrap();
+        let resp =
+            InputLockResponse::decode(p.encrypted.as_ref().unwrap().ciphertext.as_slice()).unwrap();
         assert!(resp.granted);
     } else {
         panic!("wrong payload");
@@ -221,7 +235,15 @@ async fn make_handler_with_outbound() -> (TunnelRequestHandler, mpsc::Receiver<T
     let mux = Arc::new(SessionMultiplexer::with_defaults());
     let relay = Arc::new(SessionRelay::new(sub, Arc::clone(&mux), db.clone()));
     let (outbound_tx, outbound_rx) = mpsc::channel(128);
-    let handler = TunnelRequestHandler::new("test-machine".into(), relay, mux, db, outbound_tx, None);
+    let handler = TunnelRequestHandler::new(
+        "test-machine".into(),
+        relay,
+        mux,
+        db,
+        outbound_tx,
+        None,
+        None,
+    );
     (handler, outbound_rx)
 }
 
@@ -304,7 +326,15 @@ async fn converse_start_session_failure_sends_error_cleans_active() {
     let mux = Arc::new(SessionMultiplexer::with_defaults());
     let relay = Arc::new(SessionRelay::new(sub, Arc::clone(&mux), db.clone()));
     let (outbound_tx, mut rx) = mpsc::channel(128);
-    let h = TunnelRequestHandler::new("test-machine".into(), relay, mux, db, outbound_tx, None);
+    let h = TunnelRequestHandler::new(
+        "test-machine".into(),
+        relay,
+        mux,
+        db,
+        outbound_tx,
+        None,
+        None,
+    );
 
     // Send StartConversation — this defers the subprocess spawn
     let data = make_start_request("sess-fail");
@@ -440,7 +470,11 @@ use betcode_crypto::CryptoSession;
 // --- E2E encryption tests ---
 
 /// Helper that returns handler with crypto + client session + outbound receiver.
-async fn make_handler_with_crypto() -> (TunnelRequestHandler, Arc<CryptoSession>, mpsc::Receiver<TunnelFrame>) {
+async fn make_handler_with_crypto() -> (
+    TunnelRequestHandler,
+    Arc<CryptoSession>,
+    mpsc::Receiver<TunnelFrame>,
+) {
     let db = Database::open_in_memory().await.unwrap();
     let sub = Arc::new(SubprocessManager::new(5));
     let mux = Arc::new(SessionMultiplexer::with_defaults());
@@ -458,6 +492,7 @@ async fn make_handler_with_crypto() -> (TunnelRequestHandler, Arc<CryptoSession>
         db,
         outbound_tx,
         Some(server_crypto),
+        None,
     );
     (handler, client_crypto, outbound_rx)
 }
@@ -510,7 +545,10 @@ async fn handler_decrypts_incoming_encrypted_request() {
     // Response should be encrypted — verify we can decrypt it
     if let Some(betcode_proto::v1::tunnel_frame::Payload::StreamData(p)) = &r[0].payload {
         let enc = p.encrypted.as_ref().unwrap();
-        assert!(!enc.nonce.is_empty(), "nonce must be present for encrypted response");
+        assert!(
+            !enc.nonce.is_empty(),
+            "nonce must be present for encrypted response"
+        );
         let decrypted = client_crypto.decrypt(&enc.ciphertext, &enc.nonce).unwrap();
         let resp = ListSessionsResponse::decode(decrypted.as_slice()).unwrap();
         assert_eq!(resp.sessions.len(), 0);
@@ -581,12 +619,7 @@ async fn handler_rejects_tampered_ciphertext() {
         limit: 10,
         offset: 0,
     };
-    let mut frame = encrypted_req_frame(
-        "etc1",
-        METHOD_LIST_SESSIONS,
-        encode(&req),
-        &client_crypto,
-    );
+    let mut frame = encrypted_req_frame("etc1", METHOD_LIST_SESSIONS, encode(&req), &client_crypto);
     // Tamper with the ciphertext
     if let Some(betcode_proto::v1::tunnel_frame::Payload::StreamData(ref mut p)) = frame.payload {
         if let Some(ref mut enc) = p.encrypted {
@@ -598,4 +631,149 @@ async fn handler_rejects_tampered_ciphertext() {
     let r = h.handle_frame(frame).await;
     assert_eq!(r.len(), 1);
     assert_eq!(r[0].frame_type, FrameType::Error as i32);
+}
+
+// --- Key exchange tests ---
+
+use betcode_crypto::{IdentityKeyPair, KeyExchangeState};
+use betcode_proto::v1::{KeyExchangeRequest, KeyExchangeResponse};
+
+/// Helper that creates a handler with identity keypair (for key exchange).
+async fn make_handler_with_identity() -> (TunnelRequestHandler, mpsc::Receiver<TunnelFrame>) {
+    let db = Database::open_in_memory().await.unwrap();
+    let sub = Arc::new(SubprocessManager::new(5));
+    let mux = Arc::new(SessionMultiplexer::with_defaults());
+    let relay = Arc::new(SessionRelay::new(sub, Arc::clone(&mux), db.clone()));
+    let (outbound_tx, outbound_rx) = mpsc::channel(128);
+    let identity = Arc::new(IdentityKeyPair::generate());
+    let handler = TunnelRequestHandler::new(
+        "test-machine".into(),
+        relay,
+        mux,
+        db,
+        outbound_tx,
+        None, // No crypto yet — will be set by key exchange
+        Some(identity),
+    );
+    (handler, outbound_rx)
+}
+
+#[tokio::test]
+async fn exchange_keys_establishes_crypto_session() {
+    let (h, _rx) = make_handler_with_identity().await;
+
+    // Client generates ephemeral keypair
+    let client_state = KeyExchangeState::new();
+    let client_pub = client_state.public_bytes();
+
+    let req = KeyExchangeRequest {
+        machine_id: "test-machine".into(),
+        identity_pubkey: Vec::new(),
+        fingerprint: String::new(),
+        ephemeral_pubkey: client_pub.to_vec(),
+    };
+
+    let r = h
+        .handle_frame(req_frame("kex1", METHOD_EXCHANGE_KEYS, encode(&req)))
+        .await;
+    assert_eq!(r.len(), 1);
+    assert_eq!(r[0].frame_type, FrameType::Response as i32);
+
+    // Parse response
+    if let Some(betcode_proto::v1::tunnel_frame::Payload::StreamData(p)) = &r[0].payload {
+        let resp = KeyExchangeResponse::decode(p.encrypted.as_ref().unwrap().ciphertext.as_slice())
+            .unwrap();
+
+        assert_eq!(resp.daemon_ephemeral_pubkey.len(), 32);
+        assert!(!resp.daemon_fingerprint.is_empty());
+
+        // Client completes key exchange
+        let client_session = client_state
+            .complete(&resp.daemon_ephemeral_pubkey)
+            .unwrap();
+
+        // Now send an encrypted request — it should be decryptable
+        let list_req = ListSessionsRequest {
+            working_directory: String::new(),
+            worktree_id: String::new(),
+            limit: 10,
+            offset: 0,
+        };
+        let r2 = h
+            .handle_frame(encrypted_req_frame(
+                "els-after-kex",
+                METHOD_LIST_SESSIONS,
+                encode(&list_req),
+                &client_session,
+            ))
+            .await;
+        assert_eq!(r2.len(), 1);
+        assert_eq!(r2[0].frame_type, FrameType::Response as i32);
+
+        // Response should be encrypted — verify we can decrypt
+        if let Some(betcode_proto::v1::tunnel_frame::Payload::StreamData(p2)) = &r2[0].payload {
+            let enc = p2.encrypted.as_ref().unwrap();
+            assert!(
+                !enc.nonce.is_empty(),
+                "response should be encrypted after key exchange"
+            );
+            let decrypted = client_session.decrypt(&enc.ciphertext, &enc.nonce).unwrap();
+            let resp2 = ListSessionsResponse::decode(decrypted.as_slice()).unwrap();
+            assert_eq!(resp2.sessions.len(), 0);
+        } else {
+            panic!("wrong payload");
+        }
+    } else {
+        panic!("wrong payload");
+    }
+}
+
+#[tokio::test]
+async fn exchange_keys_rejects_invalid_pubkey_length() {
+    let (h, _rx) = make_handler_with_identity().await;
+
+    let req = KeyExchangeRequest {
+        machine_id: "test-machine".into(),
+        identity_pubkey: Vec::new(),
+        fingerprint: String::new(),
+        ephemeral_pubkey: vec![0u8; 16], // Wrong length
+    };
+
+    let r = h
+        .handle_frame(req_frame("kex-bad", METHOD_EXCHANGE_KEYS, encode(&req)))
+        .await;
+    assert_eq!(r.len(), 1);
+    assert_eq!(r[0].frame_type, FrameType::Error as i32);
+}
+
+#[tokio::test]
+async fn exchange_keys_without_identity_still_works() {
+    // Handler without identity keypair — key exchange still produces valid session
+    let (h, _rx) = make_handler_with_outbound().await;
+
+    let client_state = KeyExchangeState::new();
+    let client_pub = client_state.public_bytes();
+
+    let req = KeyExchangeRequest {
+        machine_id: "test-machine".into(),
+        identity_pubkey: Vec::new(),
+        fingerprint: String::new(),
+        ephemeral_pubkey: client_pub.to_vec(),
+    };
+
+    let r = h
+        .handle_frame(req_frame("kex-noid", METHOD_EXCHANGE_KEYS, encode(&req)))
+        .await;
+    assert_eq!(r.len(), 1);
+    assert_eq!(r[0].frame_type, FrameType::Response as i32);
+
+    if let Some(betcode_proto::v1::tunnel_frame::Payload::StreamData(p)) = &r[0].payload {
+        let resp = KeyExchangeResponse::decode(p.encrypted.as_ref().unwrap().ciphertext.as_slice())
+            .unwrap();
+        assert_eq!(resp.daemon_ephemeral_pubkey.len(), 32);
+        // No identity = empty fingerprint
+        assert!(resp.daemon_fingerprint.is_empty());
+    } else {
+        panic!("wrong payload");
+    }
 }

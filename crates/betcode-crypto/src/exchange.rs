@@ -4,6 +4,8 @@
 //! Each side generates an ephemeral keypair per session, performs ECDH,
 //! and derives a symmetric session key via HKDF-SHA256.
 
+use std::sync::Arc;
+
 use rand::rngs::OsRng;
 use x25519_dalek::{PublicKey, StaticSecret};
 
@@ -18,7 +20,7 @@ pub struct KeyExchangeState {
     /// Our ephemeral public key to send to the peer.
     ephemeral_public: PublicKey,
     /// Our identity keypair (for signing/verification in future).
-    identity: Option<IdentityKeyPair>,
+    identity: Option<Arc<IdentityKeyPair>>,
 }
 
 impl Default for KeyExchangeState {
@@ -40,7 +42,10 @@ impl KeyExchangeState {
     }
 
     /// Start a new key exchange with an identity keypair.
-    pub fn with_identity(identity: IdentityKeyPair) -> Self {
+    ///
+    /// Accepts `Arc<IdentityKeyPair>` to avoid reconstructing the keypair
+    /// from raw secret bytes, which would unnecessarily expose key material.
+    pub fn with_identity(identity: Arc<IdentityKeyPair>) -> Self {
         let ephemeral_secret = StaticSecret::random_from_rng(OsRng);
         let ephemeral_public = PublicKey::from(&ephemeral_secret);
         Self {
@@ -97,8 +102,29 @@ pub fn perform_key_exchange() -> Result<(CryptoSession, CryptoSession), CryptoEr
 }
 
 /// Verify that a remote public key matches an expected fingerprint.
+///
+/// Uses constant-time comparison to prevent timing side-channel attacks.
 pub fn verify_fingerprint(pubkey_bytes: &[u8; 32], expected_fingerprint: &str) -> bool {
-    fingerprint_of(pubkey_bytes) == expected_fingerprint
+    let actual = fingerprint_of(pubkey_bytes);
+    constant_time_str_eq(&actual, expected_fingerprint)
+}
+
+/// Constant-time string equality comparison.
+///
+/// Compares byte-by-byte using `subtle::ConstantTimeEq` to prevent
+/// timing side-channel leakage of which character differs.
+///
+/// **Known limitation:** The length check returns early if lengths differ,
+/// leaking whether the lengths match. This is acceptable for our use case
+/// because all SHA-256 fingerprints are fixed-length (95 characters).
+/// If this function is reused for variable-length secrets, the length
+/// check must be made constant-time (e.g., by padding to a fixed length).
+pub fn constant_time_str_eq(a: &str, b: &str) -> bool {
+    use subtle::ConstantTimeEq;
+    if a.len() != b.len() {
+        return false;
+    }
+    a.as_bytes().ct_eq(b.as_bytes()).into()
 }
 
 #[cfg(test)]
@@ -156,7 +182,7 @@ mod tests {
 
     #[test]
     fn key_exchange_state_with_identity() {
-        let identity = IdentityKeyPair::generate();
+        let identity = Arc::new(IdentityKeyPair::generate());
         let expected_fp = identity.fingerprint();
         let state = KeyExchangeState::with_identity(identity);
 
@@ -170,7 +196,10 @@ mod tests {
         let result = state.complete(&[0u8; 16]);
         assert!(matches!(
             result,
-            Err(CryptoError::InvalidKeyLength { expected: 32, actual: 16 })
+            Err(CryptoError::InvalidKeyLength {
+                expected: 32,
+                actual: 16
+            })
         ));
     }
 }

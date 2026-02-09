@@ -12,6 +12,7 @@ use rand::rngs::OsRng;
 use rand::RngCore;
 use sha2::Sha256;
 use x25519_dalek::{PublicKey, StaticSecret};
+use zeroize::Zeroize;
 
 use crate::error::CryptoError;
 
@@ -55,6 +56,7 @@ impl CryptoSession {
 
         let key = Key::from_slice(&key_bytes);
         let cipher = ChaCha20Poly1305::new(key);
+        key_bytes.zeroize();
 
         let mut nonce_prefix = [0u8; 8];
         OsRng.fill_bytes(&mut nonce_prefix);
@@ -79,7 +81,7 @@ impl CryptoSession {
 
     /// Encrypt plaintext data.
     pub fn encrypt(&self, plaintext: &[u8]) -> Result<EncryptedData, CryptoError> {
-        let nonce_bytes = self.next_nonce();
+        let nonce_bytes = self.next_nonce()?;
         let nonce = Nonce::from_slice(&nonce_bytes);
 
         let ciphertext = self
@@ -110,12 +112,36 @@ impl CryptoSession {
     /// Generate the next unique nonce.
     ///
     /// Layout: [4-byte counter (big-endian)] [8-byte random prefix]
-    fn next_nonce(&self) -> [u8; NONCE_SIZE] {
-        let counter = self.nonce_counter.fetch_add(1, Ordering::Relaxed);
-        let mut nonce = [0u8; NONCE_SIZE];
-        nonce[..4].copy_from_slice(&counter.to_be_bytes());
-        nonce[4..].copy_from_slice(&self.nonce_prefix);
-        nonce
+    ///
+    /// Uses compare-and-swap to prevent counter wrapping under concurrent access.
+    /// Returns `NonceExhausted` if the counter has reached `u32::MAX`,
+    /// meaning the session must be rekeyed.
+    ///
+    /// `Ordering::Relaxed` is sufficient here because we only need the counter
+    /// to produce unique values — no other memory operations depend on the
+    /// counter's synchronization. The `cipher` and `nonce_prefix` fields are
+    /// set once at construction and never modified.
+    fn next_nonce(&self) -> Result<[u8; NONCE_SIZE], CryptoError> {
+        loop {
+            let current = self.nonce_counter.load(Ordering::Relaxed);
+            if current == u32::MAX {
+                return Err(CryptoError::NonceExhausted);
+            }
+            match self.nonce_counter.compare_exchange_weak(
+                current,
+                current + 1,
+                Ordering::Relaxed,
+                Ordering::Relaxed,
+            ) {
+                Ok(prev) => {
+                    let mut nonce = [0u8; NONCE_SIZE];
+                    nonce[..4].copy_from_slice(&prev.to_be_bytes());
+                    nonce[4..].copy_from_slice(&self.nonce_prefix);
+                    return Ok(nonce);
+                }
+                Err(_) => continue,
+            }
+        }
     }
 
     /// Get the current nonce counter value (for testing).
@@ -125,6 +151,9 @@ impl CryptoSession {
 }
 
 /// Derive a 32-byte session key from an X25519 ECDH shared secret.
+///
+/// **Note:** The caller is responsible for zeroizing the returned key bytes
+/// when they are no longer needed.
 pub fn derive_session_key(shared_secret: &[u8; 32]) -> Result<[u8; 32], CryptoError> {
     let hk = Hkdf::<Sha256>::new(None, shared_secret);
     let mut key = [0u8; 32];
@@ -200,7 +229,9 @@ mod tests {
         let plaintext = b"Hello, encrypted world!";
 
         let encrypted = client.encrypt(plaintext).unwrap();
-        let decrypted = server.decrypt(&encrypted.ciphertext, &encrypted.nonce).unwrap();
+        let decrypted = server
+            .decrypt(&encrypted.ciphertext, &encrypted.nonce)
+            .unwrap();
 
         assert_eq!(decrypted, plaintext);
     }
@@ -210,7 +241,9 @@ mod tests {
         let (client, server) = test_session_pair().unwrap();
 
         let encrypted = client.encrypt(b"").unwrap();
-        let decrypted = server.decrypt(&encrypted.ciphertext, &encrypted.nonce).unwrap();
+        let decrypted = server
+            .decrypt(&encrypted.ciphertext, &encrypted.nonce)
+            .unwrap();
 
         assert!(decrypted.is_empty());
     }
@@ -221,7 +254,9 @@ mod tests {
         let plaintext = vec![0xABu8; 1024 * 1024]; // 1MB
 
         let encrypted = client.encrypt(&plaintext).unwrap();
-        let decrypted = server.decrypt(&encrypted.ciphertext, &encrypted.nonce).unwrap();
+        let decrypted = server
+            .decrypt(&encrypted.ciphertext, &encrypted.nonce)
+            .unwrap();
 
         assert_eq!(decrypted, plaintext);
     }
@@ -322,6 +357,22 @@ mod tests {
     fn decrypt_with_invalid_nonce_length_returns_error() {
         let (_, server) = test_session_pair().unwrap();
         let result = server.decrypt(b"ciphertext", &[0u8; 8]); // Wrong nonce length
-        assert!(matches!(result, Err(CryptoError::InvalidNonceLength { .. })));
+        assert!(matches!(
+            result,
+            Err(CryptoError::InvalidNonceLength { .. })
+        ));
+    }
+
+    #[test]
+    fn nonce_exhaustion_returns_error() {
+        let (client, _server) = test_session_pair().unwrap();
+        // Set the counter to u32::MAX so the next encrypt triggers exhaustion
+        client.nonce_counter.store(u32::MAX, Ordering::Relaxed);
+        let result = client.encrypt(b"should fail");
+        assert!(
+            matches!(result, Err(CryptoError::NonceExhausted)),
+            "expected NonceExhausted, got {:?}",
+            result
+        );
     }
 }
