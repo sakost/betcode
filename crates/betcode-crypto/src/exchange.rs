@@ -230,4 +230,39 @@ mod tests {
             })
         ));
     }
+
+    #[test]
+    fn ephemeral_keys_are_unique_across_exchanges() {
+        let state1 = KeyExchangeState::new();
+        let state2 = KeyExchangeState::new();
+        let state3 = KeyExchangeState::new();
+
+        let pub1 = state1.public_bytes();
+        let pub2 = state2.public_bytes();
+        let pub3 = state3.public_bytes();
+
+        assert_ne!(pub1, pub2);
+        assert_ne!(pub2, pub3);
+        assert_ne!(pub1, pub3);
+    }
+
+    #[test]
+    fn complete_with_empty_key_returns_error() {
+        let state = KeyExchangeState::new();
+        let result = state.complete(&[]);
+        assert!(matches!(
+            result,
+            Err(CryptoError::InvalidKeyLength {
+                expected: 32,
+                actual: 0
+            })
+        ));
+    }
+
+    #[test]
+    fn key_exchange_state_default_has_no_identity() {
+        let state = KeyExchangeState::default();
+        assert!(state.identity_fingerprint().is_none());
+        assert_eq!(state.public_bytes().len(), 32);
+    }
 }

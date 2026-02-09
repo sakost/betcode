@@ -241,4 +241,50 @@ mod tests {
 
         std::fs::remove_dir_all(&dir).ok();
     }
+
+    #[test]
+    fn load_wrong_byte_count_file() {
+        let dir = std::env::temp_dir().join(format!("betcode-test-{}", rand::random::<u64>()));
+        let path = dir.join("identity.key");
+        std::fs::create_dir_all(&dir).unwrap();
+
+        // Write 16 bytes instead of 32 — read_exact should fail
+        std::fs::write(&path, &[0u8; 16]).unwrap();
+        let result = IdentityKeyPair::load_from_file(&path);
+        assert!(result.is_err());
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn load_nonexistent_file_returns_error() {
+        let result = IdentityKeyPair::load_from_file(Path::new("/nonexistent/identity.key"));
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn debug_impl_redacts_secret() {
+        let kp = IdentityKeyPair::generate();
+        let debug_output = format!("{:?}", kp);
+        assert!(
+            debug_output.contains("[REDACTED]"),
+            "Debug output should redact secret key"
+        );
+        assert!(
+            !debug_output.contains(&hex::encode(kp.secret_bytes())),
+            "Debug output must not contain raw secret bytes"
+        );
+    }
+
+    #[test]
+    fn public_key_accessor_returns_correct_key() {
+        let kp = IdentityKeyPair::generate();
+        assert_eq!(kp.public_key().as_bytes(), &kp.public_bytes());
+    }
+
+    #[test]
+    fn secret_accessor_matches_secret_bytes() {
+        let kp = IdentityKeyPair::generate();
+        assert_eq!(kp.secret().to_bytes(), kp.secret_bytes());
+    }
 }

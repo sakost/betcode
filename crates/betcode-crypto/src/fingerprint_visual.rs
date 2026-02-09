@@ -229,4 +229,37 @@ mod tests {
         assert!(!matches);
         assert!(output.contains("DO NOT MATCH"));
     }
+
+    #[test]
+    fn randomart_with_empty_fingerprint() {
+        // Should not panic with empty input
+        let art = fingerprint_randomart("", "empty");
+        let lines: Vec<&str> = art.lines().collect();
+        assert_eq!(lines.len(), HEIGHT + 2);
+        for line in &lines {
+            assert_eq!(line.len(), WIDTH + 2);
+        }
+    }
+
+    #[test]
+    fn randomart_with_empty_title() {
+        let art = fingerprint_randomart("aa:bb:cc", "");
+        let first_line = art.lines().next().unwrap();
+        assert_eq!(first_line.len(), WIDTH + 2);
+        // Should be all dashes between the + markers
+        assert!(first_line.starts_with('+'));
+        assert!(first_line.ends_with('+'));
+    }
+
+    #[test]
+    fn format_fingerprint_single_pair() {
+        let display = format_fingerprint_display("aa");
+        assert_eq!(display, "aa");
+    }
+
+    #[test]
+    fn format_fingerprint_empty_string() {
+        let display = format_fingerprint_display("");
+        assert_eq!(display, "");
+    }
 }

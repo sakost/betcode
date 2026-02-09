@@ -223,4 +223,57 @@ mod tests {
         assert_eq!(store.daemons["m1"].last_seen, 2000);
         assert_eq!(store.daemons["m1"].first_seen, 1000);
     }
+
+    #[test]
+    fn load_corrupted_json_returns_error() {
+        let dir = std::env::temp_dir().join(format!("betcode-fp-test-{}", rand::random::<u64>()));
+        let path = dir.join("known_daemons.json");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(&path, "{ not valid json !!!").unwrap();
+
+        let result = FingerprintStore::load(&path);
+        assert!(result.is_err());
+        assert!(matches!(
+            result.unwrap_err(),
+            CryptoError::SerializationError(_)
+        ));
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn mark_verified_noop_for_unknown_machine() {
+        let mut store = FingerprintStore::default();
+        // Should not panic or error for unknown machine_id
+        store.mark_verified("nonexistent");
+        assert!(store.daemons.is_empty());
+    }
+
+    #[test]
+    fn update_fingerprint_noop_for_unknown_machine() {
+        let mut store = FingerprintStore::default();
+        // Should not panic or error for unknown machine_id
+        store.update_fingerprint("nonexistent", "aa:bb:cc", 1000);
+        assert!(store.daemons.is_empty());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn save_to_readonly_dir_fails() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = std::env::temp_dir().join(format!("betcode-fp-ro-{}", rand::random::<u64>()));
+        std::fs::create_dir_all(&dir).unwrap();
+        // Make directory read-only
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o444)).unwrap();
+
+        let path = dir.join("subdir").join("known_daemons.json");
+        let store = FingerprintStore::default();
+        let result = store.save(&path);
+        assert!(result.is_err());
+
+        // Restore permissions for cleanup
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o755)).unwrap();
+        std::fs::remove_dir_all(&dir).ok();
+    }
 }

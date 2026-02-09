@@ -419,4 +419,39 @@ mod tests {
             result
         );
     }
+
+    #[test]
+    fn decrypt_empty_ciphertext() {
+        let (_, server) = test_session_pair().unwrap();
+        // Empty ciphertext with valid-length nonce should fail (missing auth tag)
+        let result = server.decrypt(&[], &[0u8; NONCE_SIZE]);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn decrypt_with_invalid_nonce_length_zero() {
+        let (_, server) = test_session_pair().unwrap();
+        let result = server.decrypt(b"data", &[]);
+        assert!(matches!(
+            result,
+            Err(CryptoError::InvalidNonceLength {
+                expected: NONCE_SIZE,
+                actual: 0
+            })
+        ));
+    }
+
+    #[test]
+    fn from_shared_secret_produces_working_session() {
+        let secret = [42u8; 32];
+        let session1 = CryptoSession::from_shared_secret(&secret).unwrap();
+        let session2 = CryptoSession::from_shared_secret(&secret).unwrap();
+
+        // Both sessions derived from same secret should decrypt each other
+        let encrypted = session1.encrypt(b"test").unwrap();
+        let decrypted = session2
+            .decrypt(&encrypted.ciphertext, &encrypted.nonce)
+            .unwrap();
+        assert_eq!(decrypted, b"test");
+    }
 }

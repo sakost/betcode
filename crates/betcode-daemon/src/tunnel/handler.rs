@@ -29,11 +29,21 @@ pub const METHOD_CONVERSE: &str = "AgentService/Converse";
 pub const METHOD_RESUME_SESSION: &str = "AgentService/ResumeSession";
 pub const METHOD_EXCHANGE_KEYS: &str = "AgentService/ExchangeKeys";
 
+/// Default maximum number of sessions returned by ListSessions.
+const DEFAULT_LIST_SESSIONS_LIMIT: u32 = 50;
+
+/// Minimum number of messages to keep during session compaction.
+const MIN_COMPACTION_KEEP: u32 = 10;
+
+/// Estimated tokens saved per deleted message during compaction.
+const ESTIMATED_TOKENS_PER_MESSAGE: u32 = 100;
+
+/// Expected X25519 public key length in bytes.
+const X25519_PUBKEY_LEN: usize = 32;
+
 /// Info about an active streaming session routed through the tunnel.
 struct ActiveStream {
     session_id: String,
-    #[allow(dead_code)]
-    client_id: String,
     /// Deferred session config — subprocess is only started on first UserMessage.
     pending_config: Option<crate::relay::RelaySessionConfig>,
 }
@@ -127,12 +137,15 @@ impl TunnelRequestHandler {
     }
 
     /// Decrypt an EncryptedPayload using the session key, or passthrough if no crypto.
+    ///
+    /// Clones the `Arc<CryptoSession>` and drops the read lock immediately so
+    /// the actual decryption (CPU-bound) does not hold the lock.
     async fn decrypt_payload(&self, enc: &EncryptedPayload) -> Result<Vec<u8>, String> {
-        let crypto = self.crypto.read().await;
-        match crypto.as_ref() {
+        let crypto = self.crypto.read().await.clone();
+        match crypto {
             Some(crypto) => crypto
                 .decrypt(&enc.ciphertext, &enc.nonce)
-                .map_err(|e| format!("Decryption failed: {}", e)),
+                .map_err(|e| format!("decryption failed: {e}")),
             None => {
                 warn!("Decrypting payload without crypto session — data is not E2E encrypted");
                 Ok(enc.ciphertext.clone())
@@ -141,8 +154,10 @@ impl TunnelRequestHandler {
     }
 
     /// Encrypt data into an EncryptedPayload using the session key, or passthrough.
+    ///
+    /// Clones the `Arc<CryptoSession>` and drops the read lock immediately.
     async fn encrypt_payload(&self, data: &[u8]) -> Result<EncryptedPayload, String> {
-        let crypto = self.crypto.read().await;
+        let crypto = self.crypto.read().await.clone();
         if crypto.is_none() {
             warn!("Encrypting payload without crypto session — data is not E2E encrypted");
         }
@@ -226,7 +241,11 @@ impl TunnelRequestHandler {
         } else {
             Some(req.working_directory.as_str())
         };
-        let limit = if req.limit == 0 { 50 } else { req.limit };
+        let limit = if req.limit == 0 {
+            DEFAULT_LIST_SESSIONS_LIMIT
+        } else {
+            req.limit
+        };
 
         match self.db.list_sessions(working_dir, limit, req.offset).await {
             Ok(sessions) => {
@@ -318,7 +337,9 @@ impl TunnelRequestHandler {
                 )]
             }
         };
-        let keep_count = (messages_before / 2).max(10).min(messages_before);
+        let keep_count = (messages_before / 2)
+            .max(MIN_COMPACTION_KEEP)
+            .min(messages_before);
         let cutoff = max_seq - keep_count as i64;
         if cutoff <= 0 {
             return vec![
@@ -345,7 +366,7 @@ impl TunnelRequestHandler {
         };
         let _ = self.db.update_compaction_sequence(sid, cutoff).await;
         let messages_after = messages_before - deleted as u32;
-        let tokens_saved = deleted as u32 * 100;
+        let tokens_saved = deleted as u32 * ESTIMATED_TOKENS_PER_MESSAGE;
         info!(session_id = %sid, messages_before, messages_after, "Session compacted via tunnel");
         vec![
             self.response_frame_or_error(
@@ -614,7 +635,6 @@ impl TunnelRequestHandler {
             request_id.to_string(),
             ActiveStream {
                 session_id: sid.clone(),
-                client_id: client_id.clone(),
                 pending_config: Some(config),
             },
         );
@@ -709,22 +729,20 @@ impl TunnelRequestHandler {
         let req = match KeyExchangeRequest::decode(data) {
             Ok(r) => r,
             Err(e) => {
+                warn!(request_id = %request_id, error = %e, "Failed to decode KeyExchangeRequest");
                 return vec![Self::error_response(
                     request_id,
                     TunnelErrorCode::Internal,
-                    &format!("Decode error: {}", e),
-                )]
+                    "Invalid key exchange request",
+                )];
             }
         };
 
-        if req.ephemeral_pubkey.len() != 32 {
+        if req.ephemeral_pubkey.len() != X25519_PUBKEY_LEN {
             return vec![Self::error_response(
                 request_id,
                 TunnelErrorCode::Internal,
-                &format!(
-                    "Invalid ephemeral pubkey length: expected 32, got {}",
-                    req.ephemeral_pubkey.len()
-                ),
+                "Invalid ephemeral public key length",
             )];
         }
 
@@ -749,11 +767,12 @@ impl TunnelRequestHandler {
         let session = match state.complete(&req.ephemeral_pubkey) {
             Ok(s) => s,
             Err(e) => {
+                warn!(request_id = %request_id, error = %e, "Key exchange failed");
                 return vec![Self::error_response(
                     request_id,
                     TunnelErrorCode::Internal,
-                    &format!("Key exchange failed: {}", e),
-                )]
+                    "Key exchange failed",
+                )];
             }
         };
 
@@ -911,7 +930,8 @@ impl TunnelRequestHandler {
     ) -> Result<TunnelFrame, String> {
         let mut buf = Vec::with_capacity(msg.encoded_len());
         msg.encode(&mut buf)
-            .map_err(|e| format!("Prost encode failed: {}", e))?;
+            .map_err(|e| format!("encode failed: {e}"))?;
+        let encrypted = make_encrypted_payload(None, &buf)?;
         Ok(TunnelFrame {
             request_id: request_id.to_string(),
             frame_type: FrameType::Response as i32,
@@ -919,11 +939,7 @@ impl TunnelRequestHandler {
             payload: Some(betcode_proto::v1::tunnel_frame::Payload::StreamData(
                 StreamPayload {
                     method: String::new(),
-                    encrypted: Some(EncryptedPayload {
-                        ciphertext: buf,
-                        nonce: Vec::new(),
-                        ephemeral_pubkey: Vec::new(),
-                    }),
+                    encrypted: Some(encrypted),
                     sequence: 0,
                     metadata: HashMap::new(),
                 },

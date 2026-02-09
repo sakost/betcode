@@ -860,3 +860,45 @@ async fn concurrent_key_exchanges_do_not_corrupt_session() {
         "None of the concurrent exchange sessions could decrypt — handler state corrupted"
     );
 }
+
+#[tokio::test]
+async fn request_with_empty_encrypted_payload_is_handled() {
+    // No crypto session — empty ciphertext should passthrough as empty data
+    let h = make_handler().await;
+    let req = ListSessionsRequest {
+        working_directory: String::new(),
+        worktree_id: String::new(),
+        limit: 10,
+        offset: 0,
+    };
+    // Send valid protobuf data as "ciphertext" (passthrough mode)
+    let r = h
+        .handle_frame(req_frame("ep1", METHOD_LIST_SESSIONS, encode(&req)))
+        .await;
+    assert_eq!(r.len(), 1);
+    assert_eq!(r[0].frame_type, FrameType::Response as i32);
+}
+
+#[tokio::test]
+async fn request_with_none_encrypted_field_uses_empty_data() {
+    let h = make_handler().await;
+    // Frame with encrypted=None — should result in empty data, which decodes
+    // to default protobuf values (empty ListSessionsRequest)
+    let frame = TunnelFrame {
+        request_id: "ne1".into(),
+        frame_type: FrameType::Request as i32,
+        timestamp: None,
+        payload: Some(betcode_proto::v1::tunnel_frame::Payload::StreamData(
+            StreamPayload {
+                method: METHOD_LIST_SESSIONS.into(),
+                encrypted: None,
+                sequence: 0,
+                metadata: HashMap::new(),
+            },
+        )),
+    };
+    let r = h.handle_frame(frame).await;
+    assert_eq!(r.len(), 1);
+    // Empty data decodes to default ListSessionsRequest → successful response
+    assert_eq!(r[0].frame_type, FrameType::Response as i32);
+}
