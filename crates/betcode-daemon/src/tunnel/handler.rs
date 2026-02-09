@@ -1027,11 +1027,48 @@ impl TunnelRequestHandler {
         tokio::spawn(async move {
             let mut seq = 0u64;
             for msg in messages {
-                let bytes = match base64_decode(&msg.payload) {
+                let raw_bytes = match base64_decode(&msg.payload) {
                     Ok(b) => b,
                     Err(_) => continue,
                 };
-                let encrypted = match make_encrypted_payload(crypto.as_deref(), &bytes) {
+
+                // Match the converse event forwarder: when crypto is active,
+                // wrap in app-layer EncryptedEnvelope so the relay sees valid
+                // protobuf. Skip tunnel-layer encryption (redundant with app-layer).
+                let wire_bytes = if let Some(ref session) = crypto {
+                    let enc_data = match session.encrypt(&raw_bytes) {
+                        Ok(ed) => ed,
+                        Err(e) => {
+                            error!(request_id = %rid, error = %e, "App-layer encryption failed in resume");
+                            continue;
+                        }
+                    };
+                    let wrapper = betcode_proto::v1::AgentEvent {
+                        sequence: seq,
+                        timestamp: None,
+                        parent_tool_use_id: String::new(),
+                        event: Some(betcode_proto::v1::agent_event::Event::Encrypted(
+                            betcode_proto::v1::EncryptedEnvelope {
+                                ciphertext: enc_data.ciphertext,
+                                nonce: enc_data.nonce.to_vec(),
+                            },
+                        )),
+                    };
+                    let mut buf = Vec::with_capacity(wrapper.encoded_len());
+                    if wrapper.encode(&mut buf).is_err() {
+                        continue;
+                    }
+                    buf
+                } else {
+                    raw_bytes
+                };
+
+                let tunnel_crypto = if crypto.is_some() {
+                    None
+                } else {
+                    crypto.as_deref()
+                };
+                let encrypted = match make_encrypted_payload(tunnel_crypto, &wire_bytes) {
                     Ok(enc) => enc,
                     Err(e) => {
                         error!(request_id = %rid, error = %e, "Encryption failed in resume replay");

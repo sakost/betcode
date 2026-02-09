@@ -1377,6 +1377,182 @@ async fn relay_forwarded_plaintext_request_rejected_when_crypto_active() {
     assert!(!has_active_stream, "plaintext request should not create a stream");
 }
 
+/// Verify that resume_session with E2E crypto produces frames the relay can decode.
+///
+/// The relay extracts `ciphertext` and decodes it as `AgentEvent`. When crypto is
+/// active, the daemon must wrap events in `AgentEvent::Encrypted` (app-layer) so
+/// the relay sees valid protobuf, not raw encrypted bytes.
+#[tokio::test]
+async fn resume_session_with_crypto_produces_decodable_frames() {
+    let (h, _client_crypto, mut rx) = make_handler_with_crypto().await;
+
+    // Store an event in the DB the same way pipeline.rs does (base64-encoded protobuf)
+    let event = AgentEvent {
+        sequence: 1,
+        timestamp: None,
+        parent_tool_use_id: String::new(),
+        event: Some(betcode_proto::v1::agent_event::Event::TextDelta(
+            betcode_proto::v1::TextDelta {
+                text: "Hello from history".into(),
+                is_complete: true,
+            },
+        )),
+    };
+    let mut buf = Vec::new();
+    event.encode(&mut buf).unwrap();
+    let payload = betcode_core::db::base64_encode(&buf);
+    h.db()
+        .create_session("resume-enc1", "model", "/tmp")
+        .await
+        .unwrap();
+    h.db()
+        .insert_message("resume-enc1", 1, "assistant", &payload)
+        .await
+        .unwrap();
+
+    // Call handle_resume_session
+    let resume_req = betcode_proto::v1::ResumeSessionRequest {
+        session_id: "resume-enc1".into(),
+        from_sequence: 0,
+    };
+    let _responses = h
+        .handle_frame(encrypted_req_frame(
+            "resume1",
+            "AgentService/ResumeSession",
+            encode(&resume_req),
+            &_client_crypto,
+        ))
+        .await;
+
+    // The resume handler sends frames async via outbound_tx. Collect them.
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+
+    let mut decoded_events = Vec::new();
+    while let Ok(frame) = rx.try_recv() {
+        if frame.frame_type == FrameType::StreamData as i32 {
+            if let Some(betcode_proto::v1::tunnel_frame::Payload::StreamData(p)) = frame.payload {
+                let data = p
+                    .encrypted
+                    .as_ref()
+                    .map(|e| &e.ciphertext[..])
+                    .unwrap_or(&[]);
+                // This is what the relay does — decode ciphertext as AgentEvent.
+                // It MUST succeed (no protobuf decode error).
+                match AgentEvent::decode(data) {
+                    Ok(evt) => decoded_events.push(evt),
+                    Err(e) => panic!(
+                        "Relay cannot decode resume frame as AgentEvent: {}. \
+                         This means the daemon sent encrypted bytes without \
+                         wrapping in EncryptedEnvelope.",
+                        e
+                    ),
+                }
+            }
+        }
+    }
+    assert!(
+        !decoded_events.is_empty(),
+        "Expected at least one decodable event from resume"
+    );
+    // The relay sees an AgentEvent::Encrypted wrapper (it can't decrypt, but it can decode)
+    let first = &decoded_events[0];
+    assert!(
+        matches!(
+            first.event,
+            Some(betcode_proto::v1::agent_event::Event::Encrypted(_))
+        ),
+        "Resume events should be app-layer encrypted (EncryptedEnvelope), got: {:?}",
+        first.event
+    );
+}
+
+/// Verify that resume_session WITHOUT crypto sends plain events (no encryption wrapper).
+#[tokio::test]
+async fn resume_session_without_crypto_sends_plain_events() {
+    let db = Database::open_in_memory().await.unwrap();
+    let sub = Arc::new(SubprocessManager::new(5));
+    let mux = Arc::new(SessionMultiplexer::with_defaults());
+    let relay = Arc::new(SessionRelay::new(sub, Arc::clone(&mux), db.clone()));
+    let (outbound_tx, mut rx) = mpsc::channel(128);
+    let h = TunnelRequestHandler::new(
+        "test-machine".into(),
+        relay,
+        mux,
+        db.clone(),
+        outbound_tx,
+        None,
+        None,
+    );
+
+    // Store an event
+    let event = AgentEvent {
+        sequence: 1,
+        timestamp: None,
+        parent_tool_use_id: String::new(),
+        event: Some(betcode_proto::v1::agent_event::Event::TextDelta(
+            betcode_proto::v1::TextDelta {
+                text: "Hello plain".into(),
+                is_complete: true,
+            },
+        )),
+    };
+    let mut buf = Vec::new();
+    event.encode(&mut buf).unwrap();
+    let payload = betcode_core::db::base64_encode(&buf);
+    db.create_session("resume-plain1", "model", "/tmp")
+        .await
+        .unwrap();
+    db.insert_message("resume-plain1", 1, "assistant", &payload)
+        .await
+        .unwrap();
+
+    // Call handle_resume_session (no crypto)
+    let resume_req = betcode_proto::v1::ResumeSessionRequest {
+        session_id: "resume-plain1".into(),
+        from_sequence: 0,
+    };
+    let _responses = h
+        .handle_frame(req_frame(
+            "resume2",
+            "AgentService/ResumeSession",
+            encode(&resume_req),
+        ))
+        .await;
+
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+
+    let mut decoded_events = Vec::new();
+    while let Ok(frame) = rx.try_recv() {
+        if frame.frame_type == FrameType::StreamData as i32 {
+            if let Some(betcode_proto::v1::tunnel_frame::Payload::StreamData(p)) = frame.payload {
+                let data = p
+                    .encrypted
+                    .as_ref()
+                    .map(|e| &e.ciphertext[..])
+                    .unwrap_or(&[]);
+                match AgentEvent::decode(data) {
+                    Ok(evt) => decoded_events.push(evt),
+                    Err(e) => panic!("Cannot decode plain resume frame: {}", e),
+                }
+            }
+        }
+    }
+    assert!(
+        !decoded_events.is_empty(),
+        "Expected at least one event from plain resume"
+    );
+    // Without crypto, the event should be a plain TextDelta (not Encrypted)
+    let first = &decoded_events[0];
+    assert!(
+        matches!(
+            first.event,
+            Some(betcode_proto::v1::agent_event::Event::TextDelta(_))
+        ),
+        "Plain resume events should be unwrapped TextDelta, got: {:?}",
+        first.event
+    );
+}
+
 /// Verify that QuestionResponse requests are handled in the tunnel handler
 /// (not silently dropped by the catch-all `_ =>` arm).
 #[tokio::test]
