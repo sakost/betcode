@@ -146,16 +146,27 @@ impl TunnelRequestHandler {
 
     /// Decrypt an EncryptedPayload using the session key, or passthrough if no crypto.
     ///
+    /// When the nonce is empty, the payload is treated as plaintext passthrough.
+    /// This happens when the relay forwards data without tunnel-layer encryption
+    /// (the relay doesn't have the crypto keys). App-layer encryption
+    /// (EncryptedEnvelope) handles the actual E2E protection.
+    ///
     /// Clones the `Arc<CryptoSession>` and drops the read lock immediately so
     /// the actual decryption (CPU-bound) does not hold the lock.
     async fn decrypt_payload(&self, enc: &EncryptedPayload) -> Result<Vec<u8>, String> {
+        // Empty nonce = relay passthrough (relay doesn't tunnel-encrypt).
+        // App-layer EncryptedEnvelope handles E2E protection.
+        if enc.nonce.is_empty() {
+            debug!("Tunnel-layer passthrough (empty nonce) — relay-forwarded data");
+            return Ok(enc.ciphertext.clone());
+        }
         let crypto = self.crypto.read().await.clone();
         match crypto {
             Some(crypto) => crypto
                 .decrypt(&enc.ciphertext, &enc.nonce)
                 .map_err(|e| format!("decryption failed: {e}")),
             None => {
-                warn!("Decrypting payload without crypto session — data is not E2E encrypted");
+                debug!("Tunnel-layer passthrough (no crypto session) — app-layer handles E2E");
                 Ok(enc.ciphertext.clone())
             }
         }
@@ -167,7 +178,7 @@ impl TunnelRequestHandler {
     async fn encrypt_payload(&self, data: &[u8]) -> Result<EncryptedPayload, String> {
         let crypto = self.crypto.read().await.clone();
         if crypto.is_none() {
-            warn!("Encrypting payload without crypto session — data is not E2E encrypted");
+            debug!("Tunnel-layer passthrough (no crypto session) — app-layer handles E2E");
         }
         make_encrypted_payload(crypto.as_deref(), data)
     }
@@ -451,6 +462,11 @@ impl TunnelRequestHandler {
     ///
     /// On the first `UserMessage`, if the subprocess hasn't been started yet
     /// (pending_config is Some), starts it and immediately sends the message.
+    ///
+    /// If E2E crypto is active, incoming `AgentRequest` messages must use the
+    /// `Encrypted` oneof variant containing an `EncryptedEnvelope`. The envelope
+    /// is decrypted and re-decoded as the real `AgentRequest`. Plaintext requests
+    /// are rejected when crypto is active (prevents downgrade attacks).
     pub async fn handle_incoming_stream_data(&self, request_id: &str, data: &[u8]) {
         let sid = {
             let stream = self.active_streams.read().await;
@@ -463,12 +479,40 @@ impl TunnelRequestHandler {
             }
         };
 
-        let req = match AgentRequest::decode(data) {
+        let outer_req = match AgentRequest::decode(data) {
             Ok(r) => r,
             Err(e) => {
                 warn!(request_id = %request_id, error = %e, "Failed to decode AgentRequest");
                 return;
             }
+        };
+
+        // Application-layer E2E decryption
+        let crypto = self.crypto.read().await.clone();
+        let req = match (&crypto, &outer_req.request) {
+            // Encrypted request with active crypto → decrypt
+            (Some(session), Some(betcode_proto::v1::agent_request::Request::Encrypted(env))) => {
+                match session.decrypt(&env.ciphertext, &env.nonce) {
+                    Ok(plaintext) => match AgentRequest::decode(plaintext.as_slice()) {
+                        Ok(inner) => inner,
+                        Err(e) => {
+                            warn!(request_id = %request_id, error = %e, "Failed to decode decrypted AgentRequest");
+                            return;
+                        }
+                    },
+                    Err(e) => {
+                        warn!(request_id = %request_id, error = %e, "Failed to decrypt EncryptedEnvelope in AgentRequest");
+                        return;
+                    }
+                }
+            }
+            // Plaintext request with active crypto → reject (downgrade attack prevention)
+            (Some(_), _) => {
+                warn!(request_id = %request_id, "Rejected plaintext AgentRequest when E2E crypto is active");
+                return;
+            }
+            // No crypto, not encrypted → passthrough (local mode)
+            (None, _) => outer_req,
         };
 
         // Check if we need to start the subprocess (deferred from handle_converse).
@@ -539,7 +583,7 @@ impl TunnelRequestHandler {
     }
 
     async fn handle_converse(&self, request_id: &str, data: &[u8]) {
-        let start = match AgentRequest::decode(data) {
+        let outer_req = match AgentRequest::decode(data) {
             Ok(r) => r,
             Err(e) => {
                 let _ = self
@@ -552,6 +596,55 @@ impl TunnelRequestHandler {
                     .await;
                 return;
             }
+        };
+
+        // Application-layer E2E decryption (same logic as handle_incoming_stream_data)
+        let crypto = self.crypto.read().await.clone();
+        let start = match (&crypto, &outer_req.request) {
+            (Some(session), Some(betcode_proto::v1::agent_request::Request::Encrypted(env))) => {
+                match session.decrypt(&env.ciphertext, &env.nonce) {
+                    Ok(plaintext) => match AgentRequest::decode(plaintext.as_slice()) {
+                        Ok(inner) => inner,
+                        Err(e) => {
+                            warn!(request_id = %request_id, error = %e, "Failed to decode decrypted StartConversation");
+                            let _ = self
+                                .outbound_tx
+                                .send(Self::error_response(
+                                    request_id,
+                                    TunnelErrorCode::Internal,
+                                    "Failed to decode decrypted StartConversation",
+                                ))
+                                .await;
+                            return;
+                        }
+                    },
+                    Err(e) => {
+                        warn!(request_id = %request_id, error = %e, "Failed to decrypt StartConversation envelope");
+                        let _ = self
+                            .outbound_tx
+                            .send(Self::error_response(
+                                request_id,
+                                TunnelErrorCode::Internal,
+                                "Failed to decrypt StartConversation",
+                            ))
+                            .await;
+                        return;
+                    }
+                }
+            }
+            (Some(_), _) => {
+                warn!(request_id = %request_id, "Rejected plaintext StartConversation when E2E crypto is active");
+                let _ = self
+                    .outbound_tx
+                    .send(Self::error_response(
+                        request_id,
+                        TunnelErrorCode::Internal,
+                        "E2E encryption required",
+                    ))
+                    .await;
+                return;
+            }
+            (None, _) => outer_req,
         };
 
         let start_conv = match start.request {
@@ -669,14 +762,59 @@ impl TunnelRequestHandler {
                             event_type = ?event.event.as_ref().map(std::mem::discriminant),
                             "Forwarding broadcast event to tunnel"
                         );
-                        let mut buf = Vec::with_capacity(event.encoded_len());
-                        if event.encode(&mut buf).is_err() {
-                            continue;
-                        }
-                        let encrypted = match make_encrypted_payload(crypto.as_deref(), &buf) {
+
+                        // Application-layer encryption: if crypto is active,
+                        // serialize the real event → encrypt → wrap in an
+                        // AgentEvent with Encrypted variant → serialize wrapper.
+                        // The relay sees valid protobuf but cannot read the content.
+                        let wire_bytes = if let Some(ref session) = crypto {
+                            // Serialize the real event
+                            let mut inner_buf = Vec::with_capacity(event.encoded_len());
+                            if event.encode(&mut inner_buf).is_err() {
+                                continue;
+                            }
+                            // Encrypt the serialized event
+                            let enc_data = match session.encrypt(&inner_buf) {
+                                Ok(ed) => ed,
+                                Err(e) => {
+                                    error!(request_id = %rid, error = %e, "App-layer encryption failed");
+                                    continue;
+                                }
+                            };
+                            // Wrap in AgentEvent { encrypted: EncryptedEnvelope }
+                            let wrapper = betcode_proto::v1::AgentEvent {
+                                sequence: event.sequence,
+                                timestamp: event.timestamp,
+                                parent_tool_use_id: String::new(),
+                                event: Some(betcode_proto::v1::agent_event::Event::Encrypted(
+                                    betcode_proto::v1::EncryptedEnvelope {
+                                        ciphertext: enc_data.ciphertext,
+                                        nonce: enc_data.nonce.to_vec(),
+                                    },
+                                )),
+                            };
+                            let mut buf = Vec::with_capacity(wrapper.encoded_len());
+                            if wrapper.encode(&mut buf).is_err() {
+                                continue;
+                            }
+                            buf
+                        } else {
+                            // No crypto: serialize event directly
+                            let mut buf = Vec::with_capacity(event.encoded_len());
+                            if event.encode(&mut buf).is_err() {
+                                continue;
+                            }
+                            buf
+                        };
+
+                        // Tunnel-layer wrapping: skip tunnel-layer encryption when
+                        // app-layer is active (same key, redundant work). Pass None
+                        // so the bytes go through as a passthrough EncryptedPayload.
+                        let tunnel_crypto = if crypto.is_some() { None } else { crypto.as_deref() };
+                        let encrypted = match make_encrypted_payload(tunnel_crypto, &wire_bytes) {
                             Ok(enc) => enc,
                             Err(e) => {
-                                error!(request_id = %rid, error = %e, "Encryption failed in event forwarder");
+                                error!(request_id = %rid, error = %e, "Tunnel-layer encryption failed in event forwarder");
                                 continue;
                             }
                         };

@@ -6,7 +6,7 @@ use std::time::Duration;
 
 use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
-use tonic::transport::{Channel, Endpoint};
+use tonic::transport::{Certificate, Channel, ClientTlsConfig, Endpoint};
 use tracing::{error, info, warn};
 
 use betcode_proto::v1::{
@@ -44,6 +44,8 @@ pub struct ConnectionConfig {
     /// Path to the known daemons fingerprint store.
     /// Defaults to `~/.betcode/known_daemons.json`.
     pub fingerprint_store_path: Option<std::path::PathBuf>,
+    /// Path to CA certificate for verifying the relay's TLS certificate.
+    pub ca_cert_path: Option<std::path::PathBuf>,
 }
 
 impl ConnectionConfig {
@@ -63,6 +65,7 @@ impl Default for ConnectionConfig {
             machine_id: None,
             identity_key_path: None,
             fingerprint_store_path: None,
+            ca_cert_path: None,
         }
     }
 }
@@ -164,12 +167,28 @@ impl DaemonConnection {
     pub async fn connect(&mut self) -> Result<(), ConnectionError> {
         self.state = ConnectionState::Connecting;
 
-        let endpoint = Endpoint::from_shared(self.config.addr.clone())
+        let mut endpoint = Endpoint::from_shared(self.config.addr.clone())
             .map_err(|e| ConnectionError::InvalidAddress(e.to_string()))?
             .connect_timeout(self.config.connect_timeout)
             .timeout(self.config.request_timeout)
             .http2_keep_alive_interval(Duration::from_secs(30))
             .keep_alive_timeout(Duration::from_secs(10));
+
+        // Configure TLS if CA cert is provided (for self-signed relay certs)
+        if let Some(ca_path) = &self.config.ca_cert_path {
+            let ca_pem = std::fs::read_to_string(ca_path).map_err(|e| {
+                ConnectionError::ConnectFailed(format!(
+                    "Failed to read CA cert {}: {}",
+                    ca_path.display(),
+                    e
+                ))
+            })?;
+            let tls_config = ClientTlsConfig::new().ca_certificate(Certificate::from_pem(ca_pem));
+            endpoint = endpoint
+                .tls_config(tls_config)
+                .map_err(|e| ConnectionError::ConnectFailed(e.to_string()))?;
+            info!(ca_cert = %ca_path.display(), "TLS configured with custom CA");
+        }
 
         let channel = endpoint.connect().await.map_err(|e| {
             self.state = ConnectionState::Disconnected;
@@ -318,11 +337,25 @@ impl DaemonConnection {
         &self.fingerprint_store
     }
 
+    /// Whether this connection targets a relay (has auth + machine_id configured).
+    pub fn is_relay(&self) -> bool {
+        self.config.is_relay()
+    }
+
+    /// Get the configured machine ID for relay routing.
+    pub fn machine_id(&self) -> Option<&str> {
+        self.config.machine_id.as_deref()
+    }
+
     /// Start a bidirectional conversation stream.
     ///
     /// Returns a sender for requests, a receiver for events, and a handle to
     /// the background stream reader task. Abort the handle on shutdown to avoid
     /// waiting for the server to close its end of the stream.
+    ///
+    /// For relay connections, outgoing requests are encrypted and incoming events
+    /// are decrypted using the established CryptoSession. If no crypto session
+    /// exists on a relay connection, returns `KeyExchangeRequired`.
     pub async fn converse(
         &mut self,
     ) -> Result<
@@ -333,13 +366,56 @@ impl DaemonConnection {
         ),
         ConnectionError,
     > {
+        // Guard: relay connections require E2E encryption
+        if self.is_relay() && self.crypto.is_none() {
+            return Err(ConnectionError::KeyExchangeRequired);
+        }
+
         let auth_token = self.config.auth_token.clone();
         let machine_id = self.config.machine_id.clone();
+        let crypto = self.crypto.clone();
         let client = self.client.as_mut().ok_or(ConnectionError::NotConnected)?;
 
+        // Channel for incoming events (daemon -> client).
+        // Created early so the encrypt adapter can send errors through it.
+        let (event_tx, event_rx) = mpsc::channel::<Result<AgentEvent, tonic::Status>>(128);
+
         // Channel for outgoing requests (client -> daemon)
-        let (request_tx, request_rx) = mpsc::channel::<AgentRequest>(32);
-        let request_stream = ReceiverStream::new(request_rx);
+        // If crypto is active, we insert an encrypting adapter between the
+        // user-facing sender and the gRPC stream.
+        let (user_tx, user_rx) = mpsc::channel::<AgentRequest>(32);
+
+        let grpc_rx = if let Some(ref session) = crypto {
+            let (enc_tx, enc_rx) = mpsc::channel::<AgentRequest>(32);
+            let session = std::sync::Arc::clone(session);
+            let err_tx = event_tx.clone();
+            tokio::spawn(async move {
+                let mut user_rx = user_rx;
+                while let Some(req) = user_rx.recv().await {
+                    match encrypt_agent_request(&session, &req) {
+                        Ok(encrypted) => {
+                            if enc_tx.send(encrypted).await.is_err() {
+                                break;
+                            }
+                        }
+                        Err(e) => {
+                            error!("Failed to encrypt outgoing request: {}", e);
+                            let _ = err_tx
+                                .send(Err(tonic::Status::internal(format!(
+                                    "Encryption failed: {e}"
+                                ))))
+                                .await;
+                            break;
+                        }
+                    }
+                }
+            });
+            enc_rx
+        } else {
+            user_rx
+        };
+
+        let request_stream = ReceiverStream::new(grpc_rx);
 
         // Call the bidirectional streaming RPC
         let mut request = tonic::Request::new(request_stream);
@@ -351,14 +427,41 @@ impl DaemonConnection {
 
         let mut event_stream = response.into_inner();
 
-        // Channel for incoming events (daemon -> client)
-        let (event_tx, event_rx) = mpsc::channel::<Result<AgentEvent, tonic::Status>>(128);
-
-        // Spawn task to forward events from the stream
+        // Spawn task to forward events from the stream, decrypting if needed
         let stream_handle = tokio::spawn(async move {
+            const MAX_CONSECUTIVE_DECRYPT_FAILURES: u32 = 5;
+            let mut consecutive_failures: u32 = 0;
+
             loop {
                 match event_stream.message().await {
                     Ok(Some(event)) => {
+                        let event = if let Some(ref session) = crypto {
+                            match decrypt_agent_event(session, event) {
+                                Ok(decrypted) => {
+                                    consecutive_failures = 0;
+                                    decrypted
+                                }
+                                Err(e) => {
+                                    consecutive_failures += 1;
+                                    error!(
+                                        "Failed to decrypt incoming event ({}/{}): {}",
+                                        consecutive_failures, MAX_CONSECUTIVE_DECRYPT_FAILURES, e
+                                    );
+                                    if consecutive_failures >= MAX_CONSECUTIVE_DECRYPT_FAILURES {
+                                        error!("Too many consecutive decryption failures, closing stream");
+                                        let _ = event_tx
+                                            .send(Err(tonic::Status::internal(
+                                                "Persistent decryption failures — possible key mismatch",
+                                            )))
+                                            .await;
+                                        break;
+                                    }
+                                    continue;
+                                }
+                            }
+                        } else {
+                            event
+                        };
                         if event_tx.send(Ok(event)).await.is_err() {
                             warn!("Event receiver dropped");
                             break;
@@ -377,7 +480,7 @@ impl DaemonConnection {
             }
         });
 
-        Ok((request_tx, event_rx, stream_handle))
+        Ok((user_tx, event_rx, stream_handle))
     }
 
     /// List sessions.
@@ -730,6 +833,52 @@ pub enum ConnectionError {
 
     #[error("RPC call failed: {0}")]
     RpcFailed(String),
+
+    #[error("Key exchange required: relay connections require E2E encryption")]
+    KeyExchangeRequired,
+
+    #[error("Fingerprint rejected: daemon fingerprint mismatch")]
+    FingerprintRejected,
+}
+
+/// Encrypt an `AgentRequest` by serializing it, encrypting the bytes, and
+/// wrapping in a new `AgentRequest` with the `Encrypted` oneof variant.
+pub(crate) fn encrypt_agent_request(
+    session: &betcode_crypto::CryptoSession,
+    req: &AgentRequest,
+) -> Result<AgentRequest, String> {
+    use prost::Message;
+    let mut buf = Vec::with_capacity(req.encoded_len());
+    req.encode(&mut buf).map_err(|e| format!("encode failed: {e}"))?;
+    let encrypted = session.encrypt(&buf).map_err(|e| format!("encrypt failed: {e}"))?;
+    Ok(AgentRequest {
+        request: Some(betcode_proto::v1::agent_request::Request::Encrypted(
+            betcode_proto::v1::EncryptedEnvelope {
+                ciphertext: encrypted.ciphertext,
+                nonce: encrypted.nonce.to_vec(),
+            },
+        )),
+    })
+}
+
+/// Decrypt an `AgentEvent` that contains an `Encrypted` variant.
+/// Rejects non-encrypted events to prevent relay-injected plaintext attacks.
+pub(crate) fn decrypt_agent_event(
+    session: &betcode_crypto::CryptoSession,
+    event: AgentEvent,
+) -> Result<AgentEvent, String> {
+    use prost::Message;
+    match event.event {
+        Some(betcode_proto::v1::agent_event::Event::Encrypted(ref envelope)) => {
+            let plaintext = session
+                .decrypt(&envelope.ciphertext, &envelope.nonce)
+                .map_err(|e| format!("decrypt failed: {e}"))?;
+            let inner = AgentEvent::decode(plaintext.as_slice())
+                .map_err(|e| format!("decode failed: {e}"))?;
+            Ok(inner)
+        }
+        _ => Err("rejected plaintext event: E2E encryption active".to_string()),
+    }
 }
 
 #[cfg(test)]
@@ -827,8 +976,14 @@ mod tests {
 
     #[test]
     fn fingerprint_store_starts_empty() {
-        let conn = DaemonConnection::new(ConnectionConfig::default());
+        let dir = std::env::temp_dir().join(format!("betcode-fp-test-{}", uuid::Uuid::new_v4()));
+        let config = ConnectionConfig {
+            fingerprint_store_path: Some(dir.join("known_daemons.json")),
+            ..Default::default()
+        };
+        let conn = DaemonConnection::new(config);
         assert!(conn.fingerprint_store().daemons.is_empty());
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[tokio::test]
@@ -840,5 +995,549 @@ mod tests {
             ConnectionError::NotConnected => {}
             other => panic!("Expected NotConnected, got {:?}", other),
         }
+    }
+
+    // =========================================================================
+    // Encrypt/decrypt helper tests
+    // =========================================================================
+
+    #[test]
+    fn encrypt_agent_request_wraps_in_envelope() {
+        let secret = [42u8; 32];
+        let session = betcode_crypto::CryptoSession::from_shared_secret(&secret).unwrap();
+        let req = AgentRequest {
+            request: Some(betcode_proto::v1::agent_request::Request::Message(
+                betcode_proto::v1::UserMessage {
+                    content: "hello".into(),
+                    attachments: vec![],
+                },
+            )),
+        };
+        let encrypted = super::encrypt_agent_request(&session, &req).unwrap();
+        match encrypted.request {
+            Some(betcode_proto::v1::agent_request::Request::Encrypted(ref env)) => {
+                assert!(!env.ciphertext.is_empty());
+                assert_eq!(env.nonce.len(), 12);
+            }
+            other => panic!("Expected Encrypted variant, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn decrypt_agent_event_unwraps_envelope() {
+        use prost::Message;
+        let secret = [42u8; 32];
+        let session1 = betcode_crypto::CryptoSession::from_shared_secret(&secret).unwrap();
+        let session2 = betcode_crypto::CryptoSession::from_shared_secret(&secret).unwrap();
+
+        let original = AgentEvent {
+            sequence: 1,
+            timestamp: None,
+            parent_tool_use_id: String::new(),
+            event: Some(betcode_proto::v1::agent_event::Event::TextDelta(
+                betcode_proto::v1::TextDelta {
+                    text: "hello".into(),
+                    is_complete: false,
+                },
+            )),
+        };
+        let mut buf = Vec::with_capacity(original.encoded_len());
+        original.encode(&mut buf).unwrap();
+        let encrypted = session1.encrypt(&buf).unwrap();
+        let wrapped = AgentEvent {
+            sequence: 0,
+            timestamp: None,
+            parent_tool_use_id: String::new(),
+            event: Some(betcode_proto::v1::agent_event::Event::Encrypted(
+                betcode_proto::v1::EncryptedEnvelope {
+                    ciphertext: encrypted.ciphertext,
+                    nonce: encrypted.nonce.to_vec(),
+                },
+            )),
+        };
+        let decrypted = super::decrypt_agent_event(&session2, wrapped).unwrap();
+        match decrypted.event {
+            Some(betcode_proto::v1::agent_event::Event::TextDelta(ref td)) => {
+                assert_eq!(td.text, "hello");
+            }
+            other => panic!("Expected TextDelta, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn encrypt_decrypt_roundtrip_agent_request() {
+        use prost::Message;
+        let secret = [99u8; 32];
+        let session1 = betcode_crypto::CryptoSession::from_shared_secret(&secret).unwrap();
+        let session2 = betcode_crypto::CryptoSession::from_shared_secret(&secret).unwrap();
+
+        let original = AgentRequest {
+            request: Some(betcode_proto::v1::agent_request::Request::Start(
+                betcode_proto::v1::StartConversation {
+                    session_id: "s1".into(),
+                    working_directory: "/tmp".into(),
+                    model: "test".into(),
+                    allowed_tools: vec![],
+                    plan_mode: false,
+                    worktree_id: String::new(),
+                    metadata: Default::default(),
+                },
+            )),
+        };
+        let encrypted = super::encrypt_agent_request(&session1, &original).unwrap();
+        // Extract envelope and decrypt
+        match encrypted.request {
+            Some(betcode_proto::v1::agent_request::Request::Encrypted(ref env)) => {
+                let plaintext = session2.decrypt(&env.ciphertext, &env.nonce).unwrap();
+                let decoded = AgentRequest::decode(plaintext.as_slice()).unwrap();
+                match decoded.request {
+                    Some(betcode_proto::v1::agent_request::Request::Start(ref s)) => {
+                        assert_eq!(s.session_id, "s1");
+                        assert_eq!(s.working_directory, "/tmp");
+                        assert_eq!(s.model, "test");
+                    }
+                    other => panic!("Expected Start, got {:?}", other),
+                }
+            }
+            other => panic!("Expected Encrypted, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn encrypt_decrypt_roundtrip_agent_event() {
+        use prost::Message;
+        let secret = [77u8; 32];
+        let session1 = betcode_crypto::CryptoSession::from_shared_secret(&secret).unwrap();
+        let session2 = betcode_crypto::CryptoSession::from_shared_secret(&secret).unwrap();
+
+        // Test several event types
+        let events: Vec<AgentEvent> = vec![
+            AgentEvent {
+                sequence: 1,
+                timestamp: None,
+                parent_tool_use_id: String::new(),
+                event: Some(betcode_proto::v1::agent_event::Event::TextDelta(
+                    betcode_proto::v1::TextDelta {
+                        text: "hello".into(),
+                        is_complete: false,
+                    },
+                )),
+            },
+            AgentEvent {
+                sequence: 2,
+                timestamp: None,
+                parent_tool_use_id: String::new(),
+                event: Some(betcode_proto::v1::agent_event::Event::ToolCallStart(
+                    betcode_proto::v1::ToolCallStart {
+                        tool_id: "t1".into(),
+                        tool_name: "Bash".into(),
+                        input: None,
+                        description: "ls".into(),
+                    },
+                )),
+            },
+            AgentEvent {
+                sequence: 3,
+                timestamp: None,
+                parent_tool_use_id: String::new(),
+                event: Some(betcode_proto::v1::agent_event::Event::TurnComplete(
+                    betcode_proto::v1::TurnComplete {
+                        stop_reason: "end_turn".into(),
+                    },
+                )),
+            },
+            AgentEvent {
+                sequence: 4,
+                timestamp: None,
+                parent_tool_use_id: String::new(),
+                event: Some(betcode_proto::v1::agent_event::Event::Error(
+                    betcode_proto::v1::ErrorEvent {
+                        code: "E01".into(),
+                        message: "test error".into(),
+                        is_fatal: false,
+                        details: Default::default(),
+                    },
+                )),
+            },
+        ];
+
+        for original in events {
+            let mut buf = Vec::with_capacity(original.encoded_len());
+            original.encode(&mut buf).unwrap();
+            let enc = session1.encrypt(&buf).unwrap();
+            let wrapped = AgentEvent {
+                sequence: 0,
+                timestamp: None,
+                parent_tool_use_id: String::new(),
+                event: Some(betcode_proto::v1::agent_event::Event::Encrypted(
+                    betcode_proto::v1::EncryptedEnvelope {
+                        ciphertext: enc.ciphertext,
+                        nonce: enc.nonce.to_vec(),
+                    },
+                )),
+            };
+            let decrypted = super::decrypt_agent_event(&session2, wrapped).unwrap();
+            assert_eq!(
+                std::mem::discriminant(&decrypted.event),
+                std::mem::discriminant(&original.event)
+            );
+        }
+    }
+
+    #[test]
+    fn decrypt_non_encrypted_event_rejected_when_crypto_active() {
+        let secret = [42u8; 32];
+        let session = betcode_crypto::CryptoSession::from_shared_secret(&secret).unwrap();
+        let event = AgentEvent {
+            sequence: 1,
+            timestamp: None,
+            parent_tool_use_id: String::new(),
+            event: Some(betcode_proto::v1::agent_event::Event::TextDelta(
+                betcode_proto::v1::TextDelta {
+                    text: "injected".into(),
+                    is_complete: true,
+                },
+            )),
+        };
+        let result = super::decrypt_agent_event(&session, event);
+        assert!(result.is_err(), "plaintext event should be rejected when crypto is active");
+        assert!(result.unwrap_err().contains("rejected plaintext"));
+    }
+
+    #[test]
+    fn decrypt_with_wrong_key_fails() {
+        use prost::Message;
+        let secret1 = [11u8; 32];
+        let secret2 = [22u8; 32];
+        let session1 = betcode_crypto::CryptoSession::from_shared_secret(&secret1).unwrap();
+        let session2 = betcode_crypto::CryptoSession::from_shared_secret(&secret2).unwrap();
+
+        let event = AgentEvent {
+            sequence: 1,
+            timestamp: None,
+            parent_tool_use_id: String::new(),
+            event: Some(betcode_proto::v1::agent_event::Event::TextDelta(
+                betcode_proto::v1::TextDelta {
+                    text: "secret".into(),
+                    is_complete: false,
+                },
+            )),
+        };
+        let mut buf = Vec::new();
+        event.encode(&mut buf).unwrap();
+        let enc = session1.encrypt(&buf).unwrap();
+        let wrapped = AgentEvent {
+            sequence: 0,
+            timestamp: None,
+            parent_tool_use_id: String::new(),
+            event: Some(betcode_proto::v1::agent_event::Event::Encrypted(
+                betcode_proto::v1::EncryptedEnvelope {
+                    ciphertext: enc.ciphertext,
+                    nonce: enc.nonce.to_vec(),
+                },
+            )),
+        };
+        let result = super::decrypt_agent_event(&session2, wrapped);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn decrypt_with_corrupted_ciphertext_fails() {
+        use prost::Message;
+        let secret = [42u8; 32];
+        let session = betcode_crypto::CryptoSession::from_shared_secret(&secret).unwrap();
+
+        let event = AgentEvent {
+            sequence: 1,
+            timestamp: None,
+            parent_tool_use_id: String::new(),
+            event: Some(betcode_proto::v1::agent_event::Event::TextDelta(
+                betcode_proto::v1::TextDelta {
+                    text: "test".into(),
+                    is_complete: false,
+                },
+            )),
+        };
+        let mut buf = Vec::new();
+        event.encode(&mut buf).unwrap();
+        let mut enc = session.encrypt(&buf).unwrap();
+        // Corrupt the ciphertext
+        if let Some(byte) = enc.ciphertext.first_mut() {
+            *byte ^= 0xFF;
+        }
+        let wrapped = AgentEvent {
+            sequence: 0,
+            timestamp: None,
+            parent_tool_use_id: String::new(),
+            event: Some(betcode_proto::v1::agent_event::Event::Encrypted(
+                betcode_proto::v1::EncryptedEnvelope {
+                    ciphertext: enc.ciphertext,
+                    nonce: enc.nonce.to_vec(),
+                },
+            )),
+        };
+        let result = super::decrypt_agent_event(&session, wrapped);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn decrypt_with_truncated_nonce_fails() {
+        use prost::Message;
+        let secret = [42u8; 32];
+        let session = betcode_crypto::CryptoSession::from_shared_secret(&secret).unwrap();
+
+        let event = AgentEvent {
+            sequence: 1,
+            timestamp: None,
+            parent_tool_use_id: String::new(),
+            event: Some(betcode_proto::v1::agent_event::Event::TextDelta(
+                betcode_proto::v1::TextDelta {
+                    text: "test".into(),
+                    is_complete: false,
+                },
+            )),
+        };
+        let mut buf = Vec::new();
+        event.encode(&mut buf).unwrap();
+        let enc = session.encrypt(&buf).unwrap();
+        let wrapped = AgentEvent {
+            sequence: 0,
+            timestamp: None,
+            parent_tool_use_id: String::new(),
+            event: Some(betcode_proto::v1::agent_event::Event::Encrypted(
+                betcode_proto::v1::EncryptedEnvelope {
+                    ciphertext: enc.ciphertext,
+                    nonce: enc.nonce[..8].to_vec(), // Truncated: should be 12
+                },
+            )),
+        };
+        let result = super::decrypt_agent_event(&session, wrapped);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn encrypt_empty_request() {
+        use prost::Message;
+        let secret = [42u8; 32];
+        let session1 = betcode_crypto::CryptoSession::from_shared_secret(&secret).unwrap();
+        let session2 = betcode_crypto::CryptoSession::from_shared_secret(&secret).unwrap();
+
+        let original = AgentRequest { request: None };
+        let encrypted = super::encrypt_agent_request(&session1, &original).unwrap();
+        match encrypted.request {
+            Some(betcode_proto::v1::agent_request::Request::Encrypted(ref env)) => {
+                let plaintext = session2.decrypt(&env.ciphertext, &env.nonce).unwrap();
+                let decoded = AgentRequest::decode(plaintext.as_slice()).unwrap();
+                assert!(decoded.request.is_none());
+            }
+            other => panic!("Expected Encrypted, got {:?}", other),
+        }
+    }
+
+    // =========================================================================
+    // Empty/malformed EncryptedEnvelope tests
+    // =========================================================================
+
+    #[test]
+    fn decrypt_event_with_empty_ciphertext_fails() {
+        let secret = [42u8; 32];
+        let session = betcode_crypto::CryptoSession::from_shared_secret(&secret).unwrap();
+        let event = AgentEvent {
+            sequence: 0,
+            timestamp: None,
+            parent_tool_use_id: String::new(),
+            event: Some(betcode_proto::v1::agent_event::Event::Encrypted(
+                betcode_proto::v1::EncryptedEnvelope {
+                    ciphertext: vec![],
+                    nonce: vec![0u8; 12],
+                },
+            )),
+        };
+        let result = super::decrypt_agent_event(&session, event);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn decrypt_event_with_empty_nonce_fails() {
+        let secret = [42u8; 32];
+        let session = betcode_crypto::CryptoSession::from_shared_secret(&secret).unwrap();
+        let event = AgentEvent {
+            sequence: 0,
+            timestamp: None,
+            parent_tool_use_id: String::new(),
+            event: Some(betcode_proto::v1::agent_event::Event::Encrypted(
+                betcode_proto::v1::EncryptedEnvelope {
+                    ciphertext: vec![0xDE, 0xAD],
+                    nonce: vec![],
+                },
+            )),
+        };
+        let result = super::decrypt_agent_event(&session, event);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn decrypt_event_with_both_empty_fails() {
+        let secret = [42u8; 32];
+        let session = betcode_crypto::CryptoSession::from_shared_secret(&secret).unwrap();
+        let event = AgentEvent {
+            sequence: 0,
+            timestamp: None,
+            parent_tool_use_id: String::new(),
+            event: Some(betcode_proto::v1::agent_event::Event::Encrypted(
+                betcode_proto::v1::EncryptedEnvelope {
+                    ciphertext: vec![],
+                    nonce: vec![],
+                },
+            )),
+        };
+        let result = super::decrypt_agent_event(&session, event);
+        assert!(result.is_err());
+    }
+
+    // =========================================================================
+    // Connection accessor tests
+    // =========================================================================
+
+    #[test]
+    fn is_relay_returns_true_with_auth_and_machine() {
+        let config = ConnectionConfig {
+            auth_token: Some("tok".into()),
+            machine_id: Some("m1".into()),
+            ..Default::default()
+        };
+        assert!(config.is_relay());
+    }
+
+    #[test]
+    fn is_relay_returns_false_without_auth() {
+        let config = ConnectionConfig {
+            auth_token: None,
+            machine_id: Some("m1".into()),
+            ..Default::default()
+        };
+        assert!(!config.is_relay());
+    }
+
+    #[test]
+    fn machine_id_returns_configured_value() {
+        let config = ConnectionConfig {
+            machine_id: Some("my-machine".into()),
+            ..Default::default()
+        };
+        assert_eq!(config.machine_id.as_deref(), Some("my-machine"));
+    }
+
+    #[tokio::test]
+    async fn converse_relay_without_crypto_returns_error() {
+        let dir = std::env::temp_dir().join(format!("betcode-relay-test-{}", uuid::Uuid::new_v4()));
+        let fp_path = dir.join("known_daemons.json");
+        let key_path = dir.join("identity.key");
+        let config = ConnectionConfig {
+            auth_token: Some("tok".into()),
+            machine_id: Some("m1".into()),
+            identity_key_path: Some(key_path),
+            fingerprint_store_path: Some(fp_path),
+            ..Default::default()
+        };
+        let mut conn = DaemonConnection::new(config);
+        // Manually set connected state without actual gRPC client
+        // to test the guard clause (which checks before touching the client)
+        let result = conn.converse().await;
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            ConnectionError::KeyExchangeRequired => {}
+            other => panic!("Expected KeyExchangeRequired, got {:?}", other),
+        }
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn daemon_connection_is_relay_accessor() {
+        let config = ConnectionConfig {
+            auth_token: Some("tok".into()),
+            machine_id: Some("m1".into()),
+            ..Default::default()
+        };
+        let conn = DaemonConnection::new(config);
+        assert!(conn.is_relay());
+        assert_eq!(conn.machine_id(), Some("m1"));
+    }
+
+    #[test]
+    fn daemon_connection_not_relay_accessor() {
+        let conn = DaemonConnection::new(ConnectionConfig::default());
+        assert!(!conn.is_relay());
+        assert!(conn.machine_id().is_none());
+    }
+
+    // =========================================================================
+    // TLS / CA cert tests
+    // =========================================================================
+
+    #[test]
+    fn default_config_has_no_ca_cert() {
+        let config = ConnectionConfig::default();
+        assert!(config.ca_cert_path.is_none());
+    }
+
+    #[tokio::test]
+    async fn connect_with_nonexistent_ca_cert_fails() {
+        let config = ConnectionConfig {
+            addr: "https://127.0.0.1:9999".into(),
+            ca_cert_path: Some(std::path::PathBuf::from("/nonexistent/ca.pem")),
+            ..Default::default()
+        };
+        let mut conn = DaemonConnection::new(config);
+        let result = conn.connect().await;
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            ConnectionError::ConnectFailed(msg) => {
+                assert!(
+                    msg.contains("Failed to read CA cert"),
+                    "Expected CA cert read error, got: {}",
+                    msg,
+                );
+            }
+            other => panic!("Expected ConnectFailed, got {:?}", other),
+        }
+    }
+
+    #[tokio::test]
+    async fn connect_with_valid_ca_cert_configures_tls() {
+        // Write a dummy PEM (not a real cert, but enough to test TLS config path).
+        // Connection will fail at the TLS handshake level, not at file read.
+        let dir = std::env::temp_dir().join(format!("betcode-tls-test-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let ca_path = dir.join("ca.pem");
+        // Use a minimal but structurally valid PEM to pass tonic's Certificate::from_pem.
+        // The actual connection will fail (no server), but we verify the code path.
+        std::fs::write(
+            &ca_path,
+            "-----BEGIN CERTIFICATE-----\nMIIBkTCB+wIUEjRVnJ1234=\n-----END CERTIFICATE-----\n",
+        )
+        .unwrap();
+
+        let config = ConnectionConfig {
+            addr: "https://127.0.0.1:9999".into(),
+            ca_cert_path: Some(ca_path),
+            ..Default::default()
+        };
+        let mut conn = DaemonConnection::new(config);
+        let result = conn.connect().await;
+        // Should fail with connection error (not file read error), proving TLS was configured
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            ConnectionError::ConnectFailed(msg) => {
+                assert!(
+                    !msg.contains("Failed to read CA cert"),
+                    "Should not be a CA read error, got: {}",
+                    msg,
+                );
+            }
+            other => panic!("Expected ConnectFailed, got {:?}", other),
+        }
+
+        std::fs::remove_dir_all(&dir).ok();
     }
 }

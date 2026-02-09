@@ -417,3 +417,77 @@ async fn exchange_keys_offline_returns_unavailable() {
     let err = svc.exchange_keys(req).await.unwrap_err();
     assert_eq!(err.code(), tonic::Code::Unavailable);
 }
+
+// --- Encrypted event passthrough ---
+
+#[tokio::test]
+async fn encrypted_agent_event_forwards_through_proxy() {
+    let (svc, router, mut tunnel_rx) = setup_with_machine("m1").await;
+    let rc = Arc::clone(&router);
+
+    // Prepare an AgentEvent with the Encrypted variant (opaque ciphertext bytes)
+    let opaque_ciphertext = vec![0xDE, 0xAD, 0xBE, 0xEF, 0x01, 0x02, 0x03, 0x04];
+    let opaque_nonce = vec![0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99, 0xAA, 0xBB, 0xCC];
+    let encrypted_event = AgentEvent {
+        sequence: 42,
+        timestamp: None,
+        parent_tool_use_id: String::new(),
+        event: Some(betcode_proto::v1::agent_event::Event::Encrypted(
+            betcode_proto::v1::EncryptedEnvelope {
+                ciphertext: opaque_ciphertext.clone(),
+                nonce: opaque_nonce.clone(),
+            },
+        )),
+    };
+
+    tokio::spawn(async move {
+        if let Some(frame) = tunnel_rx.recv().await {
+            let rid = frame.request_id.clone();
+            let conn = rc.registry().get("m1").await.unwrap();
+            let f = TunnelFrame {
+                request_id: rid.clone(),
+                frame_type: FrameType::StreamData as i32,
+                timestamp: None,
+                payload: Some(betcode_proto::v1::tunnel_frame::Payload::StreamData(
+                    StreamPayload {
+                        method: String::new(),
+                        encrypted: Some(EncryptedPayload {
+                            ciphertext: encode_msg(&encrypted_event),
+                            nonce: Vec::new(),
+                            ephemeral_pubkey: Vec::new(),
+                        }),
+                        sequence: 0,
+                        metadata: HashMap::new(),
+                    },
+                )),
+            };
+            conn.send_stream_frame(&rid, f).await;
+            conn.complete_stream(&rid).await;
+        }
+    });
+
+    let req = make_request(
+        ResumeSessionRequest {
+            session_id: "s1".into(),
+            from_sequence: 0,
+        },
+        "m1",
+    );
+    let resp = svc.resume_session(req).await.unwrap();
+    let mut stream = resp.into_inner();
+    let mut events = vec![];
+    while let Some(result) = stream.next().await {
+        events.push(result.unwrap());
+    }
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0].sequence, 42);
+
+    // Verify the Encrypted variant passes through with ciphertext intact
+    match &events[0].event {
+        Some(betcode_proto::v1::agent_event::Event::Encrypted(env)) => {
+            assert_eq!(env.ciphertext, opaque_ciphertext, "ciphertext should pass through relay unchanged");
+            assert_eq!(env.nonce, opaque_nonce, "nonce should pass through relay unchanged");
+        }
+        other => panic!("Expected Encrypted event, got {:?}", other),
+    }
+}

@@ -422,6 +422,7 @@ fn event_message_type(event: &AgentEvent) -> &'static str {
         Some(Event::TodoUpdate(_)) => "stream_event",
         Some(Event::PlanMode(_)) => "stream_event",
         Some(Event::UserInput(_)) => "user",
+        Some(Event::Encrypted(_)) => "stream_event",
         None => "stream_event",
     }
 }

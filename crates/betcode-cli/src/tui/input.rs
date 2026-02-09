@@ -32,6 +32,9 @@ pub async fn handle_term_event(app: &mut App, tx: &mpsc::Sender<AgentRequest>, e
                     AppMode::UserQuestion => {
                         super::question_input::handle_question_key(app, tx, key.code).await;
                     }
+                    AppMode::FingerprintVerification => {
+                        handle_fingerprint_key(app, key.code);
+                    }
                     AppMode::Normal | AppMode::SessionList => {
                         handle_input_key(app, tx, key).await;
                     }
@@ -39,6 +42,131 @@ pub async fn handle_term_event(app: &mut App, tx: &mpsc::Sender<AgentRequest>, e
             }
         }
         TermEvent::Resize(_, _) => { /* terminal auto-handles resize on next draw */ }
+    }
+}
+
+/// Handle a key press in fingerprint verification mode.
+fn handle_fingerprint_key(app: &mut App, key: KeyCode) {
+    use crate::tui::fingerprint_panel::FingerprintDecision;
+
+    let needs_action = app
+        .pending_fingerprint
+        .as_ref()
+        .is_some_and(|fp| fp.needs_action());
+
+    if needs_action {
+        // Mismatch: Y to accept, N/Esc to reject
+        match key {
+            KeyCode::Char('y') | KeyCode::Char('Y') => {
+                if let Some(ref mut fp) = app.pending_fingerprint {
+                    fp.decision = Some(FingerprintDecision::Accept);
+                }
+                app.pending_fingerprint = None;
+                app.mode = AppMode::Normal;
+            }
+            KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => {
+                if let Some(ref mut fp) = app.pending_fingerprint {
+                    fp.decision = Some(FingerprintDecision::Reject);
+                }
+                app.should_quit = true;
+            }
+            _ => {} // Ignore other keys on mismatch
+        }
+    } else {
+        // TOFU or Matched: any key continues
+        app.pending_fingerprint = None;
+        app.mode = AppMode::Normal;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::tui::fingerprint_panel::{FingerprintDecision, FingerprintPrompt};
+    use betcode_crypto::FingerprintCheck;
+
+    fn make_app_with_mismatch() -> App {
+        let mut app = App::new();
+        app.mode = AppMode::FingerprintVerification;
+        app.pending_fingerprint = Some(FingerprintPrompt::new(
+            "m1",
+            "dd:ee",
+            FingerprintCheck::Mismatch {
+                expected: "aa:bb".into(),
+                actual: "dd:ee".into(),
+            },
+        ));
+        app
+    }
+
+    fn make_app_with_tofu() -> App {
+        let mut app = App::new();
+        app.mode = AppMode::FingerprintVerification;
+        app.pending_fingerprint = Some(FingerprintPrompt::new(
+            "m1",
+            "aa:bb",
+            FingerprintCheck::TrustOnFirstUse,
+        ));
+        app
+    }
+
+    fn make_app_with_matched() -> App {
+        let mut app = App::new();
+        app.mode = AppMode::FingerprintVerification;
+        app.pending_fingerprint = Some(FingerprintPrompt::new(
+            "m1",
+            "aa:bb",
+            FingerprintCheck::Matched,
+        ));
+        app
+    }
+
+    #[test]
+    fn fingerprint_y_accepts_mismatch() {
+        let mut app = make_app_with_mismatch();
+        handle_fingerprint_key(&mut app, KeyCode::Char('y'));
+        assert_eq!(app.mode, AppMode::Normal);
+        assert!(app.pending_fingerprint.is_none());
+        assert!(!app.should_quit);
+    }
+
+    #[test]
+    fn fingerprint_n_rejects_mismatch() {
+        let mut app = make_app_with_mismatch();
+        handle_fingerprint_key(&mut app, KeyCode::Char('n'));
+        assert!(app.should_quit);
+    }
+
+    #[test]
+    fn fingerprint_esc_rejects_mismatch() {
+        let mut app = make_app_with_mismatch();
+        handle_fingerprint_key(&mut app, KeyCode::Esc);
+        assert!(app.should_quit);
+    }
+
+    #[test]
+    fn fingerprint_any_key_continues_tofu() {
+        let mut app = make_app_with_tofu();
+        handle_fingerprint_key(&mut app, KeyCode::Enter);
+        assert!(app.pending_fingerprint.is_none());
+        assert_eq!(app.mode, AppMode::Normal);
+    }
+
+    #[test]
+    fn fingerprint_any_key_continues_matched() {
+        let mut app = make_app_with_matched();
+        handle_fingerprint_key(&mut app, KeyCode::Enter);
+        assert!(app.pending_fingerprint.is_none());
+        assert_eq!(app.mode, AppMode::Normal);
+    }
+
+    #[test]
+    fn fingerprint_ignores_random_keys_on_mismatch() {
+        let mut app = make_app_with_mismatch();
+        handle_fingerprint_key(&mut app, KeyCode::Char('z'));
+        assert_eq!(app.mode, AppMode::FingerprintVerification);
+        assert!(app.pending_fingerprint.is_some());
+        assert!(!app.should_quit);
     }
 }
 

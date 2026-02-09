@@ -18,6 +18,9 @@ pub struct CliConfig {
     /// Authentication credentials.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub auth: Option<AuthConfig>,
+    /// Path to CA certificate for verifying the relay's TLS certificate.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub relay_ca_cert: Option<PathBuf>,
 }
 
 /// Stored authentication credentials.
@@ -93,6 +96,7 @@ mod tests {
                 access_token: "at".into(),
                 refresh_token: "rt".into(),
             }),
+            relay_ca_cert: None,
         };
         let json = serde_json::to_string(&cfg).unwrap();
         let loaded: CliConfig = serde_json::from_str(&json).unwrap();
@@ -122,5 +126,45 @@ mod tests {
             assert!(path.to_string_lossy().contains(".betcode"));
             assert!(path.to_string_lossy().contains("config.json"));
         }
+    }
+
+    #[test]
+    fn default_config_has_no_ca_cert() {
+        let cfg = CliConfig::default();
+        assert!(cfg.relay_ca_cert.is_none());
+    }
+
+    #[test]
+    fn config_roundtrip_json_with_ca_cert() {
+        let cfg = CliConfig {
+            relay_url: Some("https://relay.test:443".into()),
+            active_machine: Some("m1".into()),
+            auth: None,
+            relay_ca_cert: Some(PathBuf::from("/path/to/ca.pem")),
+        };
+        let json = serde_json::to_string(&cfg).unwrap();
+        let loaded: CliConfig = serde_json::from_str(&json).unwrap();
+        assert_eq!(
+            loaded.relay_ca_cert.as_deref(),
+            Some(std::path::Path::new("/path/to/ca.pem"))
+        );
+    }
+
+    #[test]
+    fn config_roundtrip_json_without_ca_cert_omits_field() {
+        let cfg = CliConfig {
+            relay_url: Some("https://relay.test:443".into()),
+            relay_ca_cert: None,
+            ..Default::default()
+        };
+        let json = serde_json::to_string(&cfg).unwrap();
+        // Field should be skipped when None
+        assert!(
+            !json.contains("relay_ca_cert"),
+            "relay_ca_cert should be omitted from JSON when None, got: {}",
+            json,
+        );
+        let loaded: CliConfig = serde_json::from_str(&json).unwrap();
+        assert!(loaded.relay_ca_cert.is_none());
     }
 }

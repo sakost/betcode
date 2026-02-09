@@ -232,7 +232,6 @@ pub fn draw_question_panel(frame: &mut Frame, app: &App, area: Rect) {
 ///
 /// Shows the daemon's fingerprint with randomart visualization.
 /// For TOFU, this is informational. For mismatches, requires user action.
-#[allow(dead_code)] // Will be wired into the TUI render loop when fingerprint verification flow is integrated
 pub fn draw_fingerprint_panel(frame: &mut Frame, prompt: &FingerprintPrompt, area: Rect) {
     let header_color = if prompt.needs_action() {
         Color::Red

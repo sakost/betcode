@@ -14,8 +14,9 @@ path = "src/main.rs"
 betcode-proto = { workspace = true }
 betcode-core = { workspace = true }
 betcode-crypto = { workspace = true }
+prost.workspace = true
 tokio.workspace = true
-tonic.workspace = true
+tonic = { workspace = true, features = ["tls-ring"] }
 clap.workspace = true
 ratatui.workspace = true
 crossterm.workspace = true

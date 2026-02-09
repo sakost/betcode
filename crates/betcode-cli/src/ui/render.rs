@@ -16,6 +16,7 @@ enum BottomPanel {
     Permission,
     PermissionEdit,
     Question,
+    Fingerprint,
 }
 
 fn bottom_panel_mode(app: &App) -> BottomPanel {
@@ -25,6 +26,7 @@ fn bottom_panel_mode(app: &App) -> BottomPanel {
         | AppMode::PermissionComment
         | AppMode::PermissionDenyMessage => BottomPanel::PermissionEdit,
         AppMode::UserQuestion => BottomPanel::Question,
+        AppMode::FingerprintVerification => BottomPanel::Fingerprint,
         _ => BottomPanel::Input,
     }
 }
@@ -62,6 +64,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
             let lines = 2 + opt_count as u16 + 2;
             (lines + 2).min(frame.area().height / 2).max(6)
         }
+        BottomPanel::Fingerprint => 20u16.min(frame.area().height * 2 / 3).max(12),
     };
 
     let chunks = Layout::default()
@@ -82,6 +85,11 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         BottomPanel::Permission => panels::draw_permission_panel(frame, app, chunks[2]),
         BottomPanel::PermissionEdit => panels::draw_permission_edit_panel(frame, app, chunks[2]),
         BottomPanel::Question => panels::draw_question_panel(frame, app, chunks[2]),
+        BottomPanel::Fingerprint => {
+            if let Some(ref prompt) = app.pending_fingerprint {
+                panels::draw_fingerprint_panel(frame, prompt, chunks[2]);
+            }
+        }
     }
 
     draw_status_bar(frame, app, chunks[3]);
@@ -252,6 +260,13 @@ fn draw_status_bar(frame: &mut Frame, app: &App, area: Rect) {
         | AppMode::PermissionComment
         | AppMode::PermissionDenyMessage => " | Enter:submit Esc:back",
         AppMode::UserQuestion => " | Enter:submit Esc:cancel",
+        AppMode::FingerprintVerification => {
+            if app.pending_fingerprint.as_ref().is_some_and(|fp| fp.needs_action()) {
+                " | Y:accept N/Esc:reject"
+            } else {
+                " | Press any key to continue"
+            }
+        }
         _ => " | Ctrl+C: quit | Enter: send",
     };
 
@@ -283,4 +298,28 @@ pub fn compute_wrapped_cursor(text: &str, cursor_pos: usize, inner_width: usize)
         }
     }
     (row, col)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::app::App;
+    use crate::tui::fingerprint_panel::FingerprintPrompt;
+    use betcode_crypto::FingerprintCheck;
+    use ratatui::backend::TestBackend;
+    use ratatui::Terminal;
+
+    #[test]
+    fn draw_with_fingerprint_panel_does_not_panic() {
+        let backend = TestBackend::new(80, 30);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let mut app = App::new();
+        app.mode = AppMode::FingerprintVerification;
+        app.pending_fingerprint = Some(FingerprintPrompt::new(
+            "test-machine",
+            "aa:bb:cc:dd:ee:ff:11:22",
+            FingerprintCheck::TrustOnFirstUse,
+        ));
+        terminal.draw(|f| draw(f, &mut app)).unwrap();
+    }
 }

@@ -4,7 +4,7 @@
 
 use std::io::{self, Write};
 
-use tonic::transport::Channel;
+use tonic::transport::{Certificate, Channel, ClientTlsConfig};
 use tonic::Request;
 
 use betcode_proto::v1::machine_service_client::MachineServiceClient;
@@ -73,7 +73,16 @@ async fn connect_relay(config: &CliConfig) -> anyhow::Result<Channel> {
         .relay_url
         .as_ref()
         .ok_or_else(|| anyhow::anyhow!("No relay URL configured. Use --relay <url>"))?;
-    Channel::from_shared(relay_url.clone())?
+    let mut endpoint = Channel::from_shared(relay_url.clone())?;
+    if let Some(ca_path) = &config.relay_ca_cert {
+        let ca_pem = std::fs::read_to_string(ca_path)
+            .map_err(|e| anyhow::anyhow!("Failed to read CA cert {}: {}", ca_path.display(), e))?;
+        let tls_config = ClientTlsConfig::new().ca_certificate(Certificate::from_pem(ca_pem));
+        endpoint = endpoint
+            .tls_config(tls_config)
+            .map_err(|e| anyhow::anyhow!("TLS config error: {}", e))?;
+    }
+    endpoint
         .connect()
         .await
         .map_err(|e| anyhow::anyhow!("Failed to connect to relay: {}", e))
@@ -193,5 +202,50 @@ mod tests {
         let mut config = CliConfig::default();
         config.active_machine = Some("m-unit-test".into());
         assert_eq!(config.active_machine.as_deref(), Some("m-unit-test"));
+    }
+
+    #[tokio::test]
+    async fn connect_relay_requires_relay_url() {
+        let config = CliConfig::default();
+        let result = connect_relay(&config).await;
+        assert!(result.is_err());
+        assert!(
+            result.unwrap_err().to_string().contains("No relay URL"),
+            "Expected 'No relay URL' error",
+        );
+    }
+
+    #[tokio::test]
+    async fn connect_relay_with_nonexistent_ca_cert_fails() {
+        let config = CliConfig {
+            relay_url: Some("https://127.0.0.1:9999".into()),
+            relay_ca_cert: Some(std::path::PathBuf::from("/nonexistent/ca.pem")),
+            ..Default::default()
+        };
+        let result = connect_relay(&config).await;
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(
+            err.contains("Failed to read CA cert"),
+            "Expected CA read error, got: {}",
+            err,
+        );
+    }
+
+    #[tokio::test]
+    async fn connect_relay_without_ca_cert_attempts_plain() {
+        let config = CliConfig {
+            relay_url: Some("http://127.0.0.1:1".into()),
+            relay_ca_cert: None,
+            ..Default::default()
+        };
+        let result = connect_relay(&config).await;
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(
+            err.contains("Failed to connect"),
+            "Expected connection error, got: {}",
+            err,
+        );
     }
 }

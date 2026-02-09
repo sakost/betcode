@@ -2,6 +2,7 @@
 
 use std::collections::VecDeque;
 
+use crate::tui::fingerprint_panel::FingerprintPrompt;
 use betcode_proto::v1::AgentEvent;
 
 /// Application mode.
@@ -19,6 +20,8 @@ pub enum AppMode {
     /// Claude asked a question with selectable options.
     UserQuestion,
     SessionList,
+    /// Fingerprint verification panel (relay connections).
+    FingerprintVerification,
 }
 
 /// A displayable message in the conversation.
@@ -105,6 +108,7 @@ pub struct App {
     pub token_usage: Option<TokenUsage>,
     pub pending_permission: Option<PendingPermission>,
     pub pending_question: Option<PendingUserQuestion>,
+    pub pending_fingerprint: Option<FingerprintPrompt>,
     pub agent_busy: bool,
 }
 
@@ -128,6 +132,7 @@ impl App {
             token_usage: None,
             pending_permission: None,
             pending_question: None,
+            pending_fingerprint: None,
             agent_busy: false,
         }
     }
@@ -318,7 +323,7 @@ impl App {
                 let should_create = self
                     .messages
                     .last()
-                    .map_or(true, |m| m.role != MessageRole::Assistant || !m.streaming);
+                    .is_none_or(|m| m.role != MessageRole::Assistant || !m.streaming);
                 if should_create {
                     self.messages.push(DisplayMessage {
                         role: MessageRole::Assistant,
@@ -1048,6 +1053,19 @@ mod tests {
         assert_eq!(app.messages.len(), 1);
         assert_eq!(app.messages[0].role, MessageRole::User);
         assert_eq!(app.messages[0].content, "Hello Claude");
+    }
+
+    #[test]
+    fn fingerprint_verification_mode_exists() {
+        let mut app = App::new();
+        app.mode = AppMode::FingerprintVerification;
+        assert_eq!(app.mode, AppMode::FingerprintVerification);
+    }
+
+    #[test]
+    fn pending_fingerprint_defaults_to_none() {
+        let app = App::new();
+        assert!(app.pending_fingerprint.is_none());
     }
 
     #[test]

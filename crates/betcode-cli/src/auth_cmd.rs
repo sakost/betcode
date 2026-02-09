@@ -4,16 +4,47 @@
 
 use std::io::{self, Write};
 
-use tonic::transport::Channel;
+use std::path::Path;
+
+use tonic::transport::{Certificate, Channel, ClientTlsConfig};
 
 use betcode_proto::v1::auth_service_client::AuthServiceClient;
-use betcode_proto::v1::{LoginRequest, RefreshTokenRequest, RevokeTokenRequest};
+use betcode_proto::v1::{LoginRequest, RefreshTokenRequest, RegisterRequest, RevokeTokenRequest};
 
 use crate::config::{AuthConfig, CliConfig};
+
+/// Build a gRPC channel to the relay, with optional custom CA cert for TLS.
+async fn relay_channel(url: &str, ca_cert: Option<&Path>) -> anyhow::Result<Channel> {
+    let mut endpoint = Channel::from_shared(url.to_string())?;
+    if let Some(ca_path) = ca_cert {
+        let ca_pem = std::fs::read_to_string(ca_path)
+            .map_err(|e| anyhow::anyhow!("Failed to read CA cert {}: {}", ca_path.display(), e))?;
+        let tls_config = ClientTlsConfig::new().ca_certificate(Certificate::from_pem(ca_pem));
+        endpoint = endpoint
+            .tls_config(tls_config)
+            .map_err(|e| anyhow::anyhow!("TLS config error: {}", e))?;
+    }
+    endpoint
+        .connect()
+        .await
+        .map_err(|e| anyhow::anyhow!("Failed to connect to relay: {}", e))
+}
 
 /// Auth subcommand actions.
 #[derive(clap::Subcommand, Debug)]
 pub enum AuthAction {
+    /// Register a new account on the relay server.
+    Register {
+        /// Username.
+        #[arg(short, long)]
+        username: String,
+        /// Password.
+        #[arg(short, long)]
+        password: String,
+        /// Email address.
+        #[arg(short, long, default_value = "")]
+        email: String,
+    },
     /// Log in to a relay server.
     Login {
         /// Username.
@@ -32,6 +63,11 @@ pub enum AuthAction {
 /// Execute an auth subcommand.
 pub async fn run(action: AuthAction, config: &mut CliConfig) -> anyhow::Result<()> {
     match action {
+        AuthAction::Register {
+            username,
+            password,
+            email,
+        } => register(config, &username, &password, &email).await,
         AuthAction::Login { username, password } => login(config, &username, &password).await,
         AuthAction::Logout => logout(config).await,
         AuthAction::Status => status(config).await,
@@ -56,8 +92,7 @@ pub async fn ensure_valid_token(config: &mut CliConfig) -> anyhow::Result<()> {
 
     let refresh_token = auth.refresh_token.clone();
 
-    let channel = Channel::from_shared(relay_url)?
-        .connect()
+    let channel = relay_channel(&relay_url, config.relay_ca_cert.as_deref())
         .await
         .map_err(|e| anyhow::anyhow!("Cannot reach relay: {}", e))?;
 
@@ -75,6 +110,43 @@ pub async fn ensure_valid_token(config: &mut CliConfig) -> anyhow::Result<()> {
     Ok(())
 }
 
+async fn register(
+    config: &mut CliConfig,
+    username: &str,
+    password: &str,
+    email: &str,
+) -> anyhow::Result<()> {
+    let relay_url = config
+        .relay_url
+        .as_ref()
+        .ok_or_else(|| anyhow::anyhow!("No relay URL configured. Use --relay <url>"))?
+        .clone();
+
+    let channel = relay_channel(&relay_url, config.relay_ca_cert.as_deref()).await?;
+    let mut client = AuthServiceClient::new(channel);
+    let resp = client
+        .register(RegisterRequest {
+            username: username.into(),
+            password: password.into(),
+            email: email.into(),
+        })
+        .await
+        .map_err(|e| anyhow::anyhow!("Registration failed: {}", e.message()))?
+        .into_inner();
+
+    config.auth = Some(AuthConfig {
+        user_id: resp.user_id,
+        username: username.into(),
+        access_token: resp.access_token,
+        refresh_token: resp.refresh_token,
+    });
+    config.save()?;
+
+    let mut out = io::stdout();
+    writeln!(out, "Registered and logged in as {}", username)?;
+    Ok(())
+}
+
 async fn login(config: &mut CliConfig, username: &str, password: &str) -> anyhow::Result<()> {
     let relay_url = config
         .relay_url
@@ -82,10 +154,7 @@ async fn login(config: &mut CliConfig, username: &str, password: &str) -> anyhow
         .ok_or_else(|| anyhow::anyhow!("No relay URL configured. Use --relay <url>"))?
         .clone();
 
-    let channel = Channel::from_shared(relay_url)?
-        .connect()
-        .await
-        .map_err(|e| anyhow::anyhow!("Failed to connect to relay: {}", e))?;
+    let channel = relay_channel(&relay_url, config.relay_ca_cert.as_deref()).await?;
 
     let mut client = AuthServiceClient::new(channel);
     let resp = client
@@ -112,12 +181,7 @@ async fn login(config: &mut CliConfig, username: &str, password: &str) -> anyhow
 
 async fn logout(config: &mut CliConfig) -> anyhow::Result<()> {
     if let (Some(auth), Some(relay_url)) = (&config.auth, &config.relay_url) {
-        if let Ok(channel) = Channel::from_shared(relay_url.clone())
-            .ok()
-            .unwrap()
-            .connect()
-            .await
-        {
+        if let Ok(channel) = relay_channel(relay_url, config.relay_ca_cert.as_deref()).await {
             let mut client = AuthServiceClient::new(channel);
             let _ = client
                 .revoke_token(RevokeTokenRequest {
@@ -336,5 +400,60 @@ mod tests {
             "Missing relay URL in: {}",
             output,
         );
+    }
+
+    // =========================================================================
+    // relay_channel TLS tests
+    // =========================================================================
+
+    #[tokio::test]
+    async fn relay_channel_without_ca_cert_connects_plain() {
+        // No CA cert → plain connection attempt (fails because nothing listens)
+        let result = relay_channel("http://127.0.0.1:1", None).await;
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(
+            err.contains("Failed to connect"),
+            "Expected connection error, got: {}",
+            err,
+        );
+    }
+
+    #[tokio::test]
+    async fn relay_channel_with_nonexistent_ca_cert_fails() {
+        let bad_path = std::path::Path::new("/nonexistent/ca.pem");
+        let result = relay_channel("https://127.0.0.1:9999", Some(bad_path)).await;
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(
+            err.contains("Failed to read CA cert"),
+            "Expected CA read error, got: {}",
+            err,
+        );
+    }
+
+    #[tokio::test]
+    async fn relay_channel_with_ca_cert_configures_tls() {
+        let dir =
+            std::env::temp_dir().join(format!("betcode-auth-tls-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let ca_path = dir.join("ca.pem");
+        std::fs::write(
+            &ca_path,
+            "-----BEGIN CERTIFICATE-----\nMIIBkTCB+wIUEjRVnJ1234=\n-----END CERTIFICATE-----\n",
+        )
+        .unwrap();
+
+        let result = relay_channel("https://127.0.0.1:9999", Some(&ca_path)).await;
+        // Should fail with connection error, not CA read error
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(
+            !err.contains("Failed to read CA cert"),
+            "Should not be a CA read error, got: {}",
+            err,
+        );
+
+        std::fs::remove_dir_all(&dir).ok();
     }
 }

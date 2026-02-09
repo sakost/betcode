@@ -28,6 +28,7 @@ use tracing::error;
 use crate::app::App;
 use crate::connection::DaemonConnection;
 use crate::ui;
+use betcode_crypto::FingerprintCheck;
 use betcode_proto::v1::{AgentRequest, StartConversation};
 
 /// Terminal events forwarded from the UI reader thread.
@@ -46,6 +47,26 @@ pub async fn run(
     working_dir: &Option<String>,
     model: &Option<String>,
 ) -> anyhow::Result<()> {
+    // 0. Key exchange for relay connections (before entering raw mode so
+    //    Ctrl+C works during the handshake and fingerprint errors are visible).
+    if conn.is_relay() {
+        let machine_id = conn.machine_id().unwrap_or("unknown").to_string();
+        let (_daemon_fp, fp_check) = conn.exchange_keys(&machine_id).await?;
+        match fp_check {
+            FingerprintCheck::TrustOnFirstUse | FingerprintCheck::Matched => {
+                // Proceed — fingerprint accepted
+            }
+            FingerprintCheck::Mismatch { expected, actual } => {
+                return Err(anyhow::anyhow!(
+                    "Daemon fingerprint mismatch!\n  Expected: {}\n  Actual:   {}\n\
+                     This could indicate a MITM attack. Connection aborted.",
+                    expected,
+                    actual
+                ));
+            }
+        }
+    }
+
     // 1. Establish gRPC stream BEFORE entering raw mode so Ctrl+C works
     //    during the (potentially slow) handshake.
     let (request_tx, mut event_rx, stream_handle) = conn.converse().await?;

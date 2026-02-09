@@ -74,6 +74,11 @@ pub async fn handle_agent_request(
                 relay.cancel_session(sid).await.map_err(|e| e.to_string())?;
             }
         }
+        Some(Request::Encrypted(_)) => {
+            // EncryptedEnvelope is handled at the tunnel layer (application-layer E2E).
+            // In the local gRPC path, encrypted requests should never arrive.
+            warn!("Received encrypted request on local gRPC — ignoring");
+        }
         None => {
             warn!("Received empty request");
         }

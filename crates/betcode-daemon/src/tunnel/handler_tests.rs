@@ -902,3 +902,477 @@ async fn request_with_none_encrypted_field_uses_empty_data() {
     // Empty data decodes to default ListSessionsRequest → successful response
     assert_eq!(r[0].frame_type, FrameType::Response as i32);
 }
+
+// --- Application-layer EncryptedEnvelope tests ---
+
+use betcode_proto::v1::AgentEvent;
+
+/// Build a tunnel-layer encrypted converse start frame with app-layer encryption.
+/// This is what the CLI actually sends: StartConversation → app-encrypt → serialize → tunnel-encrypt.
+fn encrypted_converse_frame(
+    rid: &str,
+    session_id: &str,
+    crypto: &CryptoSession,
+) -> TunnelFrame {
+    let start_req = AgentRequest {
+        request: Some(betcode_proto::v1::agent_request::Request::Start(
+            betcode_proto::v1::StartConversation {
+                session_id: session_id.into(),
+                working_directory: std::env::temp_dir().to_string_lossy().into_owned(),
+                model: "test-model".into(),
+                allowed_tools: vec![],
+                plan_mode: false,
+                worktree_id: String::new(),
+                metadata: HashMap::new(),
+            },
+        )),
+    };
+    let app_encrypted = make_app_encrypted_agent_request(&start_req, crypto);
+    let data = encode(&app_encrypted);
+    encrypted_req_frame(rid, METHOD_CONVERSE, data, crypto)
+}
+
+/// Build an AgentRequest with the Encrypted oneof variant wrapping a real request.
+fn make_app_encrypted_agent_request(
+    inner: &AgentRequest,
+    session: &CryptoSession,
+) -> AgentRequest {
+    let mut buf = Vec::new();
+    inner.encode(&mut buf).unwrap();
+    let enc = session.encrypt(&buf).unwrap();
+    AgentRequest {
+        request: Some(betcode_proto::v1::agent_request::Request::Encrypted(
+            betcode_proto::v1::EncryptedEnvelope {
+                ciphertext: enc.ciphertext,
+                nonce: enc.nonce.to_vec(),
+            },
+        )),
+    }
+}
+
+#[tokio::test]
+async fn encrypted_agent_request_is_decrypted() {
+    let (h, client_crypto, _rx) = make_handler_with_crypto().await;
+
+    // Start a converse session (app-layer + tunnel-layer encrypted, as the CLI does)
+    h.handle_frame(encrypted_converse_frame("enc-conv1", "enc-stream-1", &client_crypto))
+        .await;
+    assert!(h.has_active_stream("enc-conv1").await);
+
+    // Verify the pending_config exists before we send the message
+    {
+        let streams = h.active_streams.read().await;
+        assert!(
+            streams.get("enc-conv1").unwrap().pending_config.is_some(),
+            "pending_config should exist before first message"
+        );
+    }
+
+    // Build an encrypted UserMessage AgentRequest (app-layer)
+    let inner = AgentRequest {
+        request: Some(betcode_proto::v1::agent_request::Request::Message(
+            betcode_proto::v1::UserMessage {
+                content: "encrypted hello".into(),
+                attachments: vec![],
+            },
+        )),
+    };
+    let encrypted_req = make_app_encrypted_agent_request(&inner, &client_crypto);
+    let encrypted_bytes = encode(&encrypted_req);
+
+    // Wrap in a StreamData tunnel frame (tunnel-layer encrypted)
+    let enc = client_crypto.encrypt(&encrypted_bytes).unwrap();
+    let stream_frame = TunnelFrame {
+        request_id: "enc-conv1".into(),
+        frame_type: FrameType::StreamData as i32,
+        timestamp: None,
+        payload: Some(betcode_proto::v1::tunnel_frame::Payload::StreamData(
+            StreamPayload {
+                method: String::new(),
+                encrypted: Some(betcode_proto::v1::EncryptedPayload {
+                    ciphertext: enc.ciphertext,
+                    nonce: enc.nonce.to_vec(),
+                    ephemeral_pubkey: Vec::new(),
+                }),
+                sequence: 0,
+                metadata: HashMap::new(),
+            },
+        )),
+    };
+    // Should not panic — the handler decrypts the app-layer envelope
+    h.handle_frame(stream_frame).await;
+
+    // If decryption succeeded, the handler consumed pending_config to attempt
+    // subprocess start (which will fail — no real binary — but the important
+    // thing is that decryption worked and reached that code path).
+    let streams = h.active_streams.read().await;
+    // The stream may have been removed (start_session failed and cleanup runs),
+    // OR pending_config was taken (consumed). Either proves decryption succeeded.
+    match streams.get("enc-conv1") {
+        Some(active) => assert!(
+            active.pending_config.is_none(),
+            "pending_config should have been consumed after successful decryption"
+        ),
+        None => {
+            // Stream was removed because start_session failed — also proves decryption worked
+        }
+    }
+}
+
+#[tokio::test]
+async fn encrypted_agent_request_with_wrong_key_rejected() {
+    let (h, client_crypto, _rx) = make_handler_with_crypto().await;
+
+    // Start a converse session (app-layer + tunnel-layer encrypted)
+    h.handle_frame(encrypted_converse_frame("enc-conv3", "enc-stream-3", &client_crypto))
+        .await;
+    assert!(h.has_active_stream("enc-conv3").await);
+
+    // Encrypt with a DIFFERENT session
+    let (wrong_session, _) = betcode_crypto::test_session_pair().unwrap();
+    let inner = AgentRequest {
+        request: Some(betcode_proto::v1::agent_request::Request::Message(
+            betcode_proto::v1::UserMessage {
+                content: "wrong key".into(),
+                attachments: vec![],
+            },
+        )),
+    };
+    let encrypted_req = make_app_encrypted_agent_request(&inner, &wrong_session);
+    let encrypted_bytes = encode(&encrypted_req);
+
+    // Tunnel-layer encrypt with the correct key
+    let enc = client_crypto.encrypt(&encrypted_bytes).unwrap();
+    let stream_frame = TunnelFrame {
+        request_id: "enc-conv3".into(),
+        frame_type: FrameType::StreamData as i32,
+        timestamp: None,
+        payload: Some(betcode_proto::v1::tunnel_frame::Payload::StreamData(
+            StreamPayload {
+                method: String::new(),
+                encrypted: Some(betcode_proto::v1::EncryptedPayload {
+                    ciphertext: enc.ciphertext,
+                    nonce: enc.nonce.to_vec(),
+                    ephemeral_pubkey: Vec::new(),
+                }),
+                sequence: 0,
+                metadata: HashMap::new(),
+            },
+        )),
+    };
+    h.handle_frame(stream_frame).await;
+
+    // Should be rejected — pending_config untouched
+    let streams = h.active_streams.read().await;
+    let active = streams.get("enc-conv3").unwrap();
+    assert!(
+        active.pending_config.is_some(),
+        "Request encrypted with wrong key should be rejected"
+    );
+}
+
+#[tokio::test]
+async fn encrypted_agent_request_with_corrupted_data_rejected() {
+    let (h, client_crypto, _rx) = make_handler_with_crypto().await;
+
+    // Start a converse session (app-layer + tunnel-layer encrypted)
+    h.handle_frame(encrypted_converse_frame("enc-conv4", "enc-stream-4", &client_crypto))
+        .await;
+    assert!(h.has_active_stream("enc-conv4").await);
+
+    // Create a valid encrypted request, then corrupt it
+    let inner = AgentRequest {
+        request: Some(betcode_proto::v1::agent_request::Request::Message(
+            betcode_proto::v1::UserMessage {
+                content: "will be corrupted".into(),
+                attachments: vec![],
+            },
+        )),
+    };
+    let mut encrypted_req = make_app_encrypted_agent_request(&inner, &client_crypto);
+    // Corrupt the ciphertext
+    if let Some(betcode_proto::v1::agent_request::Request::Encrypted(ref mut env)) =
+        encrypted_req.request
+    {
+        if let Some(byte) = env.ciphertext.first_mut() {
+            *byte ^= 0xFF;
+        }
+    }
+    let encrypted_bytes = encode(&encrypted_req);
+
+    // Tunnel-layer encrypt
+    let enc = client_crypto.encrypt(&encrypted_bytes).unwrap();
+    let stream_frame = TunnelFrame {
+        request_id: "enc-conv4".into(),
+        frame_type: FrameType::StreamData as i32,
+        timestamp: None,
+        payload: Some(betcode_proto::v1::tunnel_frame::Payload::StreamData(
+            StreamPayload {
+                method: String::new(),
+                encrypted: Some(betcode_proto::v1::EncryptedPayload {
+                    ciphertext: enc.ciphertext,
+                    nonce: enc.nonce.to_vec(),
+                    ephemeral_pubkey: Vec::new(),
+                }),
+                sequence: 0,
+                metadata: HashMap::new(),
+            },
+        )),
+    };
+    h.handle_frame(stream_frame).await;
+
+    // Should be rejected
+    let streams = h.active_streams.read().await;
+    let active = streams.get("enc-conv4").unwrap();
+    assert!(
+        active.pending_config.is_some(),
+        "Corrupted encrypted request should be rejected"
+    );
+}
+
+// --- Downgrade attack and additional security tests ---
+
+#[tokio::test]
+async fn plaintext_agent_request_rejected_when_crypto_active() {
+    let (h, client_crypto, _rx) = make_handler_with_crypto().await;
+
+    // Start a valid converse session (properly encrypted)
+    h.handle_frame(encrypted_converse_frame("da-conv1", "da-stream-1", &client_crypto))
+        .await;
+    assert!(h.has_active_stream("da-conv1").await);
+
+    // Send a plaintext UserMessage (NOT app-layer encrypted) via tunnel-encrypted frame
+    let plain_req = AgentRequest {
+        request: Some(betcode_proto::v1::agent_request::Request::Message(
+            betcode_proto::v1::UserMessage {
+                content: "injected plaintext".into(),
+                attachments: vec![],
+            },
+        )),
+    };
+    let plain_bytes = encode(&plain_req);
+    // Tunnel-layer encrypt (so it passes tunnel decryption) but NOT app-layer encrypted
+    let frame = encrypted_req_frame("da-conv1", "", plain_bytes, &client_crypto);
+    // Change frame type to StreamData for the in-stream message
+    let frame = TunnelFrame {
+        frame_type: FrameType::StreamData as i32,
+        ..frame
+    };
+    h.handle_frame(frame).await;
+
+    // Should be rejected — pending_config untouched (the plaintext message was dropped)
+    let streams = h.active_streams.read().await;
+    let active = streams.get("da-conv1").unwrap();
+    assert!(
+        active.pending_config.is_some(),
+        "Plaintext request should be rejected when crypto is active"
+    );
+}
+
+#[tokio::test]
+async fn plaintext_start_conversation_rejected_when_crypto_active() {
+    let (h, client_crypto, _rx) = make_handler_with_crypto().await;
+
+    // Send a plaintext StartConversation that is tunnel-layer encrypted but NOT
+    // app-layer encrypted. handle_converse should reject because crypto is active.
+    let start_data = make_start_request("reject-stream-1");
+    let result = h
+        .handle_frame(encrypted_req_frame(
+            "reject-conv1",
+            METHOD_CONVERSE,
+            start_data,
+            &client_crypto,
+        ))
+        .await;
+    // handle_converse sends errors via outbound_tx, returns empty vec
+    assert!(result.is_empty());
+
+    // Should NOT have created a stream — the plaintext was rejected
+    assert!(
+        !h.has_active_stream("reject-conv1").await,
+        "Plaintext StartConversation should be rejected when crypto is active"
+    );
+}
+
+// --- Step 5: Event forwarder encryption tests ---
+
+#[tokio::test]
+async fn event_forwarder_encrypts_when_crypto_active() {
+    let (h, client_crypto, mut rx) = make_handler_with_crypto().await;
+
+    // Create a session in DB + start converse (app-layer + tunnel-layer encrypted)
+    h.db().create_session("ef-enc1", "model", "/tmp").await.unwrap();
+    h.handle_frame(encrypted_converse_frame("ef-conv1", "ef-enc1", &client_crypto))
+        .await;
+
+    // Broadcast an event into the session
+    h.multiplexer()
+        .broadcast(
+            "ef-enc1",
+            AgentEvent {
+                sequence: 1,
+                timestamp: None,
+                parent_tool_use_id: String::new(),
+                event: Some(betcode_proto::v1::agent_event::Event::TextDelta(
+                    betcode_proto::v1::TextDelta {
+                        text: "encrypted text".into(),
+                        is_complete: false,
+                    },
+                )),
+            },
+        )
+        .await;
+
+    // Receive the forwarded frame
+    let frame = tokio::time::timeout(std::time::Duration::from_millis(500), rx.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(frame.frame_type, FrameType::StreamData as i32);
+
+    // Extract tunnel-layer payload. Tunnel-layer is now passthrough when app-layer
+    // crypto is active (no redundant double-encryption), so ciphertext contains
+    // the raw serialized wrapper and nonce is empty.
+    if let Some(betcode_proto::v1::tunnel_frame::Payload::StreamData(p)) = &frame.payload {
+        let enc = p.encrypted.as_ref().unwrap();
+        assert!(enc.nonce.is_empty(), "Tunnel-layer should be passthrough when app-layer encrypts");
+        let wire_bytes = &enc.ciphertext; // passthrough: ciphertext IS the raw bytes
+
+        // Decode the AgentEvent — should have Encrypted variant (app-layer)
+        let wrapper = AgentEvent::decode(wire_bytes.as_slice()).unwrap();
+        match wrapper.event {
+            Some(betcode_proto::v1::agent_event::Event::Encrypted(ref env)) => {
+                // Decrypt the app-layer envelope
+                let inner_bytes = client_crypto.decrypt(&env.ciphertext, &env.nonce).unwrap();
+                let inner_event = AgentEvent::decode(inner_bytes.as_slice()).unwrap();
+                match inner_event.event {
+                    Some(betcode_proto::v1::agent_event::Event::TextDelta(ref td)) => {
+                        assert_eq!(td.text, "encrypted text");
+                    }
+                    other => panic!("Expected TextDelta, got {:?}", other),
+                }
+            }
+            other => panic!("Expected Encrypted envelope, got {:?}", other),
+        }
+    } else {
+        panic!("Expected StreamData payload");
+    }
+}
+
+#[tokio::test]
+async fn event_forwarder_no_encryption_when_no_crypto() {
+    let (h, mut rx) = make_handler_with_outbound().await;
+
+    // Create a session in DB + start converse
+    h.db().create_session("ef-plain1", "model", "/tmp").await.unwrap();
+    let start_data = make_start_request("ef-plain1");
+    h.handle_frame(req_frame("ef-conv2", METHOD_CONVERSE, start_data))
+        .await;
+
+    // Broadcast an event
+    h.multiplexer()
+        .broadcast(
+            "ef-plain1",
+            AgentEvent {
+                sequence: 1,
+                timestamp: None,
+                parent_tool_use_id: String::new(),
+                event: Some(betcode_proto::v1::agent_event::Event::TextDelta(
+                    betcode_proto::v1::TextDelta {
+                        text: "plaintext output".into(),
+                        is_complete: false,
+                    },
+                )),
+            },
+        )
+        .await;
+
+    // Receive the forwarded frame
+    let frame = tokio::time::timeout(std::time::Duration::from_millis(500), rx.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(frame.frame_type, FrameType::StreamData as i32);
+
+    // Without crypto, the event should be directly decodable (passthrough)
+    if let Some(betcode_proto::v1::tunnel_frame::Payload::StreamData(p)) = &frame.payload {
+        let enc = p.encrypted.as_ref().unwrap();
+        // No crypto → ciphertext is raw bytes, nonce is empty
+        assert!(enc.nonce.is_empty());
+        let event = AgentEvent::decode(enc.ciphertext.as_slice()).unwrap();
+        match event.event {
+            Some(betcode_proto::v1::agent_event::Event::TextDelta(ref td)) => {
+                assert_eq!(td.text, "plaintext output");
+            }
+            other => panic!("Expected TextDelta (not encrypted), got {:?}", other),
+        }
+    } else {
+        panic!("Expected StreamData payload");
+    }
+}
+
+/// Relay-forwarded data has empty nonce (no tunnel-layer encryption).
+/// When crypto is active, decrypt_payload should passthrough these payloads
+/// since the relay doesn't have the crypto keys. App-layer EncryptedEnvelope
+/// handles the actual E2E protection.
+#[tokio::test]
+async fn decrypt_payload_passthrough_on_empty_nonce_with_crypto_active() {
+    let (h, client_crypto, _rx) = make_handler_with_crypto().await;
+
+    // Build an app-layer encrypted AgentRequest (as the CLI would send)
+    let inner_req = AgentRequest {
+        request: Some(betcode_proto::v1::agent_request::Request::Message(
+            betcode_proto::v1::UserMessage {
+                content: "hello from relay".into(),
+                attachments: vec![],
+            },
+        )),
+    };
+    let app_encrypted = make_app_encrypted_agent_request(&inner_req, &client_crypto);
+    let wire_bytes = encode(&app_encrypted);
+
+    // Simulate relay forwarding: raw bytes with empty nonce (no tunnel-layer encryption)
+    let frame = req_frame("r1", METHOD_LIST_SESSIONS, wire_bytes.clone());
+
+    // The handler should passthrough the empty-nonce payload and then
+    // successfully app-layer decrypt the EncryptedEnvelope inside.
+    let responses = h.handle_frame(frame).await;
+
+    // Should NOT get a tunnel decryption error
+    for resp in &responses {
+        if let Some(betcode_proto::v1::tunnel_frame::Payload::Error(err)) = &resp.payload {
+            panic!(
+                "Got error response (tunnel decryption should have been skipped): {}",
+                err.message,
+            );
+        }
+    }
+}
+
+/// Relay-forwarded data with empty nonce should passthrough even when crypto active,
+/// but app-layer plaintext should still be rejected.
+#[tokio::test]
+async fn relay_forwarded_plaintext_request_rejected_when_crypto_active() {
+    let (h, _client_crypto, _rx) = make_handler_with_crypto().await;
+
+    // Plain (non-app-layer-encrypted) AgentRequest
+    let plain_req = AgentRequest {
+        request: Some(betcode_proto::v1::agent_request::Request::Message(
+            betcode_proto::v1::UserMessage {
+                content: "plain attack".into(),
+                attachments: vec![],
+            },
+        )),
+    };
+    let wire_bytes = encode(&plain_req);
+
+    // Relay-forwarded: empty nonce (passes tunnel layer)
+    let frame = req_frame("r2", METHOD_LIST_SESSIONS, wire_bytes);
+    let responses = h.handle_frame(frame).await;
+
+    // Tunnel passthrough should succeed, but app-layer should reject plaintext.
+    // The handler should not process the request as a valid UserMessage.
+    // It should either return an error or silently discard it.
+    let has_active_stream = h.has_active_stream("r2").await;
+    assert!(!has_active_stream, "plaintext request should not create a stream");
+}

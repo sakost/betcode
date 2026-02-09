@@ -11,6 +11,8 @@ use betcode_proto::v1::{
     UserMessage,
 };
 
+use betcode_crypto::FingerprintCheck;
+
 use crate::connection::{ConnectionError, DaemonConnection};
 
 /// Headless mode configuration.
@@ -52,6 +54,24 @@ pub async fn run(conn: &mut DaemonConnection, config: HeadlessConfig) -> Result<
         Err(e) => {
             // Non-fatal: session may be new
             eprintln!("[Warning: could not load history: {}]", e);
+        }
+    }
+
+    // Key exchange for relay connections
+    if conn.is_relay() {
+        let machine_id = conn.machine_id().unwrap_or("unknown").to_string();
+        let (_daemon_fp, fp_check) = conn
+            .exchange_keys(&machine_id)
+            .await
+            .map_err(HeadlessError::Connection)?;
+        match fp_check {
+            FingerprintCheck::TrustOnFirstUse | FingerprintCheck::Matched => {}
+            FingerprintCheck::Mismatch { expected, actual } => {
+                return Err(HeadlessError::FatalError(format!(
+                    "Daemon fingerprint mismatch! Expected: {}, Actual: {}. Possible MITM attack.",
+                    expected, actual
+                )));
+            }
         }
     }
 

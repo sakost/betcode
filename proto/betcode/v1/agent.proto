@@ -49,6 +49,7 @@ message AgentRequest {
     PermissionResponse permission = 3;
     UserQuestionResponse question_response = 4;
     CancelRequest cancel = 5;
+    EncryptedEnvelope encrypted = 6;
   }
 }
 
@@ -114,6 +115,7 @@ message AgentEvent {
     PlanModeChange plan_mode = 20;
     TurnComplete turn_complete = 21;
     UserInput user_input = 22;
+    EncryptedEnvelope encrypted = 23;
   }
 }
 
@@ -211,6 +213,13 @@ message TurnComplete {
 // UserInput records a user's prompt for session replay.
 message UserInput {
   string content = 1;
+}
+
+// EncryptedEnvelope wraps an application-layer encrypted payload.
+// The relay sees valid protobuf but cannot read the inner content.
+message EncryptedEnvelope {
+  bytes ciphertext = 1;
+  bytes nonce = 2;
 }
 
 // =============================================================================
