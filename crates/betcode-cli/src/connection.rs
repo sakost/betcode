@@ -511,6 +511,7 @@ impl DaemonConnection {
     ///
     /// Returns all stored events for the session (from `from_sequence` onward).
     /// Used to populate the UI with conversation history before starting a new turn.
+    /// When E2E crypto is active, events are decrypted before returning.
     pub async fn resume_session(
         &mut self,
         session_id: &str,
@@ -518,6 +519,7 @@ impl DaemonConnection {
     ) -> Result<Vec<AgentEvent>, ConnectionError> {
         let auth_token = self.config.auth_token.clone();
         let machine_id = self.config.machine_id.clone();
+        let crypto = self.crypto.clone();
         let client = self.client.as_mut().ok_or(ConnectionError::NotConnected)?;
 
         let mut request = tonic::Request::new(ResumeSessionRequest {
@@ -540,7 +542,7 @@ impl DaemonConnection {
         {
             events.push(event);
         }
-        Ok(events)
+        Ok(decrypt_resume_events(crypto.as_ref(), events))
     }
 
     /// Cancel the current turn in a session.
@@ -879,6 +881,29 @@ pub(crate) fn decrypt_agent_event(
         }
         _ => Err("rejected plaintext event: E2E encryption active".to_string()),
     }
+}
+
+/// Decrypt a batch of resume events. When crypto is active, each event is
+/// expected to be an `Encrypted` envelope; events that fail decryption are
+/// skipped (logged at warn level). When crypto is `None`, events pass through
+/// unmodified (local mode).
+fn decrypt_resume_events(
+    crypto: Option<&std::sync::Arc<CryptoSession>>,
+    events: Vec<AgentEvent>,
+) -> Vec<AgentEvent> {
+    let Some(session) = crypto else {
+        return events;
+    };
+    events
+        .into_iter()
+        .filter_map(|event| match decrypt_agent_event(session, event) {
+            Ok(decrypted) => Some(decrypted),
+            Err(e) => {
+                warn!("Failed to decrypt resume event: {}", e);
+                None
+            }
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -1539,5 +1564,123 @@ mod tests {
         }
 
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    // =========================================================================
+    // Resume session decryption tests
+    // =========================================================================
+
+    #[test]
+    fn decrypt_resume_events_decrypts_encrypted_events() {
+        use prost::Message;
+        let secret = [55u8; 32];
+        let session = std::sync::Arc::new(
+            betcode_crypto::CryptoSession::from_shared_secret(&secret).unwrap(),
+        );
+        let session2 = betcode_crypto::CryptoSession::from_shared_secret(&secret).unwrap();
+
+        // Simulate what the daemon sends: plain events wrapped in Encrypted envelopes
+        let original = AgentEvent {
+            sequence: 1,
+            timestamp: None,
+            parent_tool_use_id: String::new(),
+            event: Some(betcode_proto::v1::agent_event::Event::TextDelta(
+                betcode_proto::v1::TextDelta {
+                    text: "Hello from history".into(),
+                    is_complete: true,
+                },
+            )),
+        };
+        let mut buf = Vec::with_capacity(original.encoded_len());
+        original.encode(&mut buf).unwrap();
+        let enc = session2.encrypt(&buf).unwrap();
+        let wrapped = AgentEvent {
+            sequence: 0,
+            timestamp: None,
+            parent_tool_use_id: String::new(),
+            event: Some(betcode_proto::v1::agent_event::Event::Encrypted(
+                betcode_proto::v1::EncryptedEnvelope {
+                    ciphertext: enc.ciphertext,
+                    nonce: enc.nonce.to_vec(),
+                },
+            )),
+        };
+
+        // This simulates what resume_session should do: decrypt when crypto is active
+        let decrypted = decrypt_resume_events(Some(&session), vec![wrapped]);
+        assert_eq!(decrypted.len(), 1);
+        match &decrypted[0].event {
+            Some(betcode_proto::v1::agent_event::Event::TextDelta(td)) => {
+                assert_eq!(td.text, "Hello from history");
+                assert!(td.is_complete);
+            }
+            other => panic!("Expected TextDelta, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn decrypt_resume_events_passes_through_without_crypto() {
+        let event = AgentEvent {
+            sequence: 1,
+            timestamp: None,
+            parent_tool_use_id: String::new(),
+            event: Some(betcode_proto::v1::agent_event::Event::TextDelta(
+                betcode_proto::v1::TextDelta {
+                    text: "plain".into(),
+                    is_complete: false,
+                },
+            )),
+        };
+
+        let result = decrypt_resume_events(None, vec![event]);
+        assert_eq!(result.len(), 1);
+        match &result[0].event {
+            Some(betcode_proto::v1::agent_event::Event::TextDelta(td)) => {
+                assert_eq!(td.text, "plain");
+            }
+            other => panic!("Expected TextDelta, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn decrypt_resume_events_skips_undecryptable() {
+        use prost::Message;
+        let secret1 = [11u8; 32];
+        let secret2 = [22u8; 32];
+        let session = std::sync::Arc::new(
+            betcode_crypto::CryptoSession::from_shared_secret(&secret1).unwrap(),
+        );
+        let wrong_session = betcode_crypto::CryptoSession::from_shared_secret(&secret2).unwrap();
+
+        // Encrypt with wrong key
+        let original = AgentEvent {
+            sequence: 1,
+            timestamp: None,
+            parent_tool_use_id: String::new(),
+            event: Some(betcode_proto::v1::agent_event::Event::TextDelta(
+                betcode_proto::v1::TextDelta {
+                    text: "secret".into(),
+                    is_complete: false,
+                },
+            )),
+        };
+        let mut buf = Vec::new();
+        original.encode(&mut buf).unwrap();
+        let enc = wrong_session.encrypt(&buf).unwrap();
+        let wrapped = AgentEvent {
+            sequence: 0,
+            timestamp: None,
+            parent_tool_use_id: String::new(),
+            event: Some(betcode_proto::v1::agent_event::Event::Encrypted(
+                betcode_proto::v1::EncryptedEnvelope {
+                    ciphertext: enc.ciphertext,
+                    nonce: enc.nonce.to_vec(),
+                },
+            )),
+        };
+
+        // Should skip the undecryptable event rather than crash
+        let result = decrypt_resume_events(Some(&session), vec![wrapped]);
+        assert_eq!(result.len(), 0);
     }
 }
