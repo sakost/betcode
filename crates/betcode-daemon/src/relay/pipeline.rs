@@ -179,8 +179,8 @@ impl SessionRelay {
     /// Send a permission response (control_response) to the subprocess.
     ///
     /// Format must match the Claude Agent SDK control protocol:
-    /// allow → `{ behavior: "allow", updatedInput: {} }`
-    /// deny  → `{ behavior: "deny", message: "User denied", interrupt: true }`
+    /// allow → `{ behavior: "allow" }` (no updatedInput — use original args)
+    /// deny  → `{ behavior: "deny", message: "...", interrupt: true }`
     pub async fn send_permission_response(
         &self,
         session_id: &str,
@@ -189,29 +189,7 @@ impl SessionRelay {
     ) -> Result<(), RelayError> {
         let handle = self.get_active_handle(session_id).await?;
 
-        let response = if granted {
-            serde_json::json!({
-                "behavior": "allow",
-                "updatedInput": {}
-            })
-        } else {
-            serde_json::json!({
-                "behavior": "deny",
-                "message": "User denied permission",
-                "interrupt": true
-            })
-        };
-
-        let msg = serde_json::json!({
-            "type": "control_response",
-            "response": {
-                "subtype": "success",
-                "request_id": request_id,
-                "response": response
-            }
-        });
-        let line =
-            serde_json::to_string(&msg).map_err(|e| RelayError::Serialization(e.to_string()))?;
+        let line = build_permission_response_json(request_id, granted);
 
         handle
             .stdin_tx
@@ -495,6 +473,36 @@ async fn store_event(db: &Database, session_id: &str, event: &AgentEvent) -> Res
         .map(|_| ())
 }
 
+/// Build the JSON line for a permission control_response.
+///
+/// For allow: omit `updatedInput` entirely so Claude Code uses the original
+/// tool arguments. Sending `"updatedInput": {}` would replace all arguments
+/// with an empty dict, causing MCP tools to receive no parameters.
+/// See: https://github.com/anthropics/claude-agent-sdk-python/issues/320
+fn build_permission_response_json(request_id: &str, granted: bool) -> String {
+    let response = if granted {
+        serde_json::json!({
+            "behavior": "allow"
+        })
+    } else {
+        serde_json::json!({
+            "behavior": "deny",
+            "message": "User denied permission",
+            "interrupt": true
+        })
+    };
+
+    let msg = serde_json::json!({
+        "type": "control_response",
+        "response": {
+            "subtype": "success",
+            "request_id": request_id,
+            "response": response
+        }
+    });
+    serde_json::to_string(&msg).expect("permission response serialization should not fail")
+}
+
 /// Build the JSON line for an AskUserQuestion control_response.
 ///
 /// The response includes `updatedInput` with both the original questions and the user's answers,
@@ -597,6 +605,44 @@ mod tests {
             .send_question_response("nonexistent", "req_q1", &answers, &original_input)
             .await;
         assert!(matches!(result, Err(RelayError::SessionNotFound { .. })));
+    }
+
+    /// Verify the permission allow JSON omits updatedInput (uses original args).
+    #[test]
+    fn permission_allow_json_omits_updated_input() {
+        let msg = build_permission_response_json("req_p1", true);
+        let parsed: serde_json::Value = serde_json::from_str(&msg).unwrap();
+
+        assert_eq!(parsed["type"], "control_response");
+        assert_eq!(parsed["response"]["subtype"], "success");
+        assert_eq!(parsed["response"]["request_id"], "req_p1");
+
+        let response = &parsed["response"]["response"];
+        assert_eq!(response["behavior"], "allow");
+        // updatedInput must NOT be present — omitting it tells Claude Code
+        // to use the original tool arguments unchanged.
+        assert!(
+            response.get("updatedInput").is_none()
+                || response["updatedInput"].is_null(),
+            "updatedInput must be omitted for allow: got {:?}",
+            response.get("updatedInput"),
+        );
+    }
+
+    /// Verify the permission deny JSON includes interrupt and message.
+    #[test]
+    fn permission_deny_json_includes_message() {
+        let msg = build_permission_response_json("req_p2", false);
+        let parsed: serde_json::Value = serde_json::from_str(&msg).unwrap();
+
+        assert_eq!(parsed["type"], "control_response");
+        assert_eq!(parsed["response"]["subtype"], "success");
+        assert_eq!(parsed["response"]["request_id"], "req_p2");
+
+        let response = &parsed["response"]["response"];
+        assert_eq!(response["behavior"], "deny");
+        assert_eq!(response["interrupt"], true);
+        assert!(response["message"].is_string());
     }
 
     /// Verify the JSON format sent to the subprocess matches the protocol spec.
