@@ -2,9 +2,7 @@
 
 #[cfg(test)]
 mod tests {
-    use crate::app::{
-        App, AppMode, PendingPermission, PendingUserQuestion, QuestionOptionDisplay,
-    };
+    use crate::app::{App, AppMode, PendingPermission, PendingUserQuestion, QuestionOptionDisplay};
     use crate::ui::draw;
     use ratatui::backend::TestBackend;
     use ratatui::Terminal;
@@ -198,8 +196,7 @@ mod tests {
         let backend = TestBackend::new(80, 24);
         let mut terminal = Terminal::new(backend).unwrap();
         let mut app = make_permission_app(AppMode::PermissionEditInput);
-        app.pending_permission.as_mut().unwrap().edit_buffer =
-            r#"{"command": "ls"}"#.to_string();
+        app.pending_permission.as_mut().unwrap().edit_buffer = r#"{"command": "ls"}"#.to_string();
         app.pending_permission.as_mut().unwrap().edit_cursor = 17;
         terminal.draw(|frame| draw(frame, &mut app)).unwrap();
     }
@@ -209,8 +206,7 @@ mod tests {
         let backend = TestBackend::new(80, 24);
         let mut terminal = Terminal::new(backend).unwrap();
         let mut app = make_permission_app(AppMode::PermissionComment);
-        app.pending_permission.as_mut().unwrap().edit_buffer =
-            "be careful with this".to_string();
+        app.pending_permission.as_mut().unwrap().edit_buffer = "be careful with this".to_string();
         app.pending_permission.as_mut().unwrap().edit_cursor = 20;
         terminal.draw(|frame| draw(frame, &mut app)).unwrap();
     }
@@ -221,8 +217,7 @@ mod tests {
         let mut terminal = Terminal::new(backend).unwrap();
         let mut app = make_permission_app(AppMode::PermissionDenyMessage);
         app.pending_permission.as_mut().unwrap().deny_interrupt = true;
-        app.pending_permission.as_mut().unwrap().edit_buffer =
-            "stop this".to_string();
+        app.pending_permission.as_mut().unwrap().edit_buffer = "stop this".to_string();
         app.pending_permission.as_mut().unwrap().edit_cursor = 9;
         terminal.draw(|frame| draw(frame, &mut app)).unwrap();
     }

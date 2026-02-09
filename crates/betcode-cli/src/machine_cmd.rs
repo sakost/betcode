@@ -79,11 +79,7 @@ async fn connect_relay(config: &CliConfig) -> anyhow::Result<Channel> {
         .map_err(|e| anyhow::anyhow!("Failed to connect to relay: {}", e))
 }
 
-async fn register(
-    config: &CliConfig,
-    id: Option<String>,
-    name: &str,
-) -> anyhow::Result<()> {
+async fn register(config: &CliConfig, id: Option<String>, name: &str) -> anyhow::Result<()> {
     let machine_id = id.unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
     let channel = connect_relay(config).await?;
     let mut client = MachineServiceClient::new(channel);

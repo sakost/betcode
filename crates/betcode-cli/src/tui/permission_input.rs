@@ -7,17 +7,20 @@ use crate::app::{json_to_struct, App, AppMode};
 use betcode_proto::v1::{AgentRequest, PermissionDecision, PermissionResponse, UserMessage};
 
 /// Handle a key press during the permission prompt (Y/A/Tab/E/N/X).
-pub async fn handle_permission_key(
-    app: &mut App,
-    tx: &mpsc::Sender<AgentRequest>,
-    code: KeyCode,
-) {
+pub async fn handle_permission_key(app: &mut App, tx: &mpsc::Sender<AgentRequest>, code: KeyCode) {
     match code {
         KeyCode::Char('y') | KeyCode::Char('Y') => {
             send_permission(app, tx, PermissionDecision::AllowOnce, None, String::new()).await;
         }
         KeyCode::Char('a') | KeyCode::Char('A') => {
-            send_permission(app, tx, PermissionDecision::AllowSession, None, String::new()).await;
+            send_permission(
+                app,
+                tx,
+                PermissionDecision::AllowSession,
+                None,
+                String::new(),
+            )
+            .await;
         }
         KeyCode::Tab => {
             app.start_permission_edit();
@@ -39,7 +42,14 @@ pub async fn handle_permission_key(
             send_permission(app, tx, PermissionDecision::AllowOnce, None, String::new()).await;
         }
         KeyCode::Char('2') => {
-            send_permission(app, tx, PermissionDecision::AllowSession, None, String::new()).await;
+            send_permission(
+                app,
+                tx,
+                PermissionDecision::AllowSession,
+                None,
+                String::new(),
+            )
+            .await;
         }
         KeyCode::Char('3') => {
             app.start_permission_edit();
@@ -122,8 +132,14 @@ async fn submit_permission_edit(app: &mut App, tx: &mpsc::Sender<AgentRequest>) 
                 .as_ref()
                 .and_then(|p| serde_json::from_str::<serde_json::Value>(&p.edit_buffer).ok())
                 .map(|v| json_to_struct(&v));
-            send_permission(app, tx, PermissionDecision::AllowWithEdit, updated, String::new())
-                .await;
+            send_permission(
+                app,
+                tx,
+                PermissionDecision::AllowWithEdit,
+                updated,
+                String::new(),
+            )
+            .await;
         }
         AppMode::PermissionComment => {
             let comment = app

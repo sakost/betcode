@@ -208,20 +208,15 @@ impl TunnelService for TunnelServiceImpl {
                 m
             }
             Err(_) => {
-                let metadata_json = serde_json::to_string(&req.capabilities)
-                    .unwrap_or_else(|_| "{}".to_string());
+                let metadata_json =
+                    serde_json::to_string(&req.capabilities).unwrap_or_else(|_| "{}".to_string());
                 info!(
                     machine_id = %req.machine_id,
                     machine_name = %req.machine_name,
                     "Auto-registering machine on first tunnel connect"
                 );
                 self.db
-                    .create_machine(
-                        &req.machine_id,
-                        &req.machine_name,
-                        &user_id,
-                        &metadata_json,
-                    )
+                    .create_machine(&req.machine_id, &req.machine_name, &user_id, &metadata_json)
                     .await
                     .map_err(|e| {
                         Status::internal(format!("Failed to auto-register machine: {}", e))

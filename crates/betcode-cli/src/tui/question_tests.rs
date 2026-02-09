@@ -34,9 +34,7 @@ mod tests {
         app
     }
 
-    fn extract_question(
-        req: &AgentRequest,
-    ) -> (String, std::collections::HashMap<String, String>) {
+    fn extract_question(req: &AgentRequest) -> (String, std::collections::HashMap<String, String>) {
         match &req.request {
             Some(betcode_proto::v1::agent_request::Request::QuestionResponse(q)) => {
                 (q.question_id.clone(), q.answers.clone())

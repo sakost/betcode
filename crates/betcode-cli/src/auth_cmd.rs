@@ -295,7 +295,10 @@ mod tests {
 
         let _ = ensure_valid_token(&mut config).await;
 
-        let auth = config.auth.as_ref().expect("Auth must survive failed refresh");
+        let auth = config
+            .auth
+            .as_ref()
+            .expect("Auth must survive failed refresh");
         assert_eq!(auth.user_id, "user-123");
         assert_eq!(auth.username, "testuser");
         assert_eq!(auth.access_token, "expired_at");

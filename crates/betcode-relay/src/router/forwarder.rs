@@ -7,7 +7,9 @@ use tokio::sync::mpsc;
 use tokio::time::timeout;
 use tracing::{info, warn};
 
-use betcode_proto::v1::{EncryptedPayload, FrameType, StreamPayload, TunnelError, TunnelErrorCode, TunnelFrame};
+use betcode_proto::v1::{
+    EncryptedPayload, FrameType, StreamPayload, TunnelError, TunnelErrorCode, TunnelFrame,
+};
 
 use crate::buffer::BufferManager;
 use crate::registry::ConnectionRegistry;

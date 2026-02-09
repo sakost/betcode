@@ -251,10 +251,14 @@ impl App {
                 self.pending_question = Some(PendingUserQuestion {
                     question_id: q.question_id,
                     question: q.question,
-                    options: q.options.into_iter().map(|opt| QuestionOptionDisplay {
-                        label: opt.label,
-                        description: opt.description,
-                    }).collect(),
+                    options: q
+                        .options
+                        .into_iter()
+                        .map(|opt| QuestionOptionDisplay {
+                            label: opt.label,
+                            description: opt.description,
+                        })
+                        .collect(),
                     multi_select: q.multi_select,
                     highlight: 0,
                     selected: Vec::new(),
@@ -629,7 +633,10 @@ mod tests {
             text: String::new(),
             is_complete: false,
         })));
-        assert!(app.messages.is_empty(), "Empty text delta should not create a message");
+        assert!(
+            app.messages.is_empty(),
+            "Empty text delta should not create a message"
+        );
     }
 
     #[test]
@@ -665,12 +672,14 @@ mod tests {
         assert!(app.messages[0].streaming);
 
         // Tool call arrives — should finish streaming first
-        app.handle_event(make_event(Event::ToolCallStart(betcode_proto::v1::ToolCallStart {
-            tool_id: "t1".to_string(),
-            tool_name: "Bash".to_string(),
-            input: None,
-            description: "ls -la".to_string(),
-        })));
+        app.handle_event(make_event(Event::ToolCallStart(
+            betcode_proto::v1::ToolCallStart {
+                tool_id: "t1".to_string(),
+                tool_name: "Bash".to_string(),
+                input: None,
+                description: "ls -la".to_string(),
+            },
+        )));
         assert_eq!(app.messages.len(), 2);
         assert!(!app.messages[0].streaming); // streaming finished
         assert_eq!(app.messages[0].role, MessageRole::Assistant);
@@ -683,12 +692,14 @@ mod tests {
     fn tool_call_start_empty_description_no_dash() {
         use betcode_proto::v1::agent_event::Event;
         let mut app = App::new();
-        app.handle_event(make_event(Event::ToolCallStart(betcode_proto::v1::ToolCallStart {
-            tool_id: "t1".to_string(),
-            tool_name: "Read".to_string(),
-            input: None,
-            description: String::new(),
-        })));
+        app.handle_event(make_event(Event::ToolCallStart(
+            betcode_proto::v1::ToolCallStart {
+                tool_id: "t1".to_string(),
+                tool_name: "Read".to_string(),
+                input: None,
+                description: String::new(),
+            },
+        )));
         assert_eq!(app.messages[0].content, "[Tool: Read]");
     }
 
@@ -698,10 +709,12 @@ mod tests {
         let mut app = App::new();
         app.status = "Session: abc | Model: claude".to_string();
 
-        app.handle_event(make_event(Event::StatusChange(betcode_proto::v1::StatusChange {
-            status: 1, // Thinking
-            message: String::new(),
-        })));
+        app.handle_event(make_event(Event::StatusChange(
+            betcode_proto::v1::StatusChange {
+                status: 1, // Thinking
+                message: String::new(),
+            },
+        )));
         assert_eq!(app.status, "Session: abc | Model: claude");
         assert!(app.agent_busy);
     }
@@ -712,10 +725,12 @@ mod tests {
         let mut app = App::new();
         app.status = "old status".to_string();
 
-        app.handle_event(make_event(Event::StatusChange(betcode_proto::v1::StatusChange {
-            status: 0,
-            message: "new status".to_string(),
-        })));
+        app.handle_event(make_event(Event::StatusChange(
+            betcode_proto::v1::StatusChange {
+                status: 0,
+                message: "new status".to_string(),
+            },
+        )));
         assert_eq!(app.status, "new status");
         assert!(!app.agent_busy);
     }
@@ -730,12 +745,14 @@ mod tests {
             text: "First".to_string(),
             is_complete: false,
         })));
-        app.handle_event(make_event(Event::ToolCallStart(betcode_proto::v1::ToolCallStart {
-            tool_id: "t1".to_string(),
-            tool_name: "Bash".to_string(),
-            input: None,
-            description: "ls".to_string(),
-        })));
+        app.handle_event(make_event(Event::ToolCallStart(
+            betcode_proto::v1::ToolCallStart {
+                tool_id: "t1".to_string(),
+                tool_name: "Bash".to_string(),
+                input: None,
+                description: "ls".to_string(),
+            },
+        )));
         app.handle_event(make_event(Event::TextDelta(betcode_proto::v1::TextDelta {
             text: "Second".to_string(),
             is_complete: false,
@@ -766,7 +783,10 @@ mod tests {
         assert_eq!(app.messages.len(), 1);
         assert_eq!(app.messages[0].role, MessageRole::Assistant);
         assert_eq!(app.messages[0].content, "Hello from history");
-        assert!(!app.messages[0].streaming, "History messages should not be streaming");
+        assert!(
+            !app.messages[0].streaming,
+            "History messages should not be streaming"
+        );
     }
 
     #[test]
@@ -806,12 +826,14 @@ mod tests {
         use betcode_proto::v1::agent_event::Event;
         let mut app = App::new();
 
-        app.load_history_event(make_event(Event::ToolCallStart(betcode_proto::v1::ToolCallStart {
-            tool_id: "t1".to_string(),
-            tool_name: "Bash".to_string(),
-            input: None,
-            description: "git status".to_string(),
-        })));
+        app.load_history_event(make_event(Event::ToolCallStart(
+            betcode_proto::v1::ToolCallStart {
+                tool_id: "t1".to_string(),
+                tool_name: "Bash".to_string(),
+                input: None,
+                description: "git status".to_string(),
+            },
+        )));
 
         assert_eq!(app.messages.len(), 1);
         assert_eq!(app.messages[0].role, MessageRole::Tool);
@@ -824,12 +846,14 @@ mod tests {
         use betcode_proto::v1::agent_event::Event;
         let mut app = App::new();
 
-        app.load_history_event(make_event(Event::ToolCallResult(betcode_proto::v1::ToolCallResult {
-            tool_id: "t1".to_string(),
-            output: "on branch main".to_string(),
-            is_error: false,
-            duration_ms: 100,
-        })));
+        app.load_history_event(make_event(Event::ToolCallResult(
+            betcode_proto::v1::ToolCallResult {
+                tool_id: "t1".to_string(),
+                output: "on branch main".to_string(),
+                is_error: false,
+                duration_ms: 100,
+            },
+        )));
 
         assert_eq!(app.messages.len(), 1);
         assert_eq!(app.messages[0].role, MessageRole::Tool);
@@ -842,20 +866,25 @@ mod tests {
         use betcode_proto::v1::agent_event::Event;
         let mut app = App::new();
 
-        app.load_history_event(make_event(Event::SessionInfo(betcode_proto::v1::SessionInfo {
-            session_id: "s1".to_string(),
-            model: "claude-sonnet-4".to_string(),
-            working_directory: String::new(),
-            worktree_id: String::new(),
-            message_count: 0,
-            is_resumed: false,
-            is_compacted: false,
-            context_usage_percent: 0.0,
-        })));
+        app.load_history_event(make_event(Event::SessionInfo(
+            betcode_proto::v1::SessionInfo {
+                session_id: "s1".to_string(),
+                model: "claude-sonnet-4".to_string(),
+                working_directory: String::new(),
+                worktree_id: String::new(),
+                message_count: 0,
+                is_resumed: false,
+                is_compacted: false,
+                context_usage_percent: 0.0,
+            },
+        )));
 
         assert_eq!(app.session_id, Some("s1".to_string()));
         assert_eq!(app.model, "claude-sonnet-4");
-        assert!(app.messages.is_empty(), "SessionInfo should not create a display message");
+        assert!(
+            app.messages.is_empty(),
+            "SessionInfo should not create a display message"
+        );
     }
 
     #[test]
@@ -864,17 +893,21 @@ mod tests {
         let mut app = App::new();
 
         // PermissionRequest — historical, not actionable
-        app.load_history_event(make_event(Event::PermissionRequest(betcode_proto::v1::PermissionRequest {
-            request_id: "p1".to_string(),
-            tool_name: "Bash".to_string(),
-            description: "ls".to_string(),
-            input: None,
-        })));
+        app.load_history_event(make_event(Event::PermissionRequest(
+            betcode_proto::v1::PermissionRequest {
+                request_id: "p1".to_string(),
+                tool_name: "Bash".to_string(),
+                description: "ls".to_string(),
+                input: None,
+            },
+        )));
         // StatusChange — transient
-        app.load_history_event(make_event(Event::StatusChange(betcode_proto::v1::StatusChange {
-            status: 1,
-            message: "thinking".to_string(),
-        })));
+        app.load_history_event(make_event(Event::StatusChange(
+            betcode_proto::v1::StatusChange {
+                status: 1,
+                message: "thinking".to_string(),
+            },
+        )));
         // Usage — transient
         app.load_history_event(make_event(Event::Usage(betcode_proto::v1::UsageReport {
             input_tokens: 100,
@@ -886,8 +919,15 @@ mod tests {
             duration_ms: 0,
         })));
 
-        assert!(app.messages.is_empty(), "PermissionRequest, StatusChange, Usage should be skipped");
-        assert_eq!(app.mode, AppMode::Normal, "PermissionRequest should not enter prompt mode");
+        assert!(
+            app.messages.is_empty(),
+            "PermissionRequest, StatusChange, Usage should be skipped"
+        );
+        assert_eq!(
+            app.mode,
+            AppMode::Normal,
+            "PermissionRequest should not enter prompt mode"
+        );
     }
 
     #[test]
@@ -913,39 +953,47 @@ mod tests {
         let mut app = App::new();
 
         // Simulate a full historical turn: session_info → text → tool → result → text → turn_complete
-        app.load_history_event(make_event(Event::SessionInfo(betcode_proto::v1::SessionInfo {
-            session_id: "s1".to_string(),
-            model: "claude-sonnet-4".to_string(),
-            working_directory: String::new(),
-            worktree_id: String::new(),
-            message_count: 0,
-            is_resumed: false,
-            is_compacted: false,
-            context_usage_percent: 0.0,
-        })));
+        app.load_history_event(make_event(Event::SessionInfo(
+            betcode_proto::v1::SessionInfo {
+                session_id: "s1".to_string(),
+                model: "claude-sonnet-4".to_string(),
+                working_directory: String::new(),
+                worktree_id: String::new(),
+                message_count: 0,
+                is_resumed: false,
+                is_compacted: false,
+                context_usage_percent: 0.0,
+            },
+        )));
         app.load_history_event(make_event(Event::TextDelta(betcode_proto::v1::TextDelta {
             text: "Let me check.".to_string(),
             is_complete: true,
         })));
-        app.load_history_event(make_event(Event::ToolCallStart(betcode_proto::v1::ToolCallStart {
-            tool_id: "t1".to_string(),
-            tool_name: "Bash".to_string(),
-            input: None,
-            description: "ls".to_string(),
-        })));
-        app.load_history_event(make_event(Event::ToolCallResult(betcode_proto::v1::ToolCallResult {
-            tool_id: "t1".to_string(),
-            output: "file.txt".to_string(),
-            is_error: false,
-            duration_ms: 50,
-        })));
+        app.load_history_event(make_event(Event::ToolCallStart(
+            betcode_proto::v1::ToolCallStart {
+                tool_id: "t1".to_string(),
+                tool_name: "Bash".to_string(),
+                input: None,
+                description: "ls".to_string(),
+            },
+        )));
+        app.load_history_event(make_event(Event::ToolCallResult(
+            betcode_proto::v1::ToolCallResult {
+                tool_id: "t1".to_string(),
+                output: "file.txt".to_string(),
+                is_error: false,
+                duration_ms: 50,
+            },
+        )));
         app.load_history_event(make_event(Event::TextDelta(betcode_proto::v1::TextDelta {
             text: "Found file.txt".to_string(),
             is_complete: true,
         })));
-        app.load_history_event(make_event(Event::TurnComplete(betcode_proto::v1::TurnComplete {
-            stop_reason: "end_turn".to_string(),
-        })));
+        app.load_history_event(make_event(Event::TurnComplete(
+            betcode_proto::v1::TurnComplete {
+                stop_reason: "end_turn".to_string(),
+            },
+        )));
         app.finish_history_load();
 
         assert_eq!(app.messages.len(), 4); // text, tool, result, text
@@ -958,7 +1006,10 @@ mod tests {
 
         // All messages should be non-streaming after finish_history_load
         for msg in &app.messages {
-            assert!(!msg.streaming, "All history messages should be non-streaming");
+            assert!(
+                !msg.streaming,
+                "All history messages should be non-streaming"
+            );
         }
     }
 
@@ -972,10 +1023,16 @@ mod tests {
             text: "partial".to_string(),
             is_complete: false,
         })));
-        assert!(app.messages[0].streaming, "Should still be streaming before finish");
+        assert!(
+            app.messages[0].streaming,
+            "Should still be streaming before finish"
+        );
 
         app.finish_history_load();
-        assert!(!app.messages[0].streaming, "finish_history_load should close streaming");
+        assert!(
+            !app.messages[0].streaming,
+            "finish_history_load should close streaming"
+        );
     }
 
     #[test]
@@ -1006,9 +1063,11 @@ mod tests {
             text: "4".to_string(),
             is_complete: true,
         })));
-        app.load_history_event(make_event(Event::TurnComplete(betcode_proto::v1::TurnComplete {
-            stop_reason: "end_turn".to_string(),
-        })));
+        app.load_history_event(make_event(Event::TurnComplete(
+            betcode_proto::v1::TurnComplete {
+                stop_reason: "end_turn".to_string(),
+            },
+        )));
         app.load_history_event(make_event(Event::UserInput(betcode_proto::v1::UserInput {
             content: "And 3+3?".to_string(),
         })));

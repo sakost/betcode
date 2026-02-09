@@ -38,7 +38,11 @@ pub async fn run(conn: &mut DaemonConnection, config: HeadlessConfig) -> Result<
     // Load and display history if continuing an existing session
     match conn.resume_session(&session_id, 0).await {
         Ok(events) if !events.is_empty() => {
-            eprintln!("[Resuming session {} ({} events)]", &session_id[..8.min(session_id.len())], events.len());
+            eprintln!(
+                "[Resuming session {} ({} events)]",
+                &session_id[..8.min(session_id.len())],
+                events.len()
+            );
             for event in &events {
                 print_history_event(event);
             }

@@ -140,7 +140,7 @@ impl EventBridge {
                     }));
                     vec![event]
                 }
-                Delta::Text(_) => vec![], // Skip empty text deltas
+                Delta::Text(_) => vec![],      // Skip empty text deltas
                 Delta::InputJson(_) => vec![], // Buffered internally
                 Delta::Unknown(_) => vec![],
             },
@@ -430,7 +430,10 @@ mod tests {
             },
         };
         let events = bridge.convert(Message::StreamEvent(stream));
-        assert!(events.is_empty(), "Empty text deltas should produce no events");
+        assert!(
+            events.is_empty(),
+            "Empty text deltas should produce no events"
+        );
     }
 
     #[test]
@@ -440,7 +443,10 @@ mod tests {
             event_type: StreamEventType::ContentBlockStop { index: 0 },
         };
         let events = bridge.convert(Message::StreamEvent(stream));
-        assert!(events.is_empty(), "ContentBlockStop should produce no events");
+        assert!(
+            events.is_empty(),
+            "ContentBlockStop should produce no events"
+        );
     }
 
     #[test]
@@ -448,7 +454,9 @@ mod tests {
         let mut bridge = EventBridge::new();
         let msg = AssistantMessage {
             content: vec![
-                ContentBlock::Text { text: "Let me run that.".to_string() },
+                ContentBlock::Text {
+                    text: "Let me run that.".to_string(),
+                },
                 ContentBlock::ToolUse {
                     id: "tool_1".to_string(),
                     name: "Bash".to_string(),
@@ -474,13 +482,18 @@ mod tests {
     fn assistant_end_turn_produces_turn_complete() {
         let mut bridge = EventBridge::new();
         let msg = AssistantMessage {
-            content: vec![ContentBlock::Text { text: "Done!".to_string() }],
+            content: vec![ContentBlock::Text {
+                text: "Done!".to_string(),
+            }],
             stop_reason: StopReason::EndTurn,
             usage: Default::default(),
         };
         let events = bridge.convert(Message::Assistant(msg));
         assert_eq!(events.len(), 1);
-        assert!(matches!(&events[0].event, Some(proto::agent_event::Event::TurnComplete(_))));
+        assert!(matches!(
+            &events[0].event,
+            Some(proto::agent_event::Event::TurnComplete(_))
+        ));
     }
 
     #[test]
@@ -497,7 +510,10 @@ mod tests {
         };
         let events = bridge.convert(Message::Assistant(msg));
         assert_eq!(events.len(), 1);
-        assert!(matches!(&events[0].event, Some(proto::agent_event::Event::ToolCallStart(_))));
+        assert!(matches!(
+            &events[0].event,
+            Some(proto::agent_event::Event::ToolCallStart(_))
+        ));
     }
 
     #[test]
@@ -550,13 +566,19 @@ mod tests {
 
     #[test]
     fn tool_description_grep() {
-        let desc = tool_description("Grep", &serde_json::json!({"pattern": "fn main", "path": "src/"}));
+        let desc = tool_description(
+            "Grep",
+            &serde_json::json!({"pattern": "fn main", "path": "src/"}),
+        );
         assert_eq!(desc, "fn main in src/");
     }
 
     #[test]
     fn tool_description_unknown_tool_uses_first_string() {
-        let desc = tool_description("SomeNewTool", &serde_json::json!({"query": "search term", "count": 5}));
+        let desc = tool_description(
+            "SomeNewTool",
+            &serde_json::json!({"query": "search term", "count": 5}),
+        );
         assert_eq!(desc, "search term");
     }
 

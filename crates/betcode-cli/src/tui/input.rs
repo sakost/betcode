@@ -9,14 +9,12 @@ use betcode_proto::v1::AgentRequest;
 use super::TermEvent;
 
 /// Process a terminal event, updating app state and optionally sending gRPC requests.
-pub async fn handle_term_event(
-    app: &mut App,
-    tx: &mpsc::Sender<AgentRequest>,
-    event: TermEvent,
-) {
+pub async fn handle_term_event(app: &mut App, tx: &mpsc::Sender<AgentRequest>, event: TermEvent) {
     match event {
         TermEvent::Key(key) => {
-            if key.modifiers.contains(crossterm::event::KeyModifiers::CONTROL)
+            if key
+                .modifiers
+                .contains(crossterm::event::KeyModifiers::CONTROL)
                 && key.code == KeyCode::Char('c')
             {
                 app.should_quit = true;

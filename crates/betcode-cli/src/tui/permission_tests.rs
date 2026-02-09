@@ -37,7 +37,8 @@ mod tests {
     async fn y_sends_allow_once() {
         let mut app = make_app();
         let (tx, mut rx) = mpsc::channel::<AgentRequest>(8);
-        crate::tui::permission_input::handle_permission_key(&mut app, &tx, KeyCode::Char('y')).await;
+        crate::tui::permission_input::handle_permission_key(&mut app, &tx, KeyCode::Char('y'))
+            .await;
         let (d, _) = extract_decision(&rx.try_recv().unwrap());
         assert_eq!(d, PermissionDecision::AllowOnce as i32);
         assert!(app.pending_permission.is_none());
@@ -48,7 +49,8 @@ mod tests {
     async fn uppercase_y_sends_allow_once() {
         let mut app = make_app();
         let (tx, mut rx) = mpsc::channel::<AgentRequest>(8);
-        crate::tui::permission_input::handle_permission_key(&mut app, &tx, KeyCode::Char('Y')).await;
+        crate::tui::permission_input::handle_permission_key(&mut app, &tx, KeyCode::Char('Y'))
+            .await;
         let (d, _) = extract_decision(&rx.try_recv().unwrap());
         assert_eq!(d, PermissionDecision::AllowOnce as i32);
     }
@@ -57,7 +59,8 @@ mod tests {
     async fn a_sends_allow_session() {
         let mut app = make_app();
         let (tx, mut rx) = mpsc::channel::<AgentRequest>(8);
-        crate::tui::permission_input::handle_permission_key(&mut app, &tx, KeyCode::Char('a')).await;
+        crate::tui::permission_input::handle_permission_key(&mut app, &tx, KeyCode::Char('a'))
+            .await;
         let (d, _) = extract_decision(&rx.try_recv().unwrap());
         assert_eq!(d, PermissionDecision::AllowSession as i32);
     }
@@ -68,23 +71,35 @@ mod tests {
         let (tx, _rx) = mpsc::channel::<AgentRequest>(8);
         crate::tui::permission_input::handle_permission_key(&mut app, &tx, KeyCode::Tab).await;
         assert_eq!(app.mode, AppMode::PermissionEditInput);
-        assert!(!app.pending_permission.as_ref().unwrap().edit_buffer.is_empty());
+        assert!(!app
+            .pending_permission
+            .as_ref()
+            .unwrap()
+            .edit_buffer
+            .is_empty());
     }
 
     #[tokio::test]
     async fn e_enters_comment_mode() {
         let mut app = make_app();
         let (tx, _rx) = mpsc::channel::<AgentRequest>(8);
-        crate::tui::permission_input::handle_permission_key(&mut app, &tx, KeyCode::Char('e')).await;
+        crate::tui::permission_input::handle_permission_key(&mut app, &tx, KeyCode::Char('e'))
+            .await;
         assert_eq!(app.mode, AppMode::PermissionComment);
-        assert!(app.pending_permission.as_ref().unwrap().edit_buffer.is_empty());
+        assert!(app
+            .pending_permission
+            .as_ref()
+            .unwrap()
+            .edit_buffer
+            .is_empty());
     }
 
     #[tokio::test]
     async fn n_enters_deny_no_interrupt() {
         let mut app = make_app();
         let (tx, _rx) = mpsc::channel::<AgentRequest>(8);
-        crate::tui::permission_input::handle_permission_key(&mut app, &tx, KeyCode::Char('n')).await;
+        crate::tui::permission_input::handle_permission_key(&mut app, &tx, KeyCode::Char('n'))
+            .await;
         assert_eq!(app.mode, AppMode::PermissionDenyMessage);
         assert!(!app.pending_permission.as_ref().unwrap().deny_interrupt);
     }
@@ -93,7 +108,8 @@ mod tests {
     async fn x_enters_deny_with_interrupt() {
         let mut app = make_app();
         let (tx, _rx) = mpsc::channel::<AgentRequest>(8);
-        crate::tui::permission_input::handle_permission_key(&mut app, &tx, KeyCode::Char('x')).await;
+        crate::tui::permission_input::handle_permission_key(&mut app, &tx, KeyCode::Char('x'))
+            .await;
         assert_eq!(app.mode, AppMode::PermissionDenyMessage);
         assert!(app.pending_permission.as_ref().unwrap().deny_interrupt);
     }
@@ -112,7 +128,8 @@ mod tests {
     async fn number_1_sends_allow_once() {
         let mut app = make_app();
         let (tx, mut rx) = mpsc::channel::<AgentRequest>(8);
-        crate::tui::permission_input::handle_permission_key(&mut app, &tx, KeyCode::Char('1')).await;
+        crate::tui::permission_input::handle_permission_key(&mut app, &tx, KeyCode::Char('1'))
+            .await;
         let (d, _) = extract_decision(&rx.try_recv().unwrap());
         assert_eq!(d, PermissionDecision::AllowOnce as i32);
     }
@@ -121,7 +138,8 @@ mod tests {
     async fn number_2_sends_allow_session() {
         let mut app = make_app();
         let (tx, mut rx) = mpsc::channel::<AgentRequest>(8);
-        crate::tui::permission_input::handle_permission_key(&mut app, &tx, KeyCode::Char('2')).await;
+        crate::tui::permission_input::handle_permission_key(&mut app, &tx, KeyCode::Char('2'))
+            .await;
         let (d, _) = extract_decision(&rx.try_recv().unwrap());
         assert_eq!(d, PermissionDecision::AllowSession as i32);
     }
@@ -130,7 +148,8 @@ mod tests {
     async fn number_3_enters_edit_mode() {
         let mut app = make_app();
         let (tx, _rx) = mpsc::channel::<AgentRequest>(8);
-        crate::tui::permission_input::handle_permission_key(&mut app, &tx, KeyCode::Char('3')).await;
+        crate::tui::permission_input::handle_permission_key(&mut app, &tx, KeyCode::Char('3'))
+            .await;
         assert_eq!(app.mode, AppMode::PermissionEditInput);
     }
 
@@ -138,7 +157,8 @@ mod tests {
     async fn number_5_enters_deny_no_interrupt() {
         let mut app = make_app();
         let (tx, _rx) = mpsc::channel::<AgentRequest>(8);
-        crate::tui::permission_input::handle_permission_key(&mut app, &tx, KeyCode::Char('5')).await;
+        crate::tui::permission_input::handle_permission_key(&mut app, &tx, KeyCode::Char('5'))
+            .await;
         assert_eq!(app.mode, AppMode::PermissionDenyMessage);
         assert!(!app.pending_permission.as_ref().unwrap().deny_interrupt);
     }
@@ -147,7 +167,8 @@ mod tests {
     async fn number_6_enters_deny_with_interrupt() {
         let mut app = make_app();
         let (tx, _rx) = mpsc::channel::<AgentRequest>(8);
-        crate::tui::permission_input::handle_permission_key(&mut app, &tx, KeyCode::Char('6')).await;
+        crate::tui::permission_input::handle_permission_key(&mut app, &tx, KeyCode::Char('6'))
+            .await;
         assert_eq!(app.mode, AppMode::PermissionDenyMessage);
         assert!(app.pending_permission.as_ref().unwrap().deny_interrupt);
     }
@@ -160,8 +181,12 @@ mod tests {
         app.mode = AppMode::PermissionComment;
         let (tx, _rx) = mpsc::channel::<AgentRequest>(8);
         for c in "hello".chars() {
-            crate::tui::permission_input::handle_permission_edit_key(&mut app, &tx, KeyCode::Char(c))
-                .await;
+            crate::tui::permission_input::handle_permission_edit_key(
+                &mut app,
+                &tx,
+                KeyCode::Char(c),
+            )
+            .await;
         }
         let perm = app.pending_permission.as_ref().unwrap();
         assert_eq!(perm.edit_buffer, "hello");
@@ -199,7 +224,8 @@ mod tests {
         app.pending_permission.as_mut().unwrap().edit_buffer = "use caution".to_string();
         app.pending_permission.as_mut().unwrap().edit_cursor = 11;
         let (tx, mut rx) = mpsc::channel::<AgentRequest>(8);
-        crate::tui::permission_input::handle_permission_edit_key(&mut app, &tx, KeyCode::Enter).await;
+        crate::tui::permission_input::handle_permission_edit_key(&mut app, &tx, KeyCode::Enter)
+            .await;
 
         let (d, _) = extract_decision(&rx.try_recv().unwrap());
         assert_eq!(d, PermissionDecision::AllowOnce as i32);
@@ -221,7 +247,8 @@ mod tests {
         app.pending_permission.as_mut().unwrap().deny_interrupt = false;
         app.pending_permission.as_mut().unwrap().edit_buffer = "not allowed".to_string();
         let (tx, mut rx) = mpsc::channel::<AgentRequest>(8);
-        crate::tui::permission_input::handle_permission_edit_key(&mut app, &tx, KeyCode::Enter).await;
+        crate::tui::permission_input::handle_permission_edit_key(&mut app, &tx, KeyCode::Enter)
+            .await;
         let (d, msg) = extract_decision(&rx.try_recv().unwrap());
         assert_eq!(d, PermissionDecision::DenyNoInterrupt as i32);
         assert_eq!(msg, "not allowed");
@@ -234,7 +261,8 @@ mod tests {
         app.pending_permission.as_mut().unwrap().deny_interrupt = true;
         app.pending_permission.as_mut().unwrap().edit_buffer = "stop now".to_string();
         let (tx, mut rx) = mpsc::channel::<AgentRequest>(8);
-        crate::tui::permission_input::handle_permission_edit_key(&mut app, &tx, KeyCode::Enter).await;
+        crate::tui::permission_input::handle_permission_edit_key(&mut app, &tx, KeyCode::Enter)
+            .await;
         let (d, msg) = extract_decision(&rx.try_recv().unwrap());
         assert_eq!(d, PermissionDecision::DenyWithInterrupt as i32);
         assert_eq!(msg, "stop now");
@@ -247,9 +275,11 @@ mod tests {
         app.pending_permission.as_mut().unwrap().edit_buffer = "abc".to_string();
         app.pending_permission.as_mut().unwrap().edit_cursor = 3;
         let (tx, _rx) = mpsc::channel::<AgentRequest>(8);
-        crate::tui::permission_input::handle_permission_edit_key(&mut app, &tx, KeyCode::Left).await;
+        crate::tui::permission_input::handle_permission_edit_key(&mut app, &tx, KeyCode::Left)
+            .await;
         assert_eq!(app.pending_permission.as_ref().unwrap().edit_cursor, 2);
-        crate::tui::permission_input::handle_permission_edit_key(&mut app, &tx, KeyCode::Right).await;
+        crate::tui::permission_input::handle_permission_edit_key(&mut app, &tx, KeyCode::Right)
+            .await;
         assert_eq!(app.pending_permission.as_ref().unwrap().edit_cursor, 3);
     }
 
@@ -259,7 +289,8 @@ mod tests {
         app.mode = AppMode::PermissionComment;
         app.pending_permission.as_mut().unwrap().edit_cursor = 0;
         let (tx, _rx) = mpsc::channel::<AgentRequest>(8);
-        crate::tui::permission_input::handle_permission_edit_key(&mut app, &tx, KeyCode::Left).await;
+        crate::tui::permission_input::handle_permission_edit_key(&mut app, &tx, KeyCode::Left)
+            .await;
         assert_eq!(app.pending_permission.as_ref().unwrap().edit_cursor, 0);
     }
 
@@ -270,7 +301,8 @@ mod tests {
         app.pending_permission.as_mut().unwrap().edit_buffer = "ab".to_string();
         app.pending_permission.as_mut().unwrap().edit_cursor = 2;
         let (tx, _rx) = mpsc::channel::<AgentRequest>(8);
-        crate::tui::permission_input::handle_permission_edit_key(&mut app, &tx, KeyCode::Right).await;
+        crate::tui::permission_input::handle_permission_edit_key(&mut app, &tx, KeyCode::Right)
+            .await;
         assert_eq!(app.pending_permission.as_ref().unwrap().edit_cursor, 2);
     }
 }

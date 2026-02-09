@@ -86,11 +86,7 @@ impl SessionRelay {
 
         // Shared sequence counter between stdout pipeline and user message storage.
         // Initialized from DB max so resumed sessions don't collide.
-        let start_seq = self
-            .db
-            .max_message_sequence(&session_id)
-            .await
-            .unwrap_or(0) as u64;
+        let start_seq = self.db.max_message_sequence(&session_id).await.unwrap_or(0) as u64;
         let sequence_counter = Arc::new(AtomicU64::new(start_seq));
 
         let relay_handle = RelayHandle {

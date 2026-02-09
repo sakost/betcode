@@ -9,11 +9,7 @@ use crate::app::{App, AppMode};
 use betcode_proto::v1::{AgentRequest, UserQuestionResponse};
 
 /// Handle a key press during a UserQuestion prompt.
-pub async fn handle_question_key(
-    app: &mut App,
-    tx: &mpsc::Sender<AgentRequest>,
-    code: KeyCode,
-) {
+pub async fn handle_question_key(app: &mut App, tx: &mpsc::Sender<AgentRequest>, code: KeyCode) {
     match code {
         KeyCode::Up => {
             app.move_question_highlight(-1);
@@ -58,14 +54,12 @@ async fn submit_question(app: &mut App, tx: &mpsc::Sender<AgentRequest>) {
 
         let _ = tx
             .send(AgentRequest {
-                request: Some(
-                    betcode_proto::v1::agent_request::Request::QuestionResponse(
-                        UserQuestionResponse {
-                            question_id: q.question_id.clone(),
-                            answers,
-                        },
-                    ),
-                ),
+                request: Some(betcode_proto::v1::agent_request::Request::QuestionResponse(
+                    UserQuestionResponse {
+                        question_id: q.question_id.clone(),
+                        answers,
+                    },
+                )),
             })
             .await;
     }
