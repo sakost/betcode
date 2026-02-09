@@ -355,6 +355,54 @@ mod tests {
         terminal.draw(|frame| draw(frame, &mut app)).unwrap();
     }
 
+    /// Word-wrapped messages must report the same `total_lines` that ratatui
+    /// actually renders. If our count is lower, `max_scroll` is too small and
+    /// the user can't see the bottom of long responses.
+    #[test]
+    fn total_lines_matches_ratatui_word_wrap() {
+        // Narrow terminal forces aggressive word wrapping
+        let width = 30u16;
+        let backend = TestBackend::new(width, 40);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let mut app = App::new();
+
+        // Build a message with many short words — word wrapping will produce
+        // MORE lines than simple ceil(char_count / width) because words can't
+        // be split across line boundaries.
+        let words: Vec<String> = (0..40).map(|i| format!("word{}", i)).collect();
+        let long_text = words.join(" ");
+        app.start_assistant_message();
+        app.append_text(&long_text);
+        app.finish_streaming();
+
+        terminal.draw(|frame| draw(frame, &mut app)).unwrap();
+
+        // Build the same Paragraph that draw_messages builds and ask ratatui
+        // for its authoritative line count.
+        let inner_width = width.saturating_sub(2); // borders
+        use ratatui::text::{Line, Span};
+        use ratatui::widgets::{Paragraph, Wrap};
+        let prefix = "Claude: ";
+        let content_lines: Vec<&str> = long_text.split('\n').collect();
+        let mut lines: Vec<Line> = Vec::new();
+        lines.push(Line::from(vec![
+            Span::raw(prefix),
+            Span::raw(content_lines[0]),
+        ]));
+        let indent = " ".repeat(prefix.len());
+        for cl in content_lines.iter().skip(1) {
+            lines.push(Line::from(vec![Span::raw(indent.clone()), Span::raw(*cl)]));
+        }
+        let paragraph = Paragraph::new(lines).wrap(Wrap { trim: false });
+        let expected_total = paragraph.line_count(inner_width) as u16;
+
+        assert_eq!(
+            app.total_lines, expected_total,
+            "total_lines ({}) must match ratatui Paragraph::line_count ({}) for correct scrolling",
+            app.total_lines, expected_total,
+        );
+    }
+
     #[test]
     fn render_question_narrow_terminal() {
         let backend = TestBackend::new(40, 15);

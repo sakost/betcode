@@ -172,27 +172,13 @@ fn draw_messages(frame: &mut Frame, app: &mut App, area: Rect) {
     }
 
     let inner_height = area.height.saturating_sub(2);
-    let inner_width = area.width.saturating_sub(2) as usize;
+    let inner_width = area.width.saturating_sub(2);
 
-    let total: u16 = lines
-        .iter()
-        .map(|line| {
-            if inner_width == 0 {
-                return 1u16;
-            }
-            let display_width: usize = line
-                .spans
-                .iter()
-                .map(|s| UnicodeWidthStr::width(s.content.as_ref()))
-                .sum();
-            1u16.max(
-                display_width
-                    .saturating_add(inner_width - 1)
-                    .checked_div(inner_width)
-                    .unwrap_or(1) as u16,
-            )
-        })
-        .sum();
+    // Use ratatui's own word-wrap line count so scroll range exactly matches
+    // what the Paragraph widget actually renders.
+    let paragraph = Paragraph::new(lines)
+        .wrap(Wrap { trim: false });
+    let total = paragraph.line_count(inner_width) as u16;
 
     app.viewport_height = inner_height;
     app.total_lines = total;
@@ -215,9 +201,8 @@ fn draw_messages(frame: &mut Frame, app: &mut App, area: Rect) {
         "Conversation".to_string()
     };
 
-    let messages = Paragraph::new(lines)
+    let messages = paragraph
         .block(Block::default().borders(Borders::ALL).title(title))
-        .wrap(Wrap { trim: false })
         .scroll((scroll, 0));
     frame.render_widget(messages, area);
 }
