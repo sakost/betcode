@@ -568,6 +568,31 @@ impl TunnelRequestHandler {
                     warn!(session_id = %sid, error = %e, "Failed to send permission via tunnel");
                 }
             }
+            Some(Request::QuestionResponse(qr)) => {
+                info!(session_id = %sid, question_id = %qr.question_id, "Question response via tunnel");
+                let answers: std::collections::HashMap<String, String> =
+                    qr.answers.into_iter().collect();
+
+                // Look up original AskUserQuestion input from pending map.
+                let original_input = if let Some(handle) = self.relay.get_handle(&sid).await {
+                    handle
+                        .pending_question_inputs
+                        .write()
+                        .await
+                        .remove(&qr.question_id)
+                        .unwrap_or(serde_json::Value::Object(Default::default()))
+                } else {
+                    serde_json::Value::Object(Default::default())
+                };
+
+                if let Err(e) = self
+                    .relay
+                    .send_question_response(&sid, &qr.question_id, &answers, &original_input)
+                    .await
+                {
+                    warn!(session_id = %sid, error = %e, "Failed to send question response via tunnel");
+                }
+            }
             Some(Request::Cancel(_)) => {
                 let _ = self.relay.cancel_session(&sid).await;
             }

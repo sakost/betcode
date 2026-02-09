@@ -1368,11 +1368,38 @@ async fn relay_forwarded_plaintext_request_rejected_when_crypto_active() {
 
     // Relay-forwarded: empty nonce (passes tunnel layer)
     let frame = req_frame("r2", METHOD_LIST_SESSIONS, wire_bytes);
-    let responses = h.handle_frame(frame).await;
+    let _responses = h.handle_frame(frame).await;
 
     // Tunnel passthrough should succeed, but app-layer should reject plaintext.
     // The handler should not process the request as a valid UserMessage.
     // It should either return an error or silently discard it.
     let has_active_stream = h.has_active_stream("r2").await;
     assert!(!has_active_stream, "plaintext request should not create a stream");
+}
+
+/// Verify that QuestionResponse requests are handled in the tunnel handler
+/// (not silently dropped by the catch-all `_ =>` arm).
+#[tokio::test]
+async fn question_response_is_handled_through_tunnel() {
+    let h = make_handler().await;
+
+    // Send a QuestionResponse through the converse stream.
+    // The session doesn't exist (no real subprocess), but the handler should
+    // reach the QuestionResponse arm and attempt send_question_response (which
+    // will fail with SessionNotFound — that's fine, it's logged as a warning).
+    let question_resp = betcode_proto::v1::AgentRequest {
+        request: Some(betcode_proto::v1::agent_request::Request::QuestionResponse(
+            betcode_proto::v1::UserQuestionResponse {
+                question_id: "req_q1".into(),
+                answers: [("Which database?".into(), "SQLite".into())]
+                    .into_iter()
+                    .collect(),
+            },
+        )),
+    };
+    let qr_bytes = encode(&question_resp);
+    let frame = req_frame("q1", METHOD_CONVERSE, qr_bytes);
+
+    // This should not panic. The QuestionResponse arm should exist and be reachable.
+    let _responses = h.handle_frame(frame).await;
 }

@@ -8,8 +8,8 @@ use betcode_core::ndjson::{
     StreamEvent, StreamEventType, SystemInit, UserMessage,
 };
 use betcode_proto::v1::{
-    self as proto, AgentEvent, AgentStatus, PermissionRequest, SessionInfo, StatusChange,
-    TextDelta, ToolCallStart, TurnComplete, UsageReport,
+    self as proto, AgentEvent, AgentStatus, PermissionRequest, QuestionOption, SessionInfo,
+    StatusChange, TextDelta, ToolCallStart, TurnComplete, UsageReport, UserQuestion,
 };
 use prost_types::Timestamp;
 use std::collections::HashMap;
@@ -24,6 +24,10 @@ pub struct EventBridge {
     pending_tools: HashMap<String, String>,
     /// Current session info.
     session_info: Option<SessionInfo>,
+    /// Pending AskUserQuestion inputs keyed by request_id.
+    /// Stored when converting control_request → UserQuestion so the relay
+    /// can reconstruct the `updatedInput` in the response.
+    pending_question_inputs: HashMap<String, serde_json::Value>,
 }
 
 impl Default for EventBridge {
@@ -47,6 +51,7 @@ impl EventBridge {
             sequence: start_sequence,
             pending_tools: HashMap::new(),
             session_info: None,
+            pending_question_inputs: HashMap::new(),
         }
     }
 
@@ -172,6 +177,11 @@ impl EventBridge {
 
     fn handle_control_request(&mut self, req: NdjsonControlRequest) -> Vec<AgentEvent> {
         match req.request {
+            NdjsonControlRequestType::CanUseTool { tool_name, input }
+                if tool_name == "AskUserQuestion" =>
+            {
+                self.handle_ask_user_question(req.request_id, input)
+            }
             NdjsonControlRequestType::CanUseTool { tool_name, input } => {
                 let desc = tool_description(&tool_name, &input);
                 let mut event = self.next_event();
@@ -190,6 +200,78 @@ impl EventBridge {
                 vec![]
             }
         }
+    }
+
+    /// Take the original input for a pending AskUserQuestion.
+    /// Returns `None` if the request_id is not found or was already taken.
+    pub fn take_question_input(&mut self, request_id: &str) -> Option<serde_json::Value> {
+        self.pending_question_inputs.remove(request_id)
+    }
+
+    fn handle_ask_user_question(
+        &mut self,
+        request_id: String,
+        input: serde_json::Value,
+    ) -> Vec<AgentEvent> {
+        self.pending_question_inputs
+            .insert(request_id.clone(), input.clone());
+        // Extract the first question from the questions array.
+        // AskUserQuestion input: {"questions": [{"question": "...", "options": [...], "multi_select": bool}]}
+        let questions = input
+            .get("questions")
+            .and_then(|v| v.as_array())
+            .cloned()
+            .unwrap_or_default();
+
+        let first = questions.first().cloned().unwrap_or(serde_json::Value::Null);
+
+        let question_text = first
+            .get("question")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+
+        let multi_select = first
+            .get("multi_select")
+            .or_else(|| first.get("multiSelect"))
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+
+        let options = first
+            .get("options")
+            .and_then(|v| v.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .map(|opt| QuestionOption {
+                        value: opt
+                            .get("label")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("")
+                            .to_string(),
+                        label: opt
+                            .get("label")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("")
+                            .to_string(),
+                        description: opt
+                            .get("description")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("")
+                            .to_string(),
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        let mut event = self.next_event();
+        event.event = Some(proto::agent_event::Event::UserQuestion(UserQuestion {
+            question_id: request_id,
+            question: question_text,
+            options,
+            multi_select,
+        }));
+
+        vec![event]
     }
 
     fn handle_user(&mut self, user: UserMessage) -> Vec<AgentEvent> {
@@ -629,6 +711,114 @@ mod tests {
         };
         let events = bridge.convert(Message::StreamEvent(stream));
         assert!(events.is_empty());
+    }
+
+    #[test]
+    fn ask_user_question_produces_user_question_event() {
+        let mut bridge = EventBridge::new();
+        let req = NdjsonControlRequest {
+            request_id: "req_q1".to_string(),
+            request: NdjsonControlRequestType::CanUseTool {
+                tool_name: "AskUserQuestion".to_string(),
+                input: serde_json::json!({
+                    "questions": [{
+                        "question": "Which database?",
+                        "options": [
+                            {"label": "PostgreSQL", "description": "Full-featured RDBMS"},
+                            {"label": "SQLite", "description": "Embedded database"}
+                        ],
+                        "multi_select": false
+                    }]
+                }),
+            },
+        };
+        let events = bridge.convert(Message::ControlRequest(req));
+        assert_eq!(events.len(), 1, "AskUserQuestion should produce exactly 1 event");
+        match &events[0].event {
+            Some(proto::agent_event::Event::UserQuestion(q)) => {
+                assert_eq!(q.question_id, "req_q1");
+                assert_eq!(q.question, "Which database?");
+                assert_eq!(q.options.len(), 2);
+                assert_eq!(q.options[0].label, "PostgreSQL");
+                assert_eq!(q.options[0].description, "Full-featured RDBMS");
+                assert_eq!(q.options[1].label, "SQLite");
+                assert!(!q.multi_select);
+            }
+            other => panic!("Expected UserQuestion, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn ask_user_question_multi_select() {
+        let mut bridge = EventBridge::new();
+        let req = NdjsonControlRequest {
+            request_id: "req_q2".to_string(),
+            request: NdjsonControlRequestType::CanUseTool {
+                tool_name: "AskUserQuestion".to_string(),
+                input: serde_json::json!({
+                    "questions": [{
+                        "question": "Which features?",
+                        "options": [
+                            {"label": "Auth", "description": ""},
+                            {"label": "Cache", "description": ""}
+                        ],
+                        "multi_select": true
+                    }]
+                }),
+            },
+        };
+        let events = bridge.convert(Message::ControlRequest(req));
+        assert_eq!(events.len(), 1);
+        match &events[0].event {
+            Some(proto::agent_event::Event::UserQuestion(q)) => {
+                assert!(q.multi_select);
+                assert_eq!(q.question, "Which features?");
+            }
+            other => panic!("Expected UserQuestion, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn ask_user_question_not_treated_as_permission() {
+        let mut bridge = EventBridge::new();
+        let req = NdjsonControlRequest {
+            request_id: "req_q3".to_string(),
+            request: NdjsonControlRequestType::CanUseTool {
+                tool_name: "AskUserQuestion".to_string(),
+                input: serde_json::json!({
+                    "questions": [{
+                        "question": "Pick one",
+                        "options": [{"label": "A", "description": ""}],
+                        "multi_select": false
+                    }]
+                }),
+            },
+        };
+        let events = bridge.convert(Message::ControlRequest(req));
+        assert_eq!(events.len(), 1);
+        // Must NOT be a PermissionRequest
+        assert!(
+            !matches!(&events[0].event, Some(proto::agent_event::Event::PermissionRequest(_))),
+            "AskUserQuestion must not be converted to PermissionRequest"
+        );
+    }
+
+    #[test]
+    fn regular_tool_permission_still_works() {
+        let mut bridge = EventBridge::new();
+        let req = NdjsonControlRequest {
+            request_id: "req_p1".to_string(),
+            request: NdjsonControlRequestType::CanUseTool {
+                tool_name: "Bash".to_string(),
+                input: serde_json::json!({"command": "ls"}),
+            },
+        };
+        let events = bridge.convert(Message::ControlRequest(req));
+        assert_eq!(events.len(), 1);
+        assert!(
+            matches!(&events[0].event, Some(proto::agent_event::Event::PermissionRequest(_))),
+            "Regular tool should still produce PermissionRequest"
+        );
     }
 
     #[test]

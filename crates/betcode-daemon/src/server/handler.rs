@@ -55,17 +55,25 @@ pub async fn handle_agent_request(
             if let Some(ref sid) = session_id {
                 info!(session_id = %sid, question_id = %qr.question_id, "Question response");
                 let answers: HashMap<String, String> = qr.answers.into_iter().collect();
-                let msg = serde_json::json!({
-                    "type": "user_question_response",
-                    "question_id": qr.question_id,
-                    "answers": answers,
-                });
-                let line = serde_json::to_string(&msg).map_err(
-                    |e| -> Box<dyn std::error::Error + Send + Sync> { e.to_string().into() },
-                )?;
-                relay.send_raw_stdin(sid, &line).await.map_err(
-                    |e| -> Box<dyn std::error::Error + Send + Sync> { e.to_string().into() },
-                )?;
+
+                // Look up the original AskUserQuestion input from the pending map.
+                let original_input = if let Some(handle) = relay.get_handle(sid).await {
+                    handle
+                        .pending_question_inputs
+                        .write()
+                        .await
+                        .remove(&qr.question_id)
+                        .unwrap_or(serde_json::Value::Object(Default::default()))
+                } else {
+                    serde_json::Value::Object(Default::default())
+                };
+
+                relay
+                    .send_question_response(sid, &qr.question_id, &answers, &original_input)
+                    .await
+                    .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> {
+                        e.to_string().into()
+                    })?;
             }
         }
         Some(Request::Cancel(cancel)) => {

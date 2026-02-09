@@ -156,6 +156,72 @@ mod tests {
         assert!(pos.y < 24);
     }
 
+    // -- Message spacing tests --
+
+    #[test]
+    fn empty_line_between_messages() {
+        let backend = TestBackend::new(80, 40);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let mut app = App::new();
+
+        // Add: User → Assistant → User
+        app.add_user_message("Hello".to_string());
+        app.start_assistant_message();
+        app.append_text("Hi there!");
+        app.finish_streaming();
+        app.add_user_message("Thanks".to_string());
+
+        terminal.draw(|frame| draw(frame, &mut app)).unwrap();
+
+        // 3 messages + 2 empty separator lines between them = 5 total lines
+        assert_eq!(
+            app.total_lines, 5,
+            "Expected 3 message lines + 2 separator lines = 5, got {}",
+            app.total_lines,
+        );
+    }
+
+    #[test]
+    fn no_empty_line_after_streaming_message() {
+        let backend = TestBackend::new(80, 40);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let mut app = App::new();
+
+        // User → Assistant (still streaming)
+        app.add_user_message("Hello".to_string());
+        app.start_assistant_message();
+        app.append_text("thinking...");
+        // NOT calling finish_streaming() — message still streaming
+
+        terminal.draw(|frame| draw(frame, &mut app)).unwrap();
+
+        // 2 messages + 1 separator (after User, before streaming Assistant) = 3 lines
+        // No trailing separator after the streaming message
+        assert_eq!(
+            app.total_lines, 3,
+            "Expected 2 message lines + 1 separator = 3, got {}",
+            app.total_lines,
+        );
+    }
+
+    #[test]
+    fn single_message_no_separator() {
+        let backend = TestBackend::new(80, 40);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let mut app = App::new();
+
+        app.add_user_message("Hello".to_string());
+
+        terminal.draw(|frame| draw(frame, &mut app)).unwrap();
+
+        // Single message, no separator
+        assert_eq!(
+            app.total_lines, 1,
+            "Expected 1 message line, no separators, got {}",
+            app.total_lines,
+        );
+    }
+
     // -- Permission panel rendering tests --
 
     fn make_permission_app(mode: AppMode) -> App {

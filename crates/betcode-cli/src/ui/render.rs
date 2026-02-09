@@ -124,7 +124,11 @@ fn draw_header(frame: &mut Frame, app: &App, area: Rect) {
 fn draw_messages(frame: &mut Frame, app: &mut App, area: Rect) {
     let mut lines: Vec<Line> = Vec::new();
 
-    for msg in &app.messages {
+    for (i, msg) in app.messages.iter().enumerate() {
+        // Add empty line separator between messages (not before the first)
+        if i > 0 {
+            lines.push(Line::from(""));
+        }
         let (prefix, color) = match msg.role {
             MessageRole::User => ("You: ", Color::Green),
             MessageRole::Assistant => ("Claude: ", Color::Blue),

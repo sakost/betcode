@@ -1,8 +1,11 @@
 //! Relay module types.
 
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::atomic::AtomicU64;
 use std::sync::Arc;
+
+use tokio::sync::RwLock;
 
 /// Configuration for starting a relay session.
 #[derive(Debug, Clone)]
@@ -31,6 +34,10 @@ pub struct RelayHandle {
     pub stdin_tx: tokio::sync::mpsc::Sender<String>,
     /// Shared sequence counter for interleaving user input and agent events.
     pub sequence_counter: Arc<AtomicU64>,
+    /// Pending AskUserQuestion original inputs keyed by request_id.
+    /// Written by the stdout pipeline bridge, read by the handler to
+    /// build the correct `control_response` with `updatedInput`.
+    pub pending_question_inputs: Arc<RwLock<HashMap<String, serde_json::Value>>>,
 }
 
 /// Errors from relay operations.

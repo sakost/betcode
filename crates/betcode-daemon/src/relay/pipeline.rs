@@ -89,11 +89,15 @@ impl SessionRelay {
         let start_seq = self.db.max_message_sequence(&session_id).await.unwrap_or(0) as u64;
         let sequence_counter = Arc::new(AtomicU64::new(start_seq));
 
+        let pending_question_inputs =
+            Arc::new(tokio::sync::RwLock::new(HashMap::new()));
+
         let relay_handle = RelayHandle {
             process_id: process_handle.id.clone(),
             session_id: session_id.clone(),
             stdin_tx: process_handle.stdin_tx.clone(),
             sequence_counter: Arc::clone(&sequence_counter),
+            pending_question_inputs: Arc::clone(&pending_question_inputs),
         };
 
         // Spawn the NDJSON reader pipeline
@@ -105,6 +109,7 @@ impl SessionRelay {
             Arc::clone(&self.sessions),
             Arc::clone(&self.subprocess_manager),
             sequence_counter,
+            pending_question_inputs,
         );
 
         // Store the relay handle
@@ -220,6 +225,36 @@ impl SessionRelay {
         Ok(())
     }
 
+    /// Send an AskUserQuestion response to the subprocess.
+    ///
+    /// Format matches the Claude Agent SDK control protocol for AskUserQuestion:
+    /// ```json
+    /// {"type":"control_response","response":{"subtype":"success","request_id":"req_002",
+    ///   "response":{"behavior":"allow","updatedInput":{...original_input..., "answers":{...}}}}}
+    /// ```
+    pub async fn send_question_response(
+        &self,
+        session_id: &str,
+        request_id: &str,
+        answers: &std::collections::HashMap<String, String>,
+        original_input: &serde_json::Value,
+    ) -> Result<(), RelayError> {
+        let handle = self.get_active_handle(session_id).await?;
+
+        let line = build_question_response_json(request_id, answers, original_input);
+
+        handle
+            .stdin_tx
+            .send(line)
+            .await
+            .map_err(|_| RelayError::StdinClosed {
+                session_id: session_id.to_string(),
+            })?;
+
+        debug!(session_id, request_id, "Sent question response");
+        Ok(())
+    }
+
     /// Send a raw JSON line to the subprocess stdin.
     pub async fn send_raw_stdin(&self, session_id: &str, line: &str) -> Result<(), RelayError> {
         let handle = self.get_active_handle(session_id).await?;
@@ -287,6 +322,7 @@ impl SessionRelay {
 }
 
 /// Spawn the stdout → NDJSON parser → EventBridge → forwarder pipeline.
+#[allow(clippy::too_many_arguments)]
 fn spawn_stdout_pipeline(
     session_id: String,
     mut stdout_rx: mpsc::Receiver<String>,
@@ -295,6 +331,7 @@ fn spawn_stdout_pipeline(
     sessions: Arc<RwLock<HashMap<String, RelayHandle>>>,
     subprocess_manager: Arc<SubprocessManager>,
     sequence_counter: Arc<AtomicU64>,
+    pending_question_inputs: Arc<tokio::sync::RwLock<HashMap<String, serde_json::Value>>>,
 ) {
     tokio::spawn(async move {
         let sid = session_id.clone();
@@ -321,6 +358,20 @@ fn spawn_stdout_pipeline(
             }
 
             let events = bridge.convert(msg);
+
+            for event in &events {
+                // Transfer pending question inputs from bridge → shared map
+                if let Some(betcode_proto::v1::agent_event::Event::UserQuestion(ref q)) =
+                    event.event
+                {
+                    if let Some(input) = bridge.take_question_input(&q.question_id) {
+                        pending_question_inputs.write().await.insert(
+                            q.question_id.clone(),
+                            input,
+                        );
+                    }
+                }
+            }
 
             for event in events {
                 event_count += 1;
@@ -444,6 +495,37 @@ async fn store_event(db: &Database, session_id: &str, event: &AgentEvent) -> Res
         .map(|_| ())
 }
 
+/// Build the JSON line for an AskUserQuestion control_response.
+///
+/// The response includes `updatedInput` with both the original questions and the user's answers,
+/// matching the Claude Agent SDK protocol spec.
+fn build_question_response_json(
+    request_id: &str,
+    answers: &std::collections::HashMap<String, String>,
+    original_input: &serde_json::Value,
+) -> String {
+    let mut updated_input = original_input.clone();
+    if let serde_json::Value::Object(ref mut map) = updated_input {
+        map.insert(
+            "answers".to_string(),
+            serde_json::to_value(answers).unwrap_or_default(),
+        );
+    }
+
+    let msg = serde_json::json!({
+        "type": "control_response",
+        "response": {
+            "subtype": "success",
+            "request_id": request_id,
+            "response": {
+                "behavior": "allow",
+                "updatedInput": updated_input
+            }
+        }
+    });
+    serde_json::to_string(&msg).expect("question response serialization should not fail")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -496,5 +578,55 @@ mod tests {
         let relay = SessionRelay::new(subprocess_mgr, multiplexer, db);
         let result = relay.cancel_session("nonexistent").await.unwrap();
         assert!(!result);
+    }
+
+    #[tokio::test]
+    async fn send_question_response_fails_for_unknown_session() {
+        let db = Database::open_in_memory().await.unwrap();
+        let subprocess_mgr = Arc::new(SubprocessManager::new(5));
+        let multiplexer = Arc::new(SessionMultiplexer::with_defaults());
+        let relay = SessionRelay::new(subprocess_mgr, multiplexer, db);
+        let answers: HashMap<String, String> =
+            [("Which database?".to_string(), "SQLite".to_string())]
+                .into_iter()
+                .collect();
+        let original_input = serde_json::json!({
+            "questions": [{"question": "Which database?", "options": [{"label": "SQLite"}]}]
+        });
+        let result = relay
+            .send_question_response("nonexistent", "req_q1", &answers, &original_input)
+            .await;
+        assert!(matches!(result, Err(RelayError::SessionNotFound { .. })));
+    }
+
+    /// Verify the JSON format sent to the subprocess matches the protocol spec.
+    #[test]
+    fn question_response_json_format_matches_protocol() {
+        let answers: HashMap<String, String> =
+            [("Which database?".to_string(), "SQLite".to_string())]
+                .into_iter()
+                .collect();
+        let original_input = serde_json::json!({
+            "questions": [{"question": "Which database?", "options": [
+                {"label": "PostgreSQL", "description": "Full-featured"},
+                {"label": "SQLite", "description": "Embedded"}
+            ], "multi_select": false}]
+        });
+
+        let msg = build_question_response_json("req_q1", &answers, &original_input);
+        let parsed: serde_json::Value = serde_json::from_str(&msg).unwrap();
+
+        // Must be a control_response
+        assert_eq!(parsed["type"], "control_response");
+        assert_eq!(parsed["response"]["subtype"], "success");
+        assert_eq!(parsed["response"]["request_id"], "req_q1");
+
+        // Must have behavior: "allow" with updatedInput containing answers
+        let response = &parsed["response"]["response"];
+        assert_eq!(response["behavior"], "allow");
+        assert_eq!(response["updatedInput"]["answers"]["Which database?"], "SQLite");
+
+        // updatedInput must also preserve the original questions
+        assert!(response["updatedInput"]["questions"].is_array());
     }
 }
