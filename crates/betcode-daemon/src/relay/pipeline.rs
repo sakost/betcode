@@ -91,6 +91,8 @@ impl SessionRelay {
 
         let pending_question_inputs =
             Arc::new(tokio::sync::RwLock::new(HashMap::new()));
+        let pending_permission_inputs =
+            Arc::new(tokio::sync::RwLock::new(HashMap::new()));
 
         let relay_handle = RelayHandle {
             process_id: process_handle.id.clone(),
@@ -98,6 +100,7 @@ impl SessionRelay {
             stdin_tx: process_handle.stdin_tx.clone(),
             sequence_counter: Arc::clone(&sequence_counter),
             pending_question_inputs: Arc::clone(&pending_question_inputs),
+            pending_permission_inputs: Arc::clone(&pending_permission_inputs),
         };
 
         // Spawn the NDJSON reader pipeline
@@ -110,6 +113,7 @@ impl SessionRelay {
             Arc::clone(&self.subprocess_manager),
             sequence_counter,
             pending_question_inputs,
+            pending_permission_inputs,
         );
 
         // Store the relay handle
@@ -179,17 +183,18 @@ impl SessionRelay {
     /// Send a permission response (control_response) to the subprocess.
     ///
     /// Format must match the Claude Agent SDK control protocol:
-    /// allow → `{ behavior: "allow" }` (no updatedInput — use original args)
+    /// allow → `{ behavior: "allow", updatedInput: <original_tool_input> }`
     /// deny  → `{ behavior: "deny", message: "...", interrupt: true }`
     pub async fn send_permission_response(
         &self,
         session_id: &str,
         request_id: &str,
         granted: bool,
+        original_input: &serde_json::Value,
     ) -> Result<(), RelayError> {
         let handle = self.get_active_handle(session_id).await?;
 
-        let line = build_permission_response_json(request_id, granted);
+        let line = build_permission_response_json(request_id, granted, original_input);
 
         handle
             .stdin_tx
@@ -310,6 +315,7 @@ fn spawn_stdout_pipeline(
     subprocess_manager: Arc<SubprocessManager>,
     sequence_counter: Arc<AtomicU64>,
     pending_question_inputs: Arc<tokio::sync::RwLock<HashMap<String, serde_json::Value>>>,
+    pending_permission_inputs: Arc<tokio::sync::RwLock<HashMap<String, serde_json::Value>>>,
 ) {
     tokio::spawn(async move {
         let sid = session_id.clone();
@@ -345,6 +351,17 @@ fn spawn_stdout_pipeline(
                     if let Some(input) = bridge.take_question_input(&q.question_id) {
                         pending_question_inputs.write().await.insert(
                             q.question_id.clone(),
+                            input,
+                        );
+                    }
+                }
+                // Transfer pending permission inputs from bridge → shared map
+                if let Some(betcode_proto::v1::agent_event::Event::PermissionRequest(ref p)) =
+                    event.event
+                {
+                    if let Some(input) = bridge.take_permission_input(&p.request_id) {
+                        pending_permission_inputs.write().await.insert(
+                            p.request_id.clone(),
                             input,
                         );
                     }
@@ -475,14 +492,19 @@ async fn store_event(db: &Database, session_id: &str, event: &AgentEvent) -> Res
 
 /// Build the JSON line for a permission control_response.
 ///
-/// For allow: omit `updatedInput` entirely so Claude Code uses the original
-/// tool arguments. Sending `"updatedInput": {}` would replace all arguments
-/// with an empty dict, causing MCP tools to receive no parameters.
-/// See: https://github.com/anthropics/claude-agent-sdk-python/issues/320
-fn build_permission_response_json(request_id: &str, granted: bool) -> String {
+/// For allow: include `updatedInput` with the original tool arguments.
+/// Claude Code's Zod schema REQUIRES `updatedInput` to be a record (object).
+/// Omitting it causes a ZodError; sending `{}` replaces all args with empty.
+/// The correct behavior is to pass back the original tool input unchanged.
+fn build_permission_response_json(
+    request_id: &str,
+    granted: bool,
+    original_input: &serde_json::Value,
+) -> String {
     let response = if granted {
         serde_json::json!({
-            "behavior": "allow"
+            "behavior": "allow",
+            "updatedInput": original_input
         })
     } else {
         serde_json::json!({
@@ -573,7 +595,7 @@ mod tests {
         let multiplexer = Arc::new(SessionMultiplexer::with_defaults());
         let relay = SessionRelay::new(subprocess_mgr, multiplexer, db);
         let result = relay
-            .send_permission_response("nonexistent", "req-1", true)
+            .send_permission_response("nonexistent", "req-1", true, &serde_json::json!({}))
             .await;
         assert!(matches!(result, Err(RelayError::SessionNotFound { .. })));
     }
@@ -607,10 +629,15 @@ mod tests {
         assert!(matches!(result, Err(RelayError::SessionNotFound { .. })));
     }
 
-    /// Verify the permission allow JSON omits updatedInput (uses original args).
+    /// Verify the permission allow JSON includes updatedInput with original tool args.
+    ///
+    /// Claude Code's Zod schema REQUIRES `updatedInput` to be a record (object).
+    /// We must pass back the original tool input so the tool executes with the
+    /// correct arguments.
     #[test]
-    fn permission_allow_json_omits_updated_input() {
-        let msg = build_permission_response_json("req_p1", true);
+    fn permission_allow_json_includes_original_input() {
+        let original_input = serde_json::json!({"command": "cargo test", "timeout": 30000});
+        let msg = build_permission_response_json("req_p1", true, &original_input);
         let parsed: serde_json::Value = serde_json::from_str(&msg).unwrap();
 
         assert_eq!(parsed["type"], "control_response");
@@ -619,20 +646,28 @@ mod tests {
 
         let response = &parsed["response"]["response"];
         assert_eq!(response["behavior"], "allow");
-        // updatedInput must NOT be present — omitting it tells Claude Code
-        // to use the original tool arguments unchanged.
-        assert!(
-            response.get("updatedInput").is_none()
-                || response["updatedInput"].is_null(),
-            "updatedInput must be omitted for allow: got {:?}",
-            response.get("updatedInput"),
-        );
+        // updatedInput must contain the original tool arguments
+        assert_eq!(response["updatedInput"]["command"], "cargo test");
+        assert_eq!(response["updatedInput"]["timeout"], 30000);
+    }
+
+    /// Verify that permission allow with empty original_input still sends empty object.
+    #[test]
+    fn permission_allow_json_with_empty_input() {
+        let original_input = serde_json::json!({});
+        let msg = build_permission_response_json("req_p3", true, &original_input);
+        let parsed: serde_json::Value = serde_json::from_str(&msg).unwrap();
+
+        let response = &parsed["response"]["response"];
+        assert_eq!(response["behavior"], "allow");
+        assert!(response["updatedInput"].is_object());
     }
 
     /// Verify the permission deny JSON includes interrupt and message.
     #[test]
     fn permission_deny_json_includes_message() {
-        let msg = build_permission_response_json("req_p2", false);
+        let original_input = serde_json::json!({"command": "rm -rf /"});
+        let msg = build_permission_response_json("req_p2", false, &original_input);
         let parsed: serde_json::Value = serde_json::from_str(&msg).unwrap();
 
         assert_eq!(parsed["type"], "control_response");

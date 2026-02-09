@@ -28,6 +28,10 @@ pub struct EventBridge {
     /// Stored when converting control_request → UserQuestion so the relay
     /// can reconstruct the `updatedInput` in the response.
     pending_question_inputs: HashMap<String, serde_json::Value>,
+    /// Pending permission (CanUseTool) inputs keyed by request_id.
+    /// Stored when converting control_request → PermissionRequest so the relay
+    /// can pass back the original `updatedInput` in the response.
+    pending_permission_inputs: HashMap<String, serde_json::Value>,
 }
 
 impl Default for EventBridge {
@@ -52,6 +56,7 @@ impl EventBridge {
             pending_tools: HashMap::new(),
             session_info: None,
             pending_question_inputs: HashMap::new(),
+            pending_permission_inputs: HashMap::new(),
         }
     }
 
@@ -184,6 +189,8 @@ impl EventBridge {
             }
             NdjsonControlRequestType::CanUseTool { tool_name, input } => {
                 let desc = tool_description(&tool_name, &input);
+                self.pending_permission_inputs
+                    .insert(req.request_id.clone(), input.clone());
                 let mut event = self.next_event();
                 event.event = Some(proto::agent_event::Event::PermissionRequest(
                     PermissionRequest {
@@ -206,6 +213,12 @@ impl EventBridge {
     /// Returns `None` if the request_id is not found or was already taken.
     pub fn take_question_input(&mut self, request_id: &str) -> Option<serde_json::Value> {
         self.pending_question_inputs.remove(request_id)
+    }
+
+    /// Take the original input for a pending permission request (CanUseTool).
+    /// Returns `None` if the request_id is not found or was already taken.
+    pub fn take_permission_input(&mut self, request_id: &str) -> Option<serde_json::Value> {
+        self.pending_permission_inputs.remove(request_id)
     }
 
     fn handle_ask_user_question(
@@ -819,6 +832,64 @@ mod tests {
             matches!(&events[0].event, Some(proto::agent_event::Event::PermissionRequest(_))),
             "Regular tool should still produce PermissionRequest"
         );
+    }
+
+    #[test]
+    fn permission_request_stores_original_input() {
+        let mut bridge = EventBridge::new();
+        let input = serde_json::json!({"command": "rm -rf /tmp/test"});
+        let req = NdjsonControlRequest {
+            request_id: "req_perm_1".to_string(),
+            request: NdjsonControlRequestType::CanUseTool {
+                tool_name: "Bash".to_string(),
+                input: input.clone(),
+            },
+        };
+        bridge.convert(Message::ControlRequest(req));
+
+        // The bridge should store the original input for later retrieval
+        let taken = bridge.take_permission_input("req_perm_1");
+        assert_eq!(taken, Some(input));
+    }
+
+    #[test]
+    fn take_permission_input_returns_none_after_taken() {
+        let mut bridge = EventBridge::new();
+        let req = NdjsonControlRequest {
+            request_id: "req_perm_2".to_string(),
+            request: NdjsonControlRequestType::CanUseTool {
+                tool_name: "Bash".to_string(),
+                input: serde_json::json!({"command": "ls"}),
+            },
+        };
+        bridge.convert(Message::ControlRequest(req));
+
+        // First take succeeds
+        assert!(bridge.take_permission_input("req_perm_2").is_some());
+        // Second take returns None (already consumed)
+        assert!(bridge.take_permission_input("req_perm_2").is_none());
+    }
+
+    #[test]
+    fn take_permission_input_returns_none_for_unknown_id() {
+        let mut bridge = EventBridge::new();
+        assert!(bridge.take_permission_input("nonexistent").is_none());
+    }
+
+    #[test]
+    fn ask_user_question_does_not_store_permission_input() {
+        let mut bridge = EventBridge::new();
+        let req = NdjsonControlRequest {
+            request_id: "req_q_only".to_string(),
+            request: NdjsonControlRequestType::CanUseTool {
+                tool_name: "AskUserQuestion".to_string(),
+                input: serde_json::json!({"questions": [{"question": "Pick", "options": [{"label": "A", "description": ""}], "multi_select": false}]}),
+            },
+        };
+        bridge.convert(Message::ControlRequest(req));
+
+        // AskUserQuestion stores in question_inputs, NOT permission_inputs
+        assert!(bridge.take_permission_input("req_q_only").is_none());
     }
 
     #[test]

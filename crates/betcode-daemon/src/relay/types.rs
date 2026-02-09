@@ -38,6 +38,10 @@ pub struct RelayHandle {
     /// Written by the stdout pipeline bridge, read by the handler to
     /// build the correct `control_response` with `updatedInput`.
     pub pending_question_inputs: Arc<RwLock<HashMap<String, serde_json::Value>>>,
+    /// Pending permission (CanUseTool) original inputs keyed by request_id.
+    /// Written by the stdout pipeline bridge, read by the handler to
+    /// build the correct `control_response` with `updatedInput`.
+    pub pending_permission_inputs: Arc<RwLock<HashMap<String, serde_json::Value>>>,
 }
 
 /// Errors from relay operations.

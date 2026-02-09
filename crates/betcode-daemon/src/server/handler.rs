@@ -45,8 +45,21 @@ pub async fn handle_agent_request(
                 let granted = perm.decision == PermissionDecision::AllowOnce as i32
                     || perm.decision == PermissionDecision::AllowSession as i32;
                 info!(session_id = %sid, request_id = %perm.request_id, granted, "Permission");
+
+                // Look up original tool input from pending map.
+                let original_input = if let Some(handle) = relay.get_handle(sid).await {
+                    handle
+                        .pending_permission_inputs
+                        .write()
+                        .await
+                        .remove(&perm.request_id)
+                        .unwrap_or(serde_json::Value::Object(Default::default()))
+                } else {
+                    serde_json::Value::Object(Default::default())
+                };
+
                 relay
-                    .send_permission_response(sid, &perm.request_id, granted)
+                    .send_permission_response(sid, &perm.request_id, granted, &original_input)
                     .await
                     .map_err(|e| e.to_string())?;
             }

@@ -560,9 +560,22 @@ impl TunnelRequestHandler {
                 let granted = perm.decision
                     == betcode_proto::v1::PermissionDecision::AllowOnce as i32
                     || perm.decision == betcode_proto::v1::PermissionDecision::AllowSession as i32;
+
+                // Look up original tool input from pending map.
+                let original_input = if let Some(handle) = self.relay.get_handle(&sid).await {
+                    handle
+                        .pending_permission_inputs
+                        .write()
+                        .await
+                        .remove(&perm.request_id)
+                        .unwrap_or(serde_json::Value::Object(Default::default()))
+                } else {
+                    serde_json::Value::Object(Default::default())
+                };
+
                 if let Err(e) = self
                     .relay
-                    .send_permission_response(&sid, &perm.request_id, granted)
+                    .send_permission_response(&sid, &perm.request_id, granted, &original_input)
                     .await
                 {
                     warn!(session_id = %sid, error = %e, "Failed to send permission via tunnel");
