@@ -31,6 +31,11 @@ pub struct TunnelConfig {
     /// Path to CA certificate for verifying the relay's TLS certificate.
     /// When set, the client will use TLS with this CA cert.
     pub ca_cert_path: Option<PathBuf>,
+
+    /// Path to the X25519 identity key file for E2E encryption.
+    /// If the file doesn't exist, a new keypair is generated and saved.
+    /// Defaults to `~/.config/betcode/identity.key`.
+    pub identity_key_path: Option<PathBuf>,
 }
 
 /// Exponential backoff reconnection policy.
@@ -93,6 +98,7 @@ impl TunnelConfig {
             reconnect: ReconnectPolicy::default(),
             heartbeat_interval: Duration::from_secs(30),
             ca_cert_path: None,
+            identity_key_path: None,
         }
     }
 }
@@ -108,6 +114,7 @@ impl fmt::Debug for TunnelConfig {
             .field("reconnect", &self.reconnect)
             .field("heartbeat_interval", &self.heartbeat_interval)
             .field("ca_cert_path", &self.ca_cert_path)
+            .field("identity_key_path", &self.identity_key_path)
             .finish()
     }
 }

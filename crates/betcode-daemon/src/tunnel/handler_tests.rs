@@ -18,7 +18,11 @@ fn req_frame(rid: &str, method: &str, data: Vec<u8>) -> TunnelFrame {
         payload: Some(betcode_proto::v1::tunnel_frame::Payload::StreamData(
             StreamPayload {
                 method: method.into(),
-                data,
+                encrypted: Some(betcode_proto::v1::EncryptedPayload {
+                    ciphertext: data,
+                    nonce: Vec::new(),
+                    ephemeral_pubkey: Vec::new(),
+                }),
                 sequence: 0,
                 metadata: HashMap::new(),
             },
@@ -120,7 +124,7 @@ async fn list_sessions_empty() {
     assert_eq!(r.len(), 1);
     assert_eq!(r[0].frame_type, FrameType::Response as i32);
     if let Some(betcode_proto::v1::tunnel_frame::Payload::StreamData(p)) = &r[0].payload {
-        let resp = ListSessionsResponse::decode(p.data.as_slice()).unwrap();
+        let resp = ListSessionsResponse::decode(p.encrypted.as_ref().unwrap().ciphertext.as_slice()).unwrap();
         assert_eq!(resp.sessions.len(), 0);
     } else {
         panic!("wrong payload");
@@ -139,7 +143,7 @@ async fn cancel_turn_no_session() {
     assert_eq!(r.len(), 1);
     assert_eq!(r[0].frame_type, FrameType::Response as i32);
     if let Some(betcode_proto::v1::tunnel_frame::Payload::StreamData(p)) = &r[0].payload {
-        let resp = CancelTurnResponse::decode(p.data.as_slice()).unwrap();
+        let resp = CancelTurnResponse::decode(p.encrypted.as_ref().unwrap().ciphertext.as_slice()).unwrap();
         assert!(!resp.was_active);
     } else {
         panic!("wrong payload");
@@ -159,7 +163,7 @@ async fn compact_session_no_messages() {
     assert_eq!(r.len(), 1);
     assert_eq!(r[0].frame_type, FrameType::Response as i32);
     if let Some(betcode_proto::v1::tunnel_frame::Payload::StreamData(p)) = &r[0].payload {
-        let resp = CompactSessionResponse::decode(p.data.as_slice()).unwrap();
+        let resp = CompactSessionResponse::decode(p.encrypted.as_ref().unwrap().ciphertext.as_slice()).unwrap();
         assert_eq!(resp.messages_before, 0);
     } else {
         panic!("wrong payload");
@@ -179,7 +183,7 @@ async fn request_input_lock_grants() {
     assert_eq!(r.len(), 1);
     assert_eq!(r[0].frame_type, FrameType::Response as i32);
     if let Some(betcode_proto::v1::tunnel_frame::Payload::StreamData(p)) = &r[0].payload {
-        let resp = InputLockResponse::decode(p.data.as_slice()).unwrap();
+        let resp = InputLockResponse::decode(p.encrypted.as_ref().unwrap().ciphertext.as_slice()).unwrap();
         assert!(resp.granted);
     } else {
         panic!("wrong payload");
@@ -302,13 +306,42 @@ async fn converse_start_session_failure_sends_error_cleans_active() {
     let (outbound_tx, mut rx) = mpsc::channel(128);
     let h = TunnelRequestHandler::new("test-machine".into(), relay, mux, db, outbound_tx);
 
+    // Send StartConversation — this defers the subprocess spawn
     let data = make_start_request("sess-fail");
     let result = h
         .handle_frame(req_frame("conv3", METHOD_CONVERSE, data))
         .await;
     assert!(result.is_empty());
 
-    // Error should arrive on outbound (spawn fails immediately with PoolExhausted)
+    // Send a UserMessage via StreamData to trigger the deferred spawn failure
+    use betcode_proto::v1::{agent_request::Request, UserMessage};
+    let user_msg = AgentRequest {
+        request: Some(Request::Message(UserMessage {
+            content: "hello".into(),
+            attachments: vec![],
+        })),
+    };
+    let stream_frame = TunnelFrame {
+        request_id: "conv3".into(),
+        frame_type: FrameType::StreamData as i32,
+        timestamp: None,
+        payload: Some(betcode_proto::v1::tunnel_frame::Payload::StreamData(
+            StreamPayload {
+                method: String::new(),
+                encrypted: Some(betcode_proto::v1::EncryptedPayload {
+                    ciphertext: encode(&user_msg),
+                    nonce: Vec::new(),
+                    ephemeral_pubkey: Vec::new(),
+                }),
+                sequence: 0,
+                metadata: HashMap::new(),
+            },
+        )),
+    };
+    let result = h.handle_frame(stream_frame).await;
+    assert!(result.is_empty());
+
+    // Error should arrive on outbound (spawn fails with PoolExhausted)
     let frame = tokio::time::timeout(std::time::Duration::from_millis(500), rx.recv())
         .await
         .unwrap()
@@ -401,27 +434,4 @@ async fn resume_session_empty_sends_stream_end_only() {
     assert_eq!(frame.request_id, "resume3");
 }
 
-/// Simple base64 encoder for tests.
-fn base64_encode(data: &[u8]) -> String {
-    const CHARS: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-    let mut result = String::with_capacity(data.len().div_ceil(3) * 4);
-    for chunk in data.chunks(3) {
-        let b0 = chunk[0] as u32;
-        let b1 = if chunk.len() > 1 { chunk[1] as u32 } else { 0 };
-        let b2 = if chunk.len() > 2 { chunk[2] as u32 } else { 0 };
-        let n = (b0 << 16) | (b1 << 8) | b2;
-        result.push(CHARS[(n >> 18 & 0x3F) as usize] as char);
-        result.push(CHARS[(n >> 12 & 0x3F) as usize] as char);
-        if chunk.len() > 1 {
-            result.push(CHARS[(n >> 6 & 0x3F) as usize] as char);
-        } else {
-            result.push('=');
-        }
-        if chunk.len() > 2 {
-            result.push(CHARS[(n & 0x3F) as usize] as char);
-        } else {
-            result.push('=');
-        }
-    }
-    result
-}
+use betcode_core::db::base64_encode;

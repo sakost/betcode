@@ -1,4 +1,8 @@
 //! AgentService proxy that forwards calls through the tunnel to daemons.
+//!
+//! The relay acts as a pure frame forwarder — it never decodes the encrypted
+//! payload content. Only routing metadata (method, machine_id, request_id)
+//! is visible to the relay.
 
 use std::collections::HashMap;
 use std::pin::Pin;
@@ -14,8 +18,8 @@ use tracing::{info, instrument, warn};
 use betcode_proto::v1::agent_service_server::AgentService;
 use betcode_proto::v1::{
     AgentEvent, AgentRequest, CancelTurnRequest, CancelTurnResponse, CompactSessionRequest,
-    CompactSessionResponse, FrameType, InputLockRequest, InputLockResponse, ListSessionsRequest,
-    ListSessionsResponse, ResumeSessionRequest, StreamPayload, TunnelFrame,
+    CompactSessionResponse, EncryptedPayload, FrameType, InputLockRequest, InputLockResponse,
+    ListSessionsRequest, ListSessionsResponse, ResumeSessionRequest, StreamPayload, TunnelFrame,
 };
 
 use crate::router::{RequestRouter, RouterError};
@@ -47,6 +51,9 @@ fn router_error_to_status(err: RouterError) -> Status {
 }
 
 /// Decode a response payload from a TunnelFrame.
+///
+/// The relay decodes only the outer frame envelope — the encrypted payload
+/// inside StreamPayload is forwarded opaquely to the client for decryption.
 #[allow(clippy::result_large_err)]
 fn decode_response<M: Message + Default>(frame: &TunnelFrame) -> Result<M, Status> {
     if frame.frame_type == FrameType::Error as i32 {
@@ -57,7 +64,12 @@ fn decode_response<M: Message + Default>(frame: &TunnelFrame) -> Result<M, Statu
     }
     match &frame.payload {
         Some(betcode_proto::v1::tunnel_frame::Payload::StreamData(p)) => {
-            M::decode(p.data.as_slice())
+            let data = p
+                .encrypted
+                .as_ref()
+                .map(|e| &e.ciphertext[..])
+                .unwrap_or(&[]);
+            M::decode(data)
                 .map_err(|e| Status::internal(format!("Failed to decode response: {}", e)))
         }
         _ => Err(Status::internal("Unexpected response payload format")),
@@ -128,7 +140,11 @@ async fn converse_proxy_task(
                         payload: Some(betcode_proto::v1::tunnel_frame::Payload::StreamData(
                             StreamPayload {
                                 method: String::new(),
-                                data,
+                                encrypted: Some(EncryptedPayload {
+                                    ciphertext: data,
+                                    nonce: Vec::new(),
+                                    ephemeral_pubkey: Vec::new(),
+                                }),
                                 sequence: 0,
                                 metadata: HashMap::new(),
                             },
@@ -162,7 +178,12 @@ async fn converse_proxy_task(
                 if let Some(betcode_proto::v1::tunnel_frame::Payload::StreamData(p)) =
                     frame.payload
                 {
-                    match AgentEvent::decode(p.data.as_slice()) {
+                    let data = p
+                        .encrypted
+                        .as_ref()
+                        .map(|e| &e.ciphertext[..])
+                        .unwrap_or(&[]);
+                    match AgentEvent::decode(data) {
                         Ok(event) => {
                             if out_tx.send(Ok(event)).await.is_err() {
                                 warn!(request_id = %request_id, "Client receiver dropped");
@@ -303,7 +324,12 @@ impl AgentService for AgentProxyService {
                         if let Some(betcode_proto::v1::tunnel_frame::Payload::StreamData(p)) =
                             frame.payload
                         {
-                            match AgentEvent::decode(p.data.as_slice()) {
+                            let data = p
+                                .encrypted
+                                .as_ref()
+                                .map(|e| &e.ciphertext[..])
+                                .unwrap_or(&[]);
+                            match AgentEvent::decode(data) {
                                 Ok(event) => {
                                     if tx.send(Ok(event)).await.is_err() {
                                         break;

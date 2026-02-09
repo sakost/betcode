@@ -7,7 +7,7 @@ use std::sync::Arc;
 
 use tracing::{info, warn};
 
-use betcode_proto::v1::{FrameType, StreamPayload, TunnelFrame};
+use betcode_proto::v1::{EncryptedPayload, FrameType, StreamPayload, TunnelFrame};
 
 use crate::registry::ConnectionRegistry;
 use crate::storage::RelayDatabase;
@@ -102,7 +102,11 @@ impl BufferManager {
                 payload: Some(betcode_proto::v1::tunnel_frame::Payload::StreamData(
                     StreamPayload {
                         method: msg.method.clone(),
-                        data: msg.payload.clone(),
+                        encrypted: Some(EncryptedPayload {
+                            ciphertext: msg.payload.clone(),
+                            nonce: Vec::new(),
+                            ephemeral_pubkey: Vec::new(),
+                        }),
                         sequence: 0,
                         metadata,
                     },

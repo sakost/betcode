@@ -1,16 +1,9 @@
 //! Database queries for BetCode relay server.
 
-use std::time::{SystemTime, UNIX_EPOCH};
+use betcode_core::db::unix_timestamp;
 
 use super::db::{DatabaseError, RelayDatabase};
 use super::models::*;
-
-pub(crate) fn unix_timestamp() -> i64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs() as i64
-}
 
 impl RelayDatabase {
     // =========================================================================
@@ -240,6 +233,29 @@ impl RelayDatabase {
             .await?;
 
         Ok(result.rows_affected() > 0)
+    }
+
+    /// Update a machine's identity public key.
+    pub async fn update_machine_identity_pubkey(
+        &self,
+        id: &str,
+        pubkey: &[u8],
+    ) -> Result<(), DatabaseError> {
+        sqlx::query("UPDATE machines SET identity_pubkey = ? WHERE id = ?")
+            .bind(pubkey)
+            .bind(id)
+            .execute(self.pool())
+            .await?;
+        Ok(())
+    }
+
+    /// Get a machine's identity public key.
+    pub async fn get_machine_identity_pubkey(
+        &self,
+        id: &str,
+    ) -> Result<Option<Vec<u8>>, DatabaseError> {
+        let machine = self.get_machine(id).await?;
+        Ok(machine.identity_pubkey)
     }
 
     /// Count machines for an owner.

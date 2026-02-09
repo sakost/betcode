@@ -9,9 +9,9 @@ use tracing::{debug, error, info, warn};
 
 use betcode_proto::v1::{
     AgentRequest, CancelTurnRequest, CancelTurnResponse, CompactSessionRequest,
-    CompactSessionResponse, FrameType, InputLockRequest, InputLockResponse, ListSessionsRequest,
-    ListSessionsResponse, ResumeSessionRequest, SessionSummary, StreamPayload, TunnelError,
-    TunnelErrorCode, TunnelFrame,
+    CompactSessionResponse, EncryptedPayload, FrameType, InputLockRequest, InputLockResponse,
+    ListSessionsRequest, ListSessionsResponse, ResumeSessionRequest, SessionSummary, StreamPayload,
+    TunnelError, TunnelErrorCode, TunnelFrame,
 };
 
 use crate::relay::SessionRelay;
@@ -81,7 +81,12 @@ impl TunnelRequestHandler {
                 if let Some(betcode_proto::v1::tunnel_frame::Payload::StreamData(ref p)) =
                     frame.payload
                 {
-                    self.handle_incoming_stream_data(&request_id, &p.data).await;
+                    let data = p
+                        .encrypted
+                        .as_ref()
+                        .map(|e| &e.ciphertext[..])
+                        .unwrap_or(&[]);
+                    self.handle_incoming_stream_data(&request_id, data).await;
                 }
                 vec![]
             }
@@ -118,22 +123,28 @@ impl TunnelRequestHandler {
 
         debug!(request_id = %request_id, method = %payload.method, machine_id = %self.machine_id, "Handling tunneled request");
 
+        let data = payload
+            .encrypted
+            .as_ref()
+            .map(|e| &e.ciphertext[..])
+            .unwrap_or(&[]);
+
         match payload.method.as_str() {
-            METHOD_LIST_SESSIONS => self.handle_list_sessions(&request_id, &payload.data).await,
+            METHOD_LIST_SESSIONS => self.handle_list_sessions(&request_id, data).await,
             METHOD_COMPACT_SESSION => {
-                self.handle_compact_session(&request_id, &payload.data)
+                self.handle_compact_session(&request_id, data)
                     .await
             }
-            METHOD_CANCEL_TURN => self.handle_cancel_turn(&request_id, &payload.data).await,
+            METHOD_CANCEL_TURN => self.handle_cancel_turn(&request_id, data).await,
             METHOD_REQUEST_INPUT_LOCK => {
-                self.handle_request_input_lock(&request_id, &payload.data)
+                self.handle_request_input_lock(&request_id, data)
                     .await
             }
             METHOD_CONVERSE => {
-                self.handle_converse(&request_id, &payload.data).await;
+                self.handle_converse(&request_id, data).await;
                 vec![] // Responses sent asynchronously via outbound_tx
             }
-            METHOD_RESUME_SESSION => self.handle_resume_session(&request_id, &payload.data).await,
+            METHOD_RESUME_SESSION => self.handle_resume_session(&request_id, data).await,
             other => vec![Self::error_response(
                 &request_id,
                 TunnelErrorCode::NotFound,
@@ -567,7 +578,11 @@ impl TunnelRequestHandler {
                                 betcode_proto::v1::tunnel_frame::Payload::StreamData(
                                     StreamPayload {
                                         method: String::new(),
-                                        data: buf,
+                                        encrypted: Some(EncryptedPayload {
+                                            ciphertext: buf,
+                                            nonce: Vec::new(),
+                                            ephemeral_pubkey: Vec::new(),
+                                        }),
                                         sequence: seq,
                                         metadata: HashMap::new(),
                                     },
@@ -656,7 +671,11 @@ impl TunnelRequestHandler {
                     payload: Some(betcode_proto::v1::tunnel_frame::Payload::StreamData(
                         StreamPayload {
                             method: String::new(),
-                            data: bytes,
+                            encrypted: Some(EncryptedPayload {
+                                ciphertext: bytes,
+                                nonce: Vec::new(),
+                                ephemeral_pubkey: Vec::new(),
+                            }),
                             sequence: seq,
                             metadata: HashMap::new(),
                         },
@@ -691,7 +710,11 @@ impl TunnelRequestHandler {
             payload: Some(betcode_proto::v1::tunnel_frame::Payload::StreamData(
                 StreamPayload {
                     method: String::new(),
-                    data: buf,
+                    encrypted: Some(EncryptedPayload {
+                        ciphertext: buf,
+                        nonce: Vec::new(),
+                        ephemeral_pubkey: Vec::new(),
+                    }),
                     sequence: 0,
                     metadata: HashMap::new(),
                 },
@@ -726,45 +749,7 @@ impl TunnelRequestHandler {
     }
 }
 
-/// Simple base64 decoding for stored event payloads.
-fn base64_decode(input: &str) -> Result<Vec<u8>, String> {
-    const DECODE: [u8; 128] = {
-        let mut table = [255u8; 128];
-        let chars = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-        let mut i = 0;
-        while i < 64 {
-            table[chars[i] as usize] = i as u8;
-            i += 1;
-        }
-        table
-    };
-
-    let input = input.trim_end_matches('=');
-    if input.len() % 4 == 1 {
-        return Err("Invalid base64 length".to_string());
-    }
-    let mut result = Vec::with_capacity(input.len() * 3 / 4);
-
-    for chunk in input.as_bytes().chunks(4) {
-        let mut n: u32 = 0;
-        for (i, &b) in chunk.iter().enumerate() {
-            if b as usize >= 128 || DECODE[b as usize] == 255 {
-                return Err(format!("Invalid base64 character: {}", b as char));
-            }
-            n |= (DECODE[b as usize] as u32) << (18 - i * 6);
-        }
-
-        result.push((n >> 16 & 0xFF) as u8);
-        if chunk.len() > 2 {
-            result.push((n >> 8 & 0xFF) as u8);
-        }
-        if chunk.len() > 3 {
-            result.push((n & 0xFF) as u8);
-        }
-    }
-
-    Ok(result)
-}
+use betcode_core::db::base64_decode;
 
 #[cfg(test)]
 #[path = "handler_tests.rs"]

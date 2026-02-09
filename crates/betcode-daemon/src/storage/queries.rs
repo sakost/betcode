@@ -1,6 +1,6 @@
 //! Database queries for BetCode daemon.
 
-use std::time::{SystemTime, UNIX_EPOCH};
+use betcode_core::db::unix_timestamp;
 
 use super::db::{Database, DatabaseError};
 use super::models::*;
@@ -533,13 +533,6 @@ impl Database {
 
         Ok(())
     }
-}
-
-fn unix_timestamp() -> i64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs() as i64
 }
 
 #[cfg(test)]

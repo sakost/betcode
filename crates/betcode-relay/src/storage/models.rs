@@ -31,6 +31,8 @@ pub struct Machine {
     pub registered_at: i64,
     pub last_seen: i64,
     pub metadata: String,
+    /// X25519 identity public key (32 bytes) for E2E encryption.
+    pub identity_pubkey: Option<Vec<u8>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]

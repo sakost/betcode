@@ -1,11 +1,12 @@
 [workspace]
 resolver = "2"
 members = [
-    "crates/betcode-proto",
-    "crates/betcode-core",
-    "crates/betcode-daemon",
-    "crates/betcode-cli",
-    "crates/betcode-relay",
+  "crates/betcode-proto",
+  "crates/betcode-core",
+  "crates/betcode-crypto",
+  "crates/betcode-daemon",
+  "crates/betcode-cli",
+  "crates/betcode-relay",
 ]
 
 [workspace.package]
@@ -53,3 +54,4 @@ crossterm = "0.29.0"
 # Internal crates
 betcode-proto = { path = "crates/betcode-proto" }
 betcode-core = { path = "crates/betcode-core" }
+betcode-crypto = { path = "crates/betcode-crypto" }

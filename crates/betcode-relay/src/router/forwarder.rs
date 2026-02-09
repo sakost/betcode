@@ -7,7 +7,7 @@ use tokio::sync::mpsc;
 use tokio::time::timeout;
 use tracing::{info, warn};
 
-use betcode_proto::v1::{FrameType, StreamPayload, TunnelError, TunnelErrorCode, TunnelFrame};
+use betcode_proto::v1::{EncryptedPayload, FrameType, StreamPayload, TunnelError, TunnelErrorCode, TunnelFrame};
 
 use crate::buffer::BufferManager;
 use crate::registry::ConnectionRegistry;
@@ -77,7 +77,7 @@ impl RequestRouter {
             }
         };
 
-        // Build request frame
+        // Build request frame — relay forwards encrypted payload opaquely
         let frame = TunnelFrame {
             request_id: request_id.to_string(),
             frame_type: FrameType::Request as i32,
@@ -85,7 +85,11 @@ impl RequestRouter {
             payload: Some(betcode_proto::v1::tunnel_frame::Payload::StreamData(
                 StreamPayload {
                     method: method.to_string(),
-                    data,
+                    encrypted: Some(EncryptedPayload {
+                        ciphertext: data,
+                        nonce: Vec::new(),
+                        ephemeral_pubkey: Vec::new(),
+                    }),
                     sequence: 0,
                     metadata,
                 },
@@ -141,7 +145,11 @@ impl RequestRouter {
             payload: Some(betcode_proto::v1::tunnel_frame::Payload::StreamData(
                 StreamPayload {
                     method: method.to_string(),
-                    data,
+                    encrypted: Some(EncryptedPayload {
+                        ciphertext: data,
+                        nonce: Vec::new(),
+                        ephemeral_pubkey: Vec::new(),
+                    }),
                     sequence: 0,
                     metadata,
                 },
@@ -183,7 +191,11 @@ impl RequestRouter {
             payload: Some(betcode_proto::v1::tunnel_frame::Payload::StreamData(
                 StreamPayload {
                     method: method.to_string(),
-                    data,
+                    encrypted: Some(EncryptedPayload {
+                        ciphertext: data,
+                        nonce: Vec::new(),
+                        ephemeral_pubkey: Vec::new(),
+                    }),
                     sequence: 0,
                     metadata,
                 },
@@ -356,7 +368,11 @@ mod tests {
                         payload: Some(betcode_proto::v1::tunnel_frame::Payload::StreamData(
                             StreamPayload {
                                 method: String::new(),
-                                data: vec![i],
+                                encrypted: Some(EncryptedPayload {
+                                    ciphertext: vec![i],
+                                    nonce: Vec::new(),
+                                    ephemeral_pubkey: Vec::new(),
+                                }),
                                 sequence: i as u64,
                                 metadata: Default::default(),
                             },
@@ -383,7 +399,7 @@ mod tests {
             assert_eq!(f.request_id, "req-s1");
             assert_eq!(f.frame_type, FrameType::StreamData as i32);
             if let Some(betcode_proto::v1::tunnel_frame::Payload::StreamData(p)) = &f.payload {
-                assert_eq!(p.data, vec![i as u8]);
+                assert_eq!(p.encrypted.as_ref().unwrap().ciphertext, vec![i as u8]);
             }
         }
     }

@@ -6,6 +6,8 @@ use std::path::Path;
 use std::str::FromStr;
 use tracing::info;
 
+pub use betcode_core::db::DatabaseError;
+
 /// Database handle for BetCode daemon.
 #[derive(Clone)]
 pub struct Database {
@@ -74,31 +76,6 @@ impl Database {
     /// Get a reference to the connection pool.
     pub fn pool(&self) -> &Pool<Sqlite> {
         &self.pool
-    }
-}
-
-/// Database errors.
-#[derive(Debug, thiserror::Error)]
-pub enum DatabaseError {
-    #[error("I/O error: {0}")]
-    Io(String),
-
-    #[error("Connection error: {0}")]
-    Connection(String),
-
-    #[error("Migration error: {0}")]
-    Migration(String),
-
-    #[error("Query error: {0}")]
-    Query(String),
-
-    #[error("Not found: {0}")]
-    NotFound(String),
-}
-
-impl From<sqlx::Error> for DatabaseError {
-    fn from(e: sqlx::Error) -> Self {
-        DatabaseError::Query(e.to_string())
     }
 }
 

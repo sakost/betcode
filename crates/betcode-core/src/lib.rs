@@ -7,6 +7,7 @@
 //! - Common error types
 
 pub mod config;
+pub mod db;
 pub mod error;
 pub mod ndjson;
 pub mod permissions;

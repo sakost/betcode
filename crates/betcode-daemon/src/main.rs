@@ -144,7 +144,7 @@ async fn main() -> anyhow::Result<()> {
             Arc::clone(server.relay()),
             Arc::clone(server.multiplexer()),
             server.db().clone(),
-        );
+        )?;
         Some(tokio::spawn(async move {
             tunnel_client.run(shutdown_rx).await;
         }))

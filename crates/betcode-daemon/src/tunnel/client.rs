@@ -10,6 +10,7 @@ use tonic::transport::{Certificate, Channel, ClientTlsConfig};
 use tonic::{Request, Streaming};
 use tracing::{error, info, warn};
 
+use betcode_crypto::IdentityKeyPair;
 use betcode_proto::v1::auth_service_client::AuthServiceClient;
 use betcode_proto::v1::tunnel_service_client::TunnelServiceClient;
 use betcode_proto::v1::{
@@ -30,6 +31,8 @@ pub struct TunnelClient {
     relay: Arc<SessionRelay>,
     multiplexer: Arc<SessionMultiplexer>,
     db: Database,
+    /// X25519 identity keypair for E2E encryption key exchange.
+    identity: IdentityKeyPair,
 }
 
 impl TunnelClient {
@@ -38,13 +41,35 @@ impl TunnelClient {
         relay: Arc<SessionRelay>,
         multiplexer: Arc<SessionMultiplexer>,
         db: Database,
-    ) -> Self {
-        Self {
+    ) -> Result<Self, TunnelClientError> {
+        let identity = Self::load_identity(&config)?;
+        info!(
+            fingerprint = %identity.fingerprint(),
+            "Loaded identity keypair"
+        );
+        Ok(Self {
             config,
             relay,
             multiplexer,
             db,
-        }
+            identity,
+        })
+    }
+
+    /// Load or generate the X25519 identity keypair.
+    fn load_identity(config: &TunnelConfig) -> Result<IdentityKeyPair, TunnelClientError> {
+        let path = config
+            .identity_key_path
+            .clone()
+            .unwrap_or_else(|| {
+                dirs::config_dir()
+                    .unwrap_or_else(|| std::path::PathBuf::from("."))
+                    .join("betcode")
+                    .join("identity.key")
+            });
+        IdentityKeyPair::load_or_generate(&path).map_err(|e| {
+            TunnelClientError::Auth(format!("Failed to load identity key: {}", e))
+        })
     }
 
     /// Run the tunnel client with automatic reconnection.
@@ -190,6 +215,7 @@ impl TunnelClient {
             machine_id: self.config.machine_id.clone(),
             machine_name: self.config.machine_name.clone(),
             capabilities: Default::default(),
+            identity_pubkey: self.identity.public_bytes().to_vec(),
         });
         request.metadata_mut().insert(
             "authorization",
@@ -315,18 +341,23 @@ mod tests {
 
     #[tokio::test]
     async fn tunnel_client_creation() {
-        let config = TunnelConfig::new(
+        let dir = std::env::temp_dir().join(format!("betcode-test-{}", uuid::Uuid::new_v4()));
+        let key_path = dir.join("identity.key");
+        let mut config = TunnelConfig::new(
             "https://localhost:443".into(),
             "m1".into(),
             "Test Machine".into(),
             "user".into(),
             "pass".into(),
         );
+        config.identity_key_path = Some(key_path);
         let db = Database::open_in_memory().await.unwrap();
         let sub = Arc::new(SubprocessManager::new(5));
         let mux = Arc::new(SessionMultiplexer::with_defaults());
         let relay = Arc::new(SessionRelay::new(sub, Arc::clone(&mux), db.clone()));
-        let client = TunnelClient::new(config, relay, mux, db);
+        let client = TunnelClient::new(config, relay, mux, db).unwrap();
         assert_eq!(client.config.machine_id, "m1");
+        assert_eq!(client.identity.public_bytes().len(), 32);
+        std::fs::remove_dir_all(&dir).ok();
     }
 }

@@ -334,45 +334,7 @@ fn request_client_id<T>(request: &Request<T>) -> Option<String> {
         .map(|s| s.to_string())
 }
 
-/// Simple base64 decoding for stored event payloads.
-fn base64_decode(input: &str) -> Result<Vec<u8>, String> {
-    const DECODE: [u8; 128] = {
-        let mut table = [255u8; 128];
-        let chars = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-        let mut i = 0;
-        while i < 64 {
-            table[chars[i] as usize] = i as u8;
-            i += 1;
-        }
-        table
-    };
-
-    let input = input.trim_end_matches('=');
-    if input.len() % 4 == 1 {
-        return Err("Invalid base64 length".to_string());
-    }
-    let mut result = Vec::with_capacity(input.len() * 3 / 4);
-
-    for chunk in input.as_bytes().chunks(4) {
-        let mut n: u32 = 0;
-        for (i, &b) in chunk.iter().enumerate() {
-            if b as usize >= 128 || DECODE[b as usize] == 255 {
-                return Err(format!("Invalid base64 character: {}", b as char));
-            }
-            n |= (DECODE[b as usize] as u32) << (18 - i * 6);
-        }
-
-        result.push((n >> 16 & 0xFF) as u8);
-        if chunk.len() > 2 {
-            result.push((n >> 8 & 0xFF) as u8);
-        }
-        if chunk.len() > 3 {
-            result.push((n & 0xFF) as u8);
-        }
-    }
-
-    Ok(result)
-}
+use betcode_core::db::base64_decode;
 
 #[cfg(test)]
 mod tests {

@@ -10,6 +10,7 @@ license.workspace = true
 betcode-proto = { workspace = true }
 serde.workspace = true
 serde_json.workspace = true
+sqlx.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
 

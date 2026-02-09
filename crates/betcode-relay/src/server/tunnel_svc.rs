@@ -229,6 +229,27 @@ impl TunnelService for TunnelServiceImpl {
             }
         };
 
+        // Store identity pubkey if provided
+        if !req.identity_pubkey.is_empty() {
+            if let Err(e) = self
+                .db
+                .update_machine_identity_pubkey(&req.machine_id, &req.identity_pubkey)
+                .await
+            {
+                warn!(
+                    machine_id = %req.machine_id,
+                    error = %e,
+                    "Failed to store daemon identity pubkey"
+                );
+            } else {
+                info!(
+                    machine_id = %req.machine_id,
+                    pubkey_len = req.identity_pubkey.len(),
+                    "Stored daemon identity pubkey"
+                );
+            }
+        }
+
         info!(
             machine_id = %req.machine_id,
             machine_name = %req.machine_name,

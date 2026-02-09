@@ -2,7 +2,7 @@
 
 use super::db::{DatabaseError, RelayDatabase};
 use super::models::*;
-use super::queries::unix_timestamp;
+use betcode_core::db::unix_timestamp;
 
 impl RelayDatabase {
     // =========================================================================

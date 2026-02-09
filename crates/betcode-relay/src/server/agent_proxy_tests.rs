@@ -12,8 +12,8 @@ use tonic::Request;
 use betcode_proto::v1::agent_service_server::AgentService;
 use betcode_proto::v1::{
     AgentEvent, CancelTurnRequest, CancelTurnResponse, CompactSessionRequest,
-    CompactSessionResponse, FrameType, InputLockRequest, InputLockResponse, ListSessionsRequest,
-    ListSessionsResponse, ResumeSessionRequest, StreamPayload, TunnelFrame,
+    CompactSessionResponse, EncryptedPayload, FrameType, InputLockRequest, InputLockResponse,
+    ListSessionsRequest, ListSessionsResponse, ResumeSessionRequest, StreamPayload, TunnelFrame,
 };
 
 use super::{extract_machine_id, AgentProxyService};
@@ -101,7 +101,11 @@ fn spawn_responder<M: Message + 'static>(
                 payload: Some(betcode_proto::v1::tunnel_frame::Payload::StreamData(
                     StreamPayload {
                         method: String::new(),
-                        data: encode_msg(&response),
+                        encrypted: Some(EncryptedPayload {
+                            ciphertext: encode_msg(&response),
+                            nonce: Vec::new(),
+                            ephemeral_pubkey: Vec::new(),
+                        }),
                         sequence: 0,
                         metadata: HashMap::new(),
                     },
@@ -319,7 +323,11 @@ async fn resume_session_streams_events() {
                     payload: Some(betcode_proto::v1::tunnel_frame::Payload::StreamData(
                         StreamPayload {
                             method: String::new(),
-                            data: encode_msg(&event),
+                            encrypted: Some(EncryptedPayload {
+                                ciphertext: encode_msg(&event),
+                                nonce: Vec::new(),
+                                ephemeral_pubkey: Vec::new(),
+                            }),
                             sequence: seq,
                             metadata: HashMap::new(),
                         },

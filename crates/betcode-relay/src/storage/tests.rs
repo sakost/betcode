@@ -1,7 +1,7 @@
 //! Storage layer tests for BetCode relay.
 
 use super::db::RelayDatabase;
-use super::queries::unix_timestamp;
+use betcode_core::db::unix_timestamp;
 
 async fn test_db() -> RelayDatabase {
     RelayDatabase::open_in_memory().await.unwrap()
@@ -154,6 +154,39 @@ async fn remove_machine() {
     assert!(db.remove_machine("m1").await.unwrap());
     assert!(!db.remove_machine("m1").await.unwrap());
     assert!(db.get_machine("m1").await.is_err());
+}
+
+// === Machine identity pubkey tests ===
+
+#[tokio::test]
+async fn update_and_get_machine_identity_pubkey() {
+    let db = test_db().await;
+    db.create_user("u1", "alice", "alice@example.com", "hash123")
+        .await
+        .unwrap();
+    db.create_machine("m1", "laptop", "u1", "{}").await.unwrap();
+
+    // Initially no pubkey
+    let pubkey = db.get_machine_identity_pubkey("m1").await.unwrap();
+    assert!(pubkey.is_none());
+
+    // Set pubkey
+    let fake_pubkey = vec![42u8; 32];
+    db.update_machine_identity_pubkey("m1", &fake_pubkey)
+        .await
+        .unwrap();
+
+    // Verify it's stored
+    let pubkey = db.get_machine_identity_pubkey("m1").await.unwrap();
+    assert_eq!(pubkey.unwrap(), fake_pubkey);
+
+    // Update to a different pubkey
+    let new_pubkey = vec![99u8; 32];
+    db.update_machine_identity_pubkey("m1", &new_pubkey)
+        .await
+        .unwrap();
+    let pubkey = db.get_machine_identity_pubkey("m1").await.unwrap();
+    assert_eq!(pubkey.unwrap(), new_pubkey);
 }
 
 // === Buffer tests ===

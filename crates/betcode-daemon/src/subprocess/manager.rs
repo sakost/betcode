@@ -11,6 +11,21 @@ use tokio::process::{Child, Command};
 use tokio::sync::{mpsc, RwLock};
 use tracing::{debug, error, info, warn};
 
+/// Strategy for handling permission prompts in the subprocess.
+#[derive(Debug, Clone, Default)]
+pub enum PermissionStrategy {
+    /// Use `--permission-prompt-tool stdio` for interactive approval via NDJSON.
+    /// Note: This flag is hidden in Claude Code v2.1.6+ and the control protocol
+    /// may not emit `control_request` events. Falls back to auto-approve behavior.
+    #[default]
+    PromptToolStdio,
+    /// Use `--allowedTools` to pre-approve specific tools. No runtime prompts.
+    AllowedTools(Vec<String>),
+    /// Use `--dangerously-skip-permissions` to bypass all checks.
+    /// Only safe in sandboxed environments with no internet access.
+    SkipPermissions,
+}
+
 /// Configuration for subprocess spawning.
 #[derive(Debug, Clone)]
 pub struct SpawnConfig {
@@ -24,6 +39,8 @@ pub struct SpawnConfig {
     pub model: Option<String>,
     /// Maximum subprocess pool size.
     pub max_processes: usize,
+    /// Permission handling strategy.
+    pub permission_strategy: PermissionStrategy,
 }
 
 impl Default for SpawnConfig {
@@ -34,6 +51,7 @@ impl Default for SpawnConfig {
             resume_session: None,
             model: None,
             max_processes: 5,
+            permission_strategy: PermissionStrategy::default(),
         }
     }
 }
@@ -100,12 +118,24 @@ impl SubprocessManager {
             .arg("--input-format")
             .arg("stream-json")
             .arg("--verbose")
-            .arg("--permission-prompt-tool")
-            .arg("stdio")
             .arg("--include-partial-messages")
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
+
+        match &config.permission_strategy {
+            PermissionStrategy::PromptToolStdio => {
+                cmd.arg("--permission-prompt-tool").arg("stdio");
+            }
+            PermissionStrategy::AllowedTools(tools) => {
+                if !tools.is_empty() {
+                    cmd.arg("--allowedTools").args(tools);
+                }
+            }
+            PermissionStrategy::SkipPermissions => {
+                cmd.arg("--dangerously-skip-permissions");
+            }
+        }
 
         if let Some(ref prompt) = config.prompt {
             cmd.arg("-p").arg(prompt);
@@ -245,8 +275,10 @@ impl SubprocessManager {
         #[cfg(unix)]
         {
             if let Some(pid) = state.child.id() {
-                unsafe {
-                    libc::kill(pid as i32, libc::SIGINT);
+                let ret = unsafe { libc::kill(pid as i32, libc::SIGINT) };
+                if ret != 0 {
+                    let err = std::io::Error::last_os_error();
+                    warn!(process_id, pid, error = %err, "Failed to send SIGINT");
                 }
             }
         }

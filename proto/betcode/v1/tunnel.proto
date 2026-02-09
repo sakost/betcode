@@ -58,6 +58,21 @@ enum FrameType {
 }
 
 // =============================================================================
+// Encrypted Payload
+// =============================================================================
+
+// EncryptedPayload wraps E2E encrypted content.
+// The relay cannot decrypt this — only the CLI and daemon share the session key.
+message EncryptedPayload {
+  // ChaCha20-Poly1305 encrypted data (includes 16-byte AEAD tag).
+  bytes ciphertext = 1;
+  // 12-byte nonce used for this encryption.
+  bytes nonce = 2;
+  // Sender's ephemeral X25519 public key (included in first message only).
+  bytes ephemeral_pubkey = 3;
+}
+
+// =============================================================================
 // Stream Payload
 // =============================================================================
 
@@ -65,8 +80,8 @@ enum FrameType {
 message StreamPayload {
   // The gRPC service method being proxied (e.g. "betcode.v1.AgentService/Converse").
   string method = 1;
-  // Serialized protobuf bytes of the request or response.
-  bytes data = 2;
+  // E2E encrypted protobuf bytes of the request or response.
+  EncryptedPayload encrypted = 2;
   // Sequence number for ordering within a stream.
   uint64 sequence = 3;
   // Metadata headers to forward.
@@ -114,6 +129,25 @@ enum TunnelControlType {
   // Ping/pong for tunnel-level keepalive.
   TUNNEL_CONTROL_TYPE_PING = 3;
   TUNNEL_CONTROL_TYPE_PONG = 4;
+  // E2E key exchange: carries ephemeral public keys for session key derivation.
+  TUNNEL_CONTROL_TYPE_KEY_EXCHANGE = 10;
+}
+
+// =============================================================================
+// Key Exchange
+// =============================================================================
+
+// KeyExchangeRequest is sent by the CLI to initiate a key exchange with a daemon.
+message KeyExchangeRequest {
+  string machine_id = 1;
+  bytes identity_pubkey = 2;
+  string fingerprint = 3;
+}
+
+// KeyExchangeResponse carries the daemon's identity info back to the CLI.
+message KeyExchangeResponse {
+  bytes daemon_identity_pubkey = 1;
+  string daemon_fingerprint = 2;
 }
 
 // =============================================================================
@@ -124,6 +158,8 @@ message TunnelRegisterRequest {
   string machine_id = 1;
   string machine_name = 2;
   map<string, string> capabilities = 3;
+  // Daemon's X25519 identity public key (32 bytes) for E2E encryption.
+  bytes identity_pubkey = 4;
 }
 
 message TunnelRegisterResponse {

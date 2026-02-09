@@ -76,6 +76,7 @@ impl SessionRelay {
             resume_session: config.resume_session,
             model: config.model,
             max_processes: 5,
+            ..Default::default()
         };
 
         let process_handle = self
@@ -358,9 +359,12 @@ fn spawn_stdout_pipeline(
             // Update subprocess and DB with Claude's session ID from SystemInit
             if let Some(info) = bridge.session_info() {
                 if let Some(handle) = sessions.write().await.get_mut(&sid) {
-                    let _ = subprocess_manager
+                    if let Err(e) = subprocess_manager
                         .set_session_id(&handle.process_id, info.session_id.clone())
-                        .await;
+                        .await
+                    {
+                        warn!(session_id = %sid, error = %e, "Failed to set subprocess session ID");
+                    }
                 }
                 // Persist Claude session ID for future resume operations
                 if let Err(e) = db.update_claude_session_id(&sid, &info.session_id).await {
@@ -434,43 +438,13 @@ async fn store_event(db: &Database, session_id: &str, event: &AgentEvent) -> Res
     // Encode to protobuf bytes, then base64 for safe text storage
     let mut buf = Vec::new();
     event.encode(&mut buf).map_err(|e| e.to_string())?;
-    let payload = base64_encode(&buf);
+    let payload = betcode_core::db::base64_encode(&buf);
     let msg_type = event_message_type(event);
 
     db.insert_message(session_id, event.sequence as i64, msg_type, &payload)
         .await
         .map_err(|e| e.to_string())
         .map(|_| ())
-}
-
-/// Simple base64 encoding (no external dependency needed).
-fn base64_encode(data: &[u8]) -> String {
-    use std::fmt::Write;
-    const CHARS: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-    let mut result = String::with_capacity(data.len().div_ceil(3) * 4);
-
-    for chunk in data.chunks(3) {
-        let b0 = chunk[0] as u32;
-        let b1 = chunk.get(1).copied().unwrap_or(0) as u32;
-        let b2 = chunk.get(2).copied().unwrap_or(0) as u32;
-        let n = (b0 << 16) | (b1 << 8) | b2;
-
-        let _ = result.write_char(CHARS[(n >> 18 & 0x3F) as usize] as char);
-        let _ = result.write_char(CHARS[(n >> 12 & 0x3F) as usize] as char);
-
-        if chunk.len() > 1 {
-            let _ = result.write_char(CHARS[(n >> 6 & 0x3F) as usize] as char);
-        } else {
-            result.push('=');
-        }
-        if chunk.len() > 2 {
-            let _ = result.write_char(CHARS[(n & 0x3F) as usize] as char);
-        } else {
-            result.push('=');
-        }
-    }
-
-    result
 }
 
 #[cfg(test)]
