@@ -14,6 +14,8 @@ use betcode_proto::v1::{
     TunnelError, TunnelErrorCode, TunnelFrame,
 };
 
+use betcode_crypto::CryptoSession;
+
 use crate::relay::SessionRelay;
 use crate::session::SessionMultiplexer;
 use crate::storage::Database;
@@ -29,6 +31,7 @@ pub const METHOD_RESUME_SESSION: &str = "AgentService/ResumeSession";
 /// Info about an active streaming session routed through the tunnel.
 struct ActiveStream {
     session_id: String,
+    #[allow(dead_code)]
     client_id: String,
     /// Deferred session config — subprocess is only started on first UserMessage.
     pending_config: Option<crate::relay::RelaySessionConfig>,
@@ -44,6 +47,8 @@ pub struct TunnelRequestHandler {
     outbound_tx: mpsc::Sender<TunnelFrame>,
     /// Active streaming sessions keyed by request_id.
     active_streams: Arc<RwLock<HashMap<String, ActiveStream>>>,
+    /// E2E crypto session for encrypt/decrypt. None = passthrough (no encryption).
+    crypto: Option<Arc<CryptoSession>>,
 }
 
 impl TunnelRequestHandler {
@@ -53,6 +58,7 @@ impl TunnelRequestHandler {
         multiplexer: Arc<SessionMultiplexer>,
         db: Database,
         outbound_tx: mpsc::Sender<TunnelFrame>,
+        crypto: Option<Arc<CryptoSession>>,
     ) -> Self {
         Self {
             machine_id,
@@ -61,6 +67,7 @@ impl TunnelRequestHandler {
             db,
             outbound_tx,
             active_streams: Arc::new(RwLock::new(HashMap::new())),
+            crypto,
         }
     }
 
@@ -81,12 +88,17 @@ impl TunnelRequestHandler {
                 if let Some(betcode_proto::v1::tunnel_frame::Payload::StreamData(ref p)) =
                     frame.payload
                 {
-                    let data = p
-                        .encrypted
-                        .as_ref()
-                        .map(|e| &e.ciphertext[..])
-                        .unwrap_or(&[]);
-                    self.handle_incoming_stream_data(&request_id, data).await;
+                    let data = match p.encrypted.as_ref() {
+                        Some(enc) => match self.decrypt_payload(enc) {
+                            Ok(d) => d,
+                            Err(e) => {
+                                warn!(request_id = %request_id, error = %e, "StreamData decryption failed");
+                                return vec![];
+                            }
+                        },
+                        None => Vec::new(),
+                    };
+                    self.handle_incoming_stream_data(&request_id, &data).await;
                 }
                 vec![]
             }
@@ -109,6 +121,21 @@ impl TunnelRequestHandler {
         }
     }
 
+    /// Decrypt an EncryptedPayload using the session key, or passthrough if no crypto.
+    fn decrypt_payload(&self, enc: &EncryptedPayload) -> Result<Vec<u8>, String> {
+        match &self.crypto {
+            Some(crypto) => crypto
+                .decrypt(&enc.ciphertext, &enc.nonce)
+                .map_err(|e| format!("Decryption failed: {}", e)),
+            None => Ok(enc.ciphertext.clone()),
+        }
+    }
+
+    /// Encrypt data into an EncryptedPayload using the session key, or passthrough.
+    fn encrypt_payload(&self, data: &[u8]) -> EncryptedPayload {
+        make_encrypted_payload(self.crypto.as_deref(), data)
+    }
+
     async fn handle_request(&self, request_id: String, frame: TunnelFrame) -> Vec<TunnelFrame> {
         let payload = match frame.payload {
             Some(betcode_proto::v1::tunnel_frame::Payload::StreamData(p)) => p,
@@ -123,28 +150,36 @@ impl TunnelRequestHandler {
 
         debug!(request_id = %request_id, method = %payload.method, machine_id = %self.machine_id, "Handling tunneled request");
 
-        let data = payload
-            .encrypted
-            .as_ref()
-            .map(|e| &e.ciphertext[..])
-            .unwrap_or(&[]);
+        let data = match payload.encrypted.as_ref() {
+            Some(enc) => match self.decrypt_payload(enc) {
+                Ok(d) => d,
+                Err(e) => {
+                    return vec![Self::error_response(
+                        &request_id,
+                        TunnelErrorCode::Internal,
+                        &e,
+                    )]
+                }
+            },
+            None => Vec::new(),
+        };
 
         match payload.method.as_str() {
-            METHOD_LIST_SESSIONS => self.handle_list_sessions(&request_id, data).await,
+            METHOD_LIST_SESSIONS => self.handle_list_sessions(&request_id, &data).await,
             METHOD_COMPACT_SESSION => {
-                self.handle_compact_session(&request_id, data)
+                self.handle_compact_session(&request_id, &data)
                     .await
             }
-            METHOD_CANCEL_TURN => self.handle_cancel_turn(&request_id, data).await,
+            METHOD_CANCEL_TURN => self.handle_cancel_turn(&request_id, &data).await,
             METHOD_REQUEST_INPUT_LOCK => {
-                self.handle_request_input_lock(&request_id, data)
+                self.handle_request_input_lock(&request_id, &data)
                     .await
             }
             METHOD_CONVERSE => {
-                self.handle_converse(&request_id, data).await;
+                self.handle_converse(&request_id, &data).await;
                 vec![] // Responses sent asynchronously via outbound_tx
             }
-            METHOD_RESUME_SESSION => self.handle_resume_session(&request_id, data).await,
+            METHOD_RESUME_SESSION => self.handle_resume_session(&request_id, &data).await,
             other => vec![Self::error_response(
                 &request_id,
                 TunnelErrorCode::NotFound,
@@ -197,7 +232,7 @@ impl TunnelRequestHandler {
                     })
                     .collect();
                 let total = summaries.len() as u32;
-                vec![Self::response_frame(
+                vec![self.response_frame(
                     request_id,
                     &ListSessionsResponse {
                         sessions: summaries,
@@ -236,7 +271,7 @@ impl TunnelRequestHandler {
             }
         };
         if messages_before == 0 {
-            return vec![Self::response_frame(
+            return vec![self.response_frame(
                 request_id,
                 &CompactSessionResponse {
                     messages_before: 0,
@@ -258,7 +293,7 @@ impl TunnelRequestHandler {
         let keep_count = (messages_before / 2).max(10).min(messages_before);
         let cutoff = max_seq - keep_count as i64;
         if cutoff <= 0 {
-            return vec![Self::response_frame(
+            return vec![self.response_frame(
                 request_id,
                 &CompactSessionResponse {
                     messages_before,
@@ -281,7 +316,7 @@ impl TunnelRequestHandler {
         let messages_after = messages_before - deleted as u32;
         let tokens_saved = deleted as u32 * 100;
         info!(session_id = %sid, messages_before, messages_after, "Session compacted via tunnel");
-        vec![Self::response_frame(
+        vec![self.response_frame(
             request_id,
             &CompactSessionResponse {
                 messages_before,
@@ -307,7 +342,7 @@ impl TunnelRequestHandler {
             .cancel_session(&req.session_id)
             .await
             .unwrap_or(false);
-        vec![Self::response_frame(
+        vec![self.response_frame(
             request_id,
             &CancelTurnResponse { was_active },
         )]
@@ -330,7 +365,7 @@ impl TunnelRequestHandler {
             .acquire_input_lock(&req.session_id, &client_id)
             .await
         {
-            Ok(previous) => vec![Self::response_frame(
+            Ok(previous) => vec![self.response_frame(
                 request_id,
                 &InputLockResponse {
                     granted: true,
@@ -548,6 +583,7 @@ impl TunnelRequestHandler {
         let rid = request_id.to_string();
         let active_streams = Arc::clone(&self.active_streams);
         let mux = Arc::clone(&self.multiplexer);
+        let crypto = self.crypto.clone();
         let mut event_rx = handle.event_rx;
         let sid_spawn = sid.clone();
         let client_id_spawn = client_id.clone();
@@ -561,7 +597,7 @@ impl TunnelRequestHandler {
                         debug!(
                             request_id = %rid,
                             seq,
-                            event_type = ?event.event.as_ref().map(|e| std::mem::discriminant(e)),
+                            event_type = ?event.event.as_ref().map(std::mem::discriminant),
                             "Forwarding broadcast event to tunnel"
                         );
                         let mut buf = Vec::with_capacity(event.encoded_len());
@@ -578,11 +614,10 @@ impl TunnelRequestHandler {
                                 betcode_proto::v1::tunnel_frame::Payload::StreamData(
                                     StreamPayload {
                                         method: String::new(),
-                                        encrypted: Some(EncryptedPayload {
-                                            ciphertext: buf,
-                                            nonce: Vec::new(),
-                                            ephemeral_pubkey: Vec::new(),
-                                        }),
+                                        encrypted: Some(make_encrypted_payload(
+                                            crypto.as_deref(),
+                                            &buf,
+                                        )),
                                         sequence: seq,
                                         metadata: HashMap::new(),
                                     },
@@ -656,6 +691,7 @@ impl TunnelRequestHandler {
         let tx = self.outbound_tx.clone();
         let rid = request_id.to_string();
         let sid = req.session_id.clone();
+        let crypto = self.crypto.clone();
 
         tokio::spawn(async move {
             let mut seq = 0u64;
@@ -671,11 +707,10 @@ impl TunnelRequestHandler {
                     payload: Some(betcode_proto::v1::tunnel_frame::Payload::StreamData(
                         StreamPayload {
                             method: String::new(),
-                            encrypted: Some(EncryptedPayload {
-                                ciphertext: bytes,
-                                nonce: Vec::new(),
-                                ephemeral_pubkey: Vec::new(),
-                            }),
+                            encrypted: Some(make_encrypted_payload(
+                                crypto.as_deref(),
+                                &bytes,
+                            )),
                             sequence: seq,
                             metadata: HashMap::new(),
                         },
@@ -699,8 +734,8 @@ impl TunnelRequestHandler {
         vec![] // Frames sent async
     }
 
-    /// Build a unary response frame from a prost message.
-    pub fn response_frame<M: Message>(request_id: &str, msg: &M) -> TunnelFrame {
+    /// Build a unary response frame from a prost message, encrypting if crypto is set.
+    fn response_frame<M: Message>(&self, request_id: &str, msg: &M) -> TunnelFrame {
         let mut buf = Vec::with_capacity(msg.encoded_len());
         msg.encode(&mut buf).expect("prost encode should not fail");
         TunnelFrame {
@@ -710,11 +745,7 @@ impl TunnelRequestHandler {
             payload: Some(betcode_proto::v1::tunnel_frame::Payload::StreamData(
                 StreamPayload {
                     method: String::new(),
-                    encrypted: Some(EncryptedPayload {
-                        ciphertext: buf,
-                        nonce: Vec::new(),
-                        ephemeral_pubkey: Vec::new(),
-                    }),
+                    encrypted: Some(self.encrypt_payload(&buf)),
                     sequence: 0,
                     metadata: HashMap::new(),
                 },
@@ -746,6 +777,25 @@ impl TunnelRequestHandler {
     }
     pub fn db(&self) -> &Database {
         &self.db
+    }
+}
+
+/// Encrypt data with the session if available, or wrap raw bytes (passthrough).
+fn make_encrypted_payload(crypto: Option<&CryptoSession>, data: &[u8]) -> EncryptedPayload {
+    match crypto {
+        Some(c) => {
+            let enc = c.encrypt(data).expect("ChaCha20-Poly1305 encryption should not fail");
+            EncryptedPayload {
+                ciphertext: enc.ciphertext,
+                nonce: enc.nonce.to_vec(),
+                ephemeral_pubkey: Vec::new(),
+            }
+        }
+        None => EncryptedPayload {
+            ciphertext: data.to_vec(),
+            nonce: Vec::new(),
+            ephemeral_pubkey: Vec::new(),
+        },
     }
 }
 

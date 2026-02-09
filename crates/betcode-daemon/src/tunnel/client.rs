@@ -166,6 +166,7 @@ impl TunnelClient {
             Arc::clone(&self.multiplexer),
             self.db.clone(),
             outbound_tx.clone(),
+            None, // TODO: pass crypto session after key exchange
         ));
 
         let outbound_stream = ReceiverStream::new(outbound_rx);

@@ -7,7 +7,7 @@ async fn make_handler() -> TunnelRequestHandler {
     let mux = Arc::new(SessionMultiplexer::with_defaults());
     let relay = Arc::new(SessionRelay::new(sub, Arc::clone(&mux), db.clone()));
     let (outbound_tx, _outbound_rx) = mpsc::channel(128);
-    TunnelRequestHandler::new("test-machine".into(), relay, mux, db, outbound_tx)
+    TunnelRequestHandler::new("test-machine".into(), relay, mux, db, outbound_tx, None)
 }
 
 fn req_frame(rid: &str, method: &str, data: Vec<u8>) -> TunnelFrame {
@@ -221,7 +221,7 @@ async fn make_handler_with_outbound() -> (TunnelRequestHandler, mpsc::Receiver<T
     let mux = Arc::new(SessionMultiplexer::with_defaults());
     let relay = Arc::new(SessionRelay::new(sub, Arc::clone(&mux), db.clone()));
     let (outbound_tx, outbound_rx) = mpsc::channel(128);
-    let handler = TunnelRequestHandler::new("test-machine".into(), relay, mux, db, outbound_tx);
+    let handler = TunnelRequestHandler::new("test-machine".into(), relay, mux, db, outbound_tx, None);
     (handler, outbound_rx)
 }
 
@@ -304,7 +304,7 @@ async fn converse_start_session_failure_sends_error_cleans_active() {
     let mux = Arc::new(SessionMultiplexer::with_defaults());
     let relay = Arc::new(SessionRelay::new(sub, Arc::clone(&mux), db.clone()));
     let (outbound_tx, mut rx) = mpsc::channel(128);
-    let h = TunnelRequestHandler::new("test-machine".into(), relay, mux, db, outbound_tx);
+    let h = TunnelRequestHandler::new("test-machine".into(), relay, mux, db, outbound_tx, None);
 
     // Send StartConversation — this defers the subprocess spawn
     let data = make_start_request("sess-fail");
@@ -435,3 +435,167 @@ async fn resume_session_empty_sends_stream_end_only() {
 }
 
 use betcode_core::db::base64_encode;
+use betcode_crypto::CryptoSession;
+
+// --- E2E encryption tests ---
+
+/// Helper that returns handler with crypto + client session + outbound receiver.
+async fn make_handler_with_crypto() -> (TunnelRequestHandler, Arc<CryptoSession>, mpsc::Receiver<TunnelFrame>) {
+    let db = Database::open_in_memory().await.unwrap();
+    let sub = Arc::new(SubprocessManager::new(5));
+    let mux = Arc::new(SessionMultiplexer::with_defaults());
+    let relay = Arc::new(SessionRelay::new(sub, Arc::clone(&mux), db.clone()));
+    let (outbound_tx, outbound_rx) = mpsc::channel(128);
+
+    let (client_session, server_session) = betcode_crypto::test_session_pair().unwrap();
+    let server_crypto = Arc::new(server_session);
+    let client_crypto = Arc::new(client_session);
+
+    let handler = TunnelRequestHandler::new(
+        "test-machine".into(),
+        relay,
+        mux,
+        db,
+        outbound_tx,
+        Some(server_crypto),
+    );
+    (handler, client_crypto, outbound_rx)
+}
+
+fn encrypted_req_frame(
+    rid: &str,
+    method: &str,
+    data: Vec<u8>,
+    crypto: &CryptoSession,
+) -> TunnelFrame {
+    let encrypted = crypto.encrypt(&data).unwrap();
+    TunnelFrame {
+        request_id: rid.into(),
+        frame_type: FrameType::Request as i32,
+        timestamp: None,
+        payload: Some(betcode_proto::v1::tunnel_frame::Payload::StreamData(
+            StreamPayload {
+                method: method.into(),
+                encrypted: Some(betcode_proto::v1::EncryptedPayload {
+                    ciphertext: encrypted.ciphertext,
+                    nonce: encrypted.nonce.to_vec(),
+                    ephemeral_pubkey: Vec::new(),
+                }),
+                sequence: 0,
+                metadata: HashMap::new(),
+            },
+        )),
+    }
+}
+
+#[tokio::test]
+async fn handler_decrypts_incoming_encrypted_request() {
+    let (h, client_crypto, _rx) = make_handler_with_crypto().await;
+    let req = ListSessionsRequest {
+        working_directory: String::new(),
+        worktree_id: String::new(),
+        limit: 10,
+        offset: 0,
+    };
+    let r = h
+        .handle_frame(encrypted_req_frame(
+            "els1",
+            METHOD_LIST_SESSIONS,
+            encode(&req),
+            &client_crypto,
+        ))
+        .await;
+    assert_eq!(r.len(), 1);
+    assert_eq!(r[0].frame_type, FrameType::Response as i32);
+    // Response should be encrypted — verify we can decrypt it
+    if let Some(betcode_proto::v1::tunnel_frame::Payload::StreamData(p)) = &r[0].payload {
+        let enc = p.encrypted.as_ref().unwrap();
+        assert!(!enc.nonce.is_empty(), "nonce must be present for encrypted response");
+        let decrypted = client_crypto.decrypt(&enc.ciphertext, &enc.nonce).unwrap();
+        let resp = ListSessionsResponse::decode(decrypted.as_slice()).unwrap();
+        assert_eq!(resp.sessions.len(), 0);
+    } else {
+        panic!("wrong payload");
+    }
+}
+
+#[tokio::test]
+async fn handler_encrypts_outgoing_response() {
+    let (h, client_crypto, _rx) = make_handler_with_crypto().await;
+    let req = CancelTurnRequest {
+        session_id: "none".into(),
+    };
+    let r = h
+        .handle_frame(encrypted_req_frame(
+            "ect1",
+            METHOD_CANCEL_TURN,
+            encode(&req),
+            &client_crypto,
+        ))
+        .await;
+    assert_eq!(r.len(), 1);
+    if let Some(betcode_proto::v1::tunnel_frame::Payload::StreamData(p)) = &r[0].payload {
+        let enc = p.encrypted.as_ref().unwrap();
+        // Nonce should be non-empty (encrypted)
+        assert!(!enc.nonce.is_empty());
+        // Raw protobuf decode on ciphertext should fail
+        assert!(CancelTurnResponse::decode(enc.ciphertext.as_slice()).is_err());
+        // But decrypting first should work
+        let decrypted = client_crypto.decrypt(&enc.ciphertext, &enc.nonce).unwrap();
+        let resp = CancelTurnResponse::decode(decrypted.as_slice()).unwrap();
+        assert!(!resp.was_active);
+    } else {
+        panic!("wrong payload");
+    }
+}
+
+#[tokio::test]
+async fn handler_rejects_encrypted_with_bad_key() {
+    let (h, _client_crypto, _rx) = make_handler_with_crypto().await;
+    // Encrypt with a completely different session — handler cannot decrypt
+    let (wrong_session, _) = betcode_crypto::test_session_pair().unwrap();
+    let req = ListSessionsRequest {
+        working_directory: String::new(),
+        worktree_id: String::new(),
+        limit: 10,
+        offset: 0,
+    };
+    let r = h
+        .handle_frame(encrypted_req_frame(
+            "ebk1",
+            METHOD_LIST_SESSIONS,
+            encode(&req),
+            &wrong_session,
+        ))
+        .await;
+    assert_eq!(r.len(), 1);
+    assert_eq!(r[0].frame_type, FrameType::Error as i32);
+}
+
+#[tokio::test]
+async fn handler_rejects_tampered_ciphertext() {
+    let (h, client_crypto, _rx) = make_handler_with_crypto().await;
+    let req = ListSessionsRequest {
+        working_directory: String::new(),
+        worktree_id: String::new(),
+        limit: 10,
+        offset: 0,
+    };
+    let mut frame = encrypted_req_frame(
+        "etc1",
+        METHOD_LIST_SESSIONS,
+        encode(&req),
+        &client_crypto,
+    );
+    // Tamper with the ciphertext
+    if let Some(betcode_proto::v1::tunnel_frame::Payload::StreamData(ref mut p)) = frame.payload {
+        if let Some(ref mut enc) = p.encrypted {
+            if let Some(byte) = enc.ciphertext.first_mut() {
+                *byte ^= 0xFF;
+            }
+        }
+    }
+    let r = h.handle_frame(frame).await;
+    assert_eq!(r.len(), 1);
+    assert_eq!(r[0].frame_type, FrameType::Error as i32);
+}
