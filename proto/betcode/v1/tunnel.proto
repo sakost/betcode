@@ -142,12 +142,16 @@ message KeyExchangeRequest {
   string machine_id = 1;
   bytes identity_pubkey = 2;
   string fingerprint = 3;
+  // Client's ephemeral X25519 public key for this session.
+  bytes ephemeral_pubkey = 4;
 }
 
 // KeyExchangeResponse carries the daemon's identity info back to the CLI.
 message KeyExchangeResponse {
   bytes daemon_identity_pubkey = 1;
   string daemon_fingerprint = 2;
+  // Daemon's ephemeral X25519 public key for this session.
+  bytes daemon_ephemeral_pubkey = 3;
 }
 
 // =============================================================================

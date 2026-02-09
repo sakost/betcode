@@ -19,7 +19,8 @@ use betcode_proto::v1::agent_service_server::AgentService;
 use betcode_proto::v1::{
     AgentEvent, AgentRequest, CancelTurnRequest, CancelTurnResponse, CompactSessionRequest,
     CompactSessionResponse, EncryptedPayload, FrameType, InputLockRequest, InputLockResponse,
-    ListSessionsRequest, ListSessionsResponse, ResumeSessionRequest, StreamPayload, TunnelFrame,
+    KeyExchangeRequest, KeyExchangeResponse, ListSessionsRequest, ListSessionsResponse,
+    ResumeSessionRequest, StreamPayload, TunnelFrame,
 };
 
 use crate::router::{RequestRouter, RouterError};
@@ -134,9 +135,7 @@ async fn converse_proxy_task(
                     let frame = TunnelFrame {
                         request_id: rid.clone(),
                         frame_type: FrameType::StreamData as i32,
-                        timestamp: Some(prost_types::Timestamp::from(
-                            std::time::SystemTime::now(),
-                        )),
+                        timestamp: Some(prost_types::Timestamp::from(std::time::SystemTime::now())),
                         payload: Some(betcode_proto::v1::tunnel_frame::Payload::StreamData(
                             StreamPayload {
                                 method: String::new(),
@@ -175,8 +174,7 @@ async fn converse_proxy_task(
         );
         match FrameType::try_from(ft) {
             Ok(FrameType::StreamData) => {
-                if let Some(betcode_proto::v1::tunnel_frame::Payload::StreamData(p)) =
-                    frame.payload
+                if let Some(betcode_proto::v1::tunnel_frame::Payload::StreamData(p)) = frame.payload
                 {
                     let data = p
                         .encrypted
@@ -199,7 +197,10 @@ async fn converse_proxy_task(
             Ok(FrameType::Error) => {
                 if let Some(betcode_proto::v1::tunnel_frame::Payload::Error(e)) = frame.payload {
                     let _ = out_tx
-                        .send(Err(Status::internal(format!("Daemon error: {}", e.message))))
+                        .send(Err(Status::internal(format!(
+                            "Daemon error: {}",
+                            e.message
+                        ))))
                         .await;
                 }
                 break;
@@ -407,6 +408,23 @@ impl AgentService for AgentProxyService {
             .forward_unary(
                 &machine_id,
                 "AgentService/RequestInputLock",
+                &request.into_inner(),
+            )
+            .await?;
+        Ok(Response::new(resp))
+    }
+
+    #[instrument(skip(self, request), fields(rpc = "ExchangeKeys"))]
+    async fn exchange_keys(
+        &self,
+        request: Request<KeyExchangeRequest>,
+    ) -> Result<Response<KeyExchangeResponse>, Status> {
+        let _claims = extract_claims(&request)?;
+        let machine_id = extract_machine_id(&request)?;
+        let resp = self
+            .forward_unary(
+                &machine_id,
+                "AgentService/ExchangeKeys",
                 &request.into_inner(),
             )
             .await?;

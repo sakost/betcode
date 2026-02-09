@@ -11,6 +11,7 @@ package betcode.v1;
 import "google/protobuf/struct.proto";
 import "google/protobuf/timestamp.proto";
 import "betcode/v1/common.proto";
+import "betcode/v1/tunnel.proto";
 
 // AgentService provides the primary interface for AI agent interaction.
 service AgentService {
@@ -31,6 +32,9 @@ service AgentService {
 
   // Request exclusive input lock for a session.
   rpc RequestInputLock(InputLockRequest) returns (InputLockResponse);
+
+  // Exchange ephemeral keys for E2E encryption with a daemon.
+  rpc ExchangeKeys(KeyExchangeRequest) returns (KeyExchangeResponse);
 }
 
 // =============================================================================

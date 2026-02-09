@@ -32,7 +32,7 @@ pub struct TunnelClient {
     multiplexer: Arc<SessionMultiplexer>,
     db: Database,
     /// X25519 identity keypair for E2E encryption key exchange.
-    identity: IdentityKeyPair,
+    identity: Arc<IdentityKeyPair>,
 }
 
 impl TunnelClient {
@@ -42,7 +42,7 @@ impl TunnelClient {
         multiplexer: Arc<SessionMultiplexer>,
         db: Database,
     ) -> Result<Self, TunnelClientError> {
-        let identity = Self::load_identity(&config)?;
+        let identity = Arc::new(Self::load_identity(&config)?);
         info!(
             fingerprint = %identity.fingerprint(),
             "Loaded identity keypair"
@@ -58,18 +58,14 @@ impl TunnelClient {
 
     /// Load or generate the X25519 identity keypair.
     fn load_identity(config: &TunnelConfig) -> Result<IdentityKeyPair, TunnelClientError> {
-        let path = config
-            .identity_key_path
-            .clone()
-            .unwrap_or_else(|| {
-                dirs::config_dir()
-                    .unwrap_or_else(|| std::path::PathBuf::from("."))
-                    .join("betcode")
-                    .join("identity.key")
-            });
-        IdentityKeyPair::load_or_generate(&path).map_err(|e| {
-            TunnelClientError::Auth(format!("Failed to load identity key: {}", e))
-        })
+        let path = config.identity_key_path.clone().unwrap_or_else(|| {
+            dirs::config_dir()
+                .unwrap_or_else(|| std::path::PathBuf::from("."))
+                .join("betcode")
+                .join("identity.key")
+        });
+        IdentityKeyPair::load_or_generate(&path)
+            .map_err(|e| TunnelClientError::Auth(format!("Failed to load identity key: {}", e)))
     }
 
     /// Run the tunnel client with automatic reconnection.
@@ -166,7 +162,8 @@ impl TunnelClient {
             Arc::clone(&self.multiplexer),
             self.db.clone(),
             outbound_tx.clone(),
-            None, // TODO: pass crypto session after key exchange
+            None, // Crypto session will be set by ExchangeKeys RPC
+            Some(Arc::clone(&self.identity)),
         ));
 
         let outbound_stream = ReceiverStream::new(outbound_rx);

@@ -754,6 +754,14 @@ impl TunnelRequestHandler {
             )];
         }
 
+        if !req.identity_pubkey.is_empty() && req.identity_pubkey.len() != X25519_PUBKEY_LEN {
+            return vec![Self::error_response(
+                request_id,
+                TunnelErrorCode::Internal,
+                "Invalid identity public key length",
+            )];
+        }
+
         // Acquire write lock early to serialize concurrent key exchange attempts.
         // This prevents a race where two simultaneous exchanges interleave and
         // one side ends up with a different session than the other.

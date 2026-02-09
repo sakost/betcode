@@ -11,8 +11,8 @@ use tracing::{error, info, instrument, warn};
 use betcode_proto::v1::{
     agent_service_server::AgentService, AgentEvent, AgentRequest, CancelTurnRequest,
     CancelTurnResponse, CompactSessionRequest, CompactSessionResponse, InputLockRequest,
-    InputLockResponse, ListSessionsRequest, ListSessionsResponse, ResumeSessionRequest,
-    SessionSummary,
+    InputLockResponse, KeyExchangeRequest, KeyExchangeResponse, ListSessionsRequest,
+    ListSessionsResponse, ResumeSessionRequest, SessionSummary,
 };
 
 use super::handler::handle_agent_request;
@@ -323,6 +323,18 @@ impl AgentService for AgentServiceImpl {
             previous_holder: previous.unwrap_or_default(),
         }))
     }
+
+    #[instrument(skip(self, _request), fields(rpc = "ExchangeKeys"))]
+    async fn exchange_keys(
+        &self,
+        _request: Request<KeyExchangeRequest>,
+    ) -> Result<Response<KeyExchangeResponse>, Status> {
+        // Key exchange is only meaningful for remote (tunneled) connections.
+        // Direct local gRPC connections don't need E2E encryption.
+        Err(Status::unimplemented(
+            "ExchangeKeys is only supported over tunnel connections",
+        ))
+    }
 }
 
 /// Extract client_id from gRPC request metadata.
@@ -352,5 +364,27 @@ mod tests {
             db.clone(),
         ));
         let _service = AgentServiceImpl::new(db, relay, multiplexer);
+    }
+
+    #[tokio::test]
+    async fn exchange_keys_returns_unimplemented() {
+        let db = Database::open_in_memory().await.unwrap();
+        let subprocess_mgr = Arc::new(SubprocessManager::new(5));
+        let multiplexer = Arc::new(SessionMultiplexer::with_defaults());
+        let relay = Arc::new(SessionRelay::new(
+            subprocess_mgr,
+            Arc::clone(&multiplexer),
+            db.clone(),
+        ));
+        let service = AgentServiceImpl::new(db, relay, multiplexer);
+
+        let req = Request::new(KeyExchangeRequest {
+            machine_id: "m1".into(),
+            identity_pubkey: Vec::new(),
+            fingerprint: String::new(),
+            ephemeral_pubkey: vec![0u8; 32],
+        });
+        let err = service.exchange_keys(req).await.unwrap_err();
+        assert_eq!(err.code(), tonic::Code::Unimplemented);
     }
 }

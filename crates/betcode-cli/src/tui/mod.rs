@@ -3,6 +3,7 @@
 //! Terminal I/O runs on a dedicated OS thread; all async/gRPC work stays on the
 //! tokio runtime. Communication via `tokio::sync::mpsc` channels.
 
+pub mod fingerprint_panel;
 mod input;
 mod permission_input;
 #[cfg(test)]

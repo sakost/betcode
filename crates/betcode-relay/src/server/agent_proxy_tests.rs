@@ -13,7 +13,8 @@ use betcode_proto::v1::agent_service_server::AgentService;
 use betcode_proto::v1::{
     AgentEvent, CancelTurnRequest, CancelTurnResponse, CompactSessionRequest,
     CompactSessionResponse, EncryptedPayload, FrameType, InputLockRequest, InputLockResponse,
-    ListSessionsRequest, ListSessionsResponse, ResumeSessionRequest, StreamPayload, TunnelFrame,
+    KeyExchangeRequest, KeyExchangeResponse, ListSessionsRequest, ListSessionsResponse,
+    ResumeSessionRequest, StreamPayload, TunnelFrame,
 };
 
 use super::{extract_machine_id, AgentProxyService};
@@ -370,4 +371,49 @@ async fn resume_session_offline_returns_unavailable() {
         Err(err) => assert_eq!(err.code(), tonic::Code::Unavailable),
         Ok(_) => panic!("Expected unavailable error"),
     }
+}
+
+// --- Key exchange ---
+
+#[tokio::test]
+async fn exchange_keys_routes_to_machine() {
+    let (svc, router, rx) = setup_with_machine("m1").await;
+    spawn_responder(
+        &router,
+        "m1",
+        rx,
+        KeyExchangeResponse {
+            daemon_identity_pubkey: vec![1u8; 32],
+            daemon_fingerprint: "aa:bb:cc".into(),
+            daemon_ephemeral_pubkey: vec![2u8; 32],
+        },
+    );
+    let req = make_request(
+        KeyExchangeRequest {
+            machine_id: "m1".into(),
+            identity_pubkey: vec![3u8; 32],
+            fingerprint: "dd:ee:ff".into(),
+            ephemeral_pubkey: vec![4u8; 32],
+        },
+        "m1",
+    );
+    let resp = svc.exchange_keys(req).await.unwrap().into_inner();
+    assert_eq!(resp.daemon_ephemeral_pubkey, vec![2u8; 32]);
+    assert_eq!(resp.daemon_fingerprint, "aa:bb:cc");
+}
+
+#[tokio::test]
+async fn exchange_keys_offline_returns_unavailable() {
+    let svc = setup_offline().await;
+    let req = make_request(
+        KeyExchangeRequest {
+            machine_id: "m-off".into(),
+            identity_pubkey: Vec::new(),
+            fingerprint: String::new(),
+            ephemeral_pubkey: vec![0u8; 32],
+        },
+        "m-off",
+    );
+    let err = svc.exchange_keys(req).await.unwrap_err();
+    assert_eq!(err.code(), tonic::Code::Unavailable);
 }
