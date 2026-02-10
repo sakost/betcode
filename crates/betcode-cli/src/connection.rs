@@ -10,15 +10,20 @@ use tonic::transport::{Certificate, Channel, ClientTlsConfig, Endpoint};
 use tracing::{error, info, warn};
 
 use betcode_proto::v1::{
-    agent_service_client::AgentServiceClient, git_lab_service_client::GitLabServiceClient,
-    worktree_service_client::WorktreeServiceClient, AgentEvent, AgentRequest, CancelTurnRequest,
-    CancelTurnResponse, CreateWorktreeRequest, GetIssueRequest, GetIssueResponse,
-    GetMergeRequestRequest, GetMergeRequestResponse, GetPipelineRequest, GetPipelineResponse,
-    GetWorktreeRequest, KeyExchangeRequest, ListIssuesRequest, ListIssuesResponse,
-    ListMergeRequestsRequest, ListMergeRequestsResponse, ListPipelinesRequest,
-    ListPipelinesResponse, ListSessionsRequest, ListSessionsResponse, ListWorktreesRequest,
-    ListWorktreesResponse, RemoveWorktreeRequest, RemoveWorktreeResponse, ResumeSessionRequest,
-    WorktreeDetail,
+    agent_service_client::AgentServiceClient, command_service_client::CommandServiceClient,
+    git_lab_service_client::GitLabServiceClient, worktree_service_client::WorktreeServiceClient,
+    AddPluginRequest, AddPluginResponse, AgentEvent, AgentRequest, CancelTurnRequest,
+    CancelTurnResponse, CreateWorktreeRequest, DisablePluginRequest, DisablePluginResponse,
+    EnablePluginRequest, EnablePluginResponse, ExecuteServiceCommandRequest,
+    GetCommandRegistryResponse, GetIssueRequest, GetIssueResponse, GetMergeRequestRequest,
+    GetMergeRequestResponse, GetPipelineRequest, GetPipelineResponse, GetPluginStatusRequest,
+    GetPluginStatusResponse, GetWorktreeRequest, KeyExchangeRequest, ListAgentsRequest,
+    ListAgentsResponse, ListIssuesRequest, ListIssuesResponse, ListMergeRequestsRequest,
+    ListMergeRequestsResponse, ListPathRequest, ListPathResponse, ListPipelinesRequest,
+    ListPipelinesResponse, ListPluginsRequest, ListPluginsResponse, ListSessionsRequest,
+    ListSessionsResponse, ListWorktreesRequest, ListWorktreesResponse, RemovePluginRequest,
+    RemovePluginResponse, RemoveWorktreeRequest, RemoveWorktreeResponse, ResumeSessionRequest,
+    ServiceCommandOutput, WorktreeDetail,
 };
 
 use betcode_crypto::{
@@ -103,6 +108,7 @@ pub struct DaemonConnection {
     client: Option<AgentServiceClient<Channel>>,
     worktree_client: Option<WorktreeServiceClient<Channel>>,
     gitlab_client: Option<GitLabServiceClient<Channel>>,
+    command_client: Option<CommandServiceClient<Channel>>,
     state: ConnectionState,
     /// E2E crypto session, established via key exchange for relay connections.
     crypto: Option<std::sync::Arc<CryptoSession>>,
@@ -132,6 +138,7 @@ impl DaemonConnection {
             client: None,
             worktree_client: None,
             gitlab_client: None,
+            command_client: None,
             state: ConnectionState::Disconnected,
             crypto: None,
             identity,
@@ -197,7 +204,8 @@ impl DaemonConnection {
 
         self.client = Some(AgentServiceClient::new(channel.clone()));
         self.worktree_client = Some(WorktreeServiceClient::new(channel.clone()));
-        self.gitlab_client = Some(GitLabServiceClient::new(channel));
+        self.gitlab_client = Some(GitLabServiceClient::new(channel.clone()));
+        self.command_client = Some(CommandServiceClient::new(channel));
         self.state = ConnectionState::Connected;
 
         info!(addr = %self.config.addr, relay = self.config.is_relay(), "Connected");
@@ -807,6 +815,251 @@ impl DaemonConnection {
     }
 
     // =========================================================================
+    // =========================================================================
+    // Command service methods
+    // =========================================================================
+
+    /// Fetch the full command registry from the daemon.
+    pub async fn get_command_registry(
+        &mut self,
+    ) -> Result<GetCommandRegistryResponse, ConnectionError> {
+        let auth_token = self.config.auth_token.clone();
+        let machine_id = self.config.machine_id.clone();
+        let client = self
+            .command_client
+            .as_mut()
+            .ok_or(ConnectionError::NotConnected)?;
+
+        let mut request = tonic::Request::new(betcode_proto::v1::GetCommandRegistryRequest {});
+        apply_relay_meta(&mut request, &auth_token, &machine_id);
+        let response = client
+            .get_command_registry(request)
+            .await
+            .map_err(|e| ConnectionError::RpcFailed(e.to_string()))?;
+
+        Ok(response.into_inner())
+    }
+
+    /// List agents matching a query for @-mention completion.
+    pub async fn list_agents(
+        &mut self,
+        query: &str,
+        max_results: u32,
+    ) -> Result<ListAgentsResponse, ConnectionError> {
+        let auth_token = self.config.auth_token.clone();
+        let machine_id = self.config.machine_id.clone();
+        let client = self
+            .command_client
+            .as_mut()
+            .ok_or(ConnectionError::NotConnected)?;
+
+        let mut request = tonic::Request::new(ListAgentsRequest {
+            query: query.to_string(),
+            max_results,
+        });
+        apply_relay_meta(&mut request, &auth_token, &machine_id);
+        let response = client
+            .list_agents(request)
+            .await
+            .map_err(|e| ConnectionError::RpcFailed(e.to_string()))?;
+
+        Ok(response.into_inner())
+    }
+
+    /// List file paths matching a query for @file completion.
+    pub async fn list_path(
+        &mut self,
+        query: &str,
+        max_results: u32,
+    ) -> Result<ListPathResponse, ConnectionError> {
+        let auth_token = self.config.auth_token.clone();
+        let machine_id = self.config.machine_id.clone();
+        let client = self
+            .command_client
+            .as_mut()
+            .ok_or(ConnectionError::NotConnected)?;
+
+        let mut request = tonic::Request::new(ListPathRequest {
+            query: query.to_string(),
+            max_results,
+        });
+        apply_relay_meta(&mut request, &auth_token, &machine_id);
+        let response = client
+            .list_path(request)
+            .await
+            .map_err(|e| ConnectionError::RpcFailed(e.to_string()))?;
+
+        Ok(response.into_inner())
+    }
+
+    /// Execute a service command and return a stream of output.
+    pub async fn execute_service_command(
+        &mut self,
+        command: &str,
+        args: Vec<String>,
+    ) -> Result<tonic::Streaming<ServiceCommandOutput>, ConnectionError> {
+        let auth_token = self.config.auth_token.clone();
+        let machine_id = self.config.machine_id.clone();
+        let client = self
+            .command_client
+            .as_mut()
+            .ok_or(ConnectionError::NotConnected)?;
+
+        let mut request = tonic::Request::new(ExecuteServiceCommandRequest {
+            command: command.to_string(),
+            args,
+        });
+        apply_relay_meta(&mut request, &auth_token, &machine_id);
+        let response = client
+            .execute_service_command(request)
+            .await
+            .map_err(|e| ConnectionError::RpcFailed(e.to_string()))?;
+
+        Ok(response.into_inner())
+    }
+
+    /// List all registered plugins.
+    pub async fn list_plugins(&mut self) -> Result<ListPluginsResponse, ConnectionError> {
+        let auth_token = self.config.auth_token.clone();
+        let machine_id = self.config.machine_id.clone();
+        let client = self
+            .command_client
+            .as_mut()
+            .ok_or(ConnectionError::NotConnected)?;
+
+        let mut request = tonic::Request::new(ListPluginsRequest {});
+        apply_relay_meta(&mut request, &auth_token, &machine_id);
+        let response = client
+            .list_plugins(request)
+            .await
+            .map_err(|e| ConnectionError::RpcFailed(e.to_string()))?;
+
+        Ok(response.into_inner())
+    }
+
+    /// Get the status of a specific plugin.
+    pub async fn get_plugin_status(
+        &mut self,
+        name: &str,
+    ) -> Result<GetPluginStatusResponse, ConnectionError> {
+        let auth_token = self.config.auth_token.clone();
+        let machine_id = self.config.machine_id.clone();
+        let client = self
+            .command_client
+            .as_mut()
+            .ok_or(ConnectionError::NotConnected)?;
+
+        let mut request = tonic::Request::new(GetPluginStatusRequest {
+            name: name.to_string(),
+        });
+        apply_relay_meta(&mut request, &auth_token, &machine_id);
+        let response = client
+            .get_plugin_status(request)
+            .await
+            .map_err(|e| ConnectionError::RpcFailed(e.to_string()))?;
+
+        Ok(response.into_inner())
+    }
+
+    /// Register a new plugin.
+    pub async fn add_plugin(
+        &mut self,
+        name: &str,
+        socket_path: &str,
+    ) -> Result<AddPluginResponse, ConnectionError> {
+        let auth_token = self.config.auth_token.clone();
+        let machine_id = self.config.machine_id.clone();
+        let client = self
+            .command_client
+            .as_mut()
+            .ok_or(ConnectionError::NotConnected)?;
+
+        let mut request = tonic::Request::new(AddPluginRequest {
+            name: name.to_string(),
+            socket_path: socket_path.to_string(),
+        });
+        apply_relay_meta(&mut request, &auth_token, &machine_id);
+        let response = client
+            .add_plugin(request)
+            .await
+            .map_err(|e| ConnectionError::RpcFailed(e.to_string()))?;
+
+        Ok(response.into_inner())
+    }
+
+    /// Remove a registered plugin.
+    pub async fn remove_plugin(
+        &mut self,
+        name: &str,
+    ) -> Result<RemovePluginResponse, ConnectionError> {
+        let auth_token = self.config.auth_token.clone();
+        let machine_id = self.config.machine_id.clone();
+        let client = self
+            .command_client
+            .as_mut()
+            .ok_or(ConnectionError::NotConnected)?;
+
+        let mut request = tonic::Request::new(RemovePluginRequest {
+            name: name.to_string(),
+        });
+        apply_relay_meta(&mut request, &auth_token, &machine_id);
+        let response = client
+            .remove_plugin(request)
+            .await
+            .map_err(|e| ConnectionError::RpcFailed(e.to_string()))?;
+
+        Ok(response.into_inner())
+    }
+
+    /// Enable a disabled plugin.
+    pub async fn enable_plugin(
+        &mut self,
+        name: &str,
+    ) -> Result<EnablePluginResponse, ConnectionError> {
+        let auth_token = self.config.auth_token.clone();
+        let machine_id = self.config.machine_id.clone();
+        let client = self
+            .command_client
+            .as_mut()
+            .ok_or(ConnectionError::NotConnected)?;
+
+        let mut request = tonic::Request::new(EnablePluginRequest {
+            name: name.to_string(),
+        });
+        apply_relay_meta(&mut request, &auth_token, &machine_id);
+        let response = client
+            .enable_plugin(request)
+            .await
+            .map_err(|e| ConnectionError::RpcFailed(e.to_string()))?;
+
+        Ok(response.into_inner())
+    }
+
+    /// Disable a plugin without removing it.
+    pub async fn disable_plugin(
+        &mut self,
+        name: &str,
+    ) -> Result<DisablePluginResponse, ConnectionError> {
+        let auth_token = self.config.auth_token.clone();
+        let machine_id = self.config.machine_id.clone();
+        let client = self
+            .command_client
+            .as_mut()
+            .ok_or(ConnectionError::NotConnected)?;
+
+        let mut request = tonic::Request::new(DisablePluginRequest {
+            name: name.to_string(),
+        });
+        apply_relay_meta(&mut request, &auth_token, &machine_id);
+        let response = client
+            .disable_plugin(request)
+            .await
+            .map_err(|e| ConnectionError::RpcFailed(e.to_string()))?;
+
+        Ok(response.into_inner())
+    }
+
+    // =========================================================================
     // Connection state
     // =========================================================================
 
@@ -851,8 +1104,11 @@ pub(crate) fn encrypt_agent_request(
 ) -> Result<AgentRequest, String> {
     use prost::Message;
     let mut buf = Vec::with_capacity(req.encoded_len());
-    req.encode(&mut buf).map_err(|e| format!("encode failed: {e}"))?;
-    let encrypted = session.encrypt(&buf).map_err(|e| format!("encrypt failed: {e}"))?;
+    req.encode(&mut buf)
+        .map_err(|e| format!("encode failed: {e}"))?;
+    let encrypted = session
+        .encrypt(&buf)
+        .map_err(|e| format!("encrypt failed: {e}"))?;
     Ok(AgentRequest {
         request: Some(betcode_proto::v1::agent_request::Request::Encrypted(
             betcode_proto::v1::EncryptedEnvelope {
@@ -1225,7 +1481,10 @@ mod tests {
             )),
         };
         let result = super::decrypt_agent_event(&session, event);
-        assert!(result.is_err(), "plaintext event should be rejected when crypto is active");
+        assert!(
+            result.is_err(),
+            "plaintext event should be rejected when crypto is active"
+        );
         assert!(result.unwrap_err().contains("rejected plaintext"));
     }
 
