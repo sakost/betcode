@@ -1,0 +1,160 @@
+use std::path::Path;
+
+use regex::Regex;
+
+use super::{CommandCategory, CommandEntry, ExecutionMode};
+
+/// Returns a hardcoded list of known Claude Code slash commands.
+pub fn hardcoded_cc_commands(version: &str) -> Vec<CommandEntry> {
+    let _ = version; // reserved for future version-specific command sets
+    let commands = [
+        ("help", "Show help information"),
+        ("clear", "Clear conversation history"),
+        ("compact", "Compact conversation context"),
+        ("exit", "Exit Claude Code"),
+        ("config", "View or modify configuration"),
+        ("model", "Switch AI model"),
+        ("permissions", "Manage tool permissions"),
+        ("status", "Show session status"),
+        ("context", "Manage context files"),
+        ("resume", "Resume a previous conversation"),
+        ("memory", "Manage persistent memory"),
+        ("doctor", "Diagnose configuration issues"),
+        ("cost", "Show token usage and costs"),
+        ("mcp", "Manage MCP servers"),
+        ("hooks", "Manage hooks"),
+        ("plugins", "Manage plugins"),
+        ("fast", "Toggle fast mode"),
+        ("vim", "Toggle vim keybindings"),
+    ];
+
+    commands
+        .into_iter()
+        .map(|(name, desc)| {
+            CommandEntry::new(
+                name,
+                desc,
+                CommandCategory::ClaudeCode,
+                ExecutionMode::Passthrough,
+                "claude-code",
+            )
+        })
+        .collect()
+}
+
+/// Discovers user-defined commands from `.claude/commands/*.md` files.
+pub fn discover_user_commands(working_dir: &Path) -> Vec<CommandEntry> {
+    let commands_dir = working_dir.join(".claude").join("commands");
+
+    let entries = match std::fs::read_dir(&commands_dir) {
+        Ok(entries) => entries,
+        Err(_) => return Vec::new(),
+    };
+
+    let mut commands = Vec::new();
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.extension().and_then(|e| e.to_str()) == Some("md") {
+            if let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
+                commands.push(CommandEntry::new(
+                    stem,
+                    &format!("User command: {stem}"),
+                    CommandCategory::ClaudeCode,
+                    ExecutionMode::Passthrough,
+                    "user",
+                ));
+            }
+        }
+    }
+    commands
+}
+
+/// Parses Claude Code `/help` output, extracting command names.
+///
+/// Returns `(known, unknown)` where `known` are commands that exist in the
+/// hardcoded list and `unknown` are newly discovered commands.
+pub fn parse_help_output(
+    help_text: &str,
+    hardcoded: &[CommandEntry],
+) -> (Vec<CommandEntry>, Vec<CommandEntry>) {
+    let re = Regex::new(r"/([a-zA-Z][\w-]*)").unwrap();
+
+    let mut known = Vec::new();
+    let mut unknown = Vec::new();
+
+    let mut seen = std::collections::HashSet::new();
+
+    for cap in re.captures_iter(help_text) {
+        let name = &cap[1];
+        if !seen.insert(name.to_string()) {
+            continue;
+        }
+        if let Some(existing) = hardcoded.iter().find(|c| c.name == name) {
+            known.push(existing.clone());
+        } else {
+            unknown.push(CommandEntry::new(
+                name,
+                &format!("Discovered command: {name}"),
+                CommandCategory::ClaudeCode,
+                ExecutionMode::Passthrough,
+                "claude-code",
+            ));
+        }
+    }
+
+    (known, unknown)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::TempDir;
+
+    #[test]
+    fn test_hardcoded_commands_exist() {
+        let cmds = hardcoded_cc_commands("1.0.0");
+        let names: Vec<&str> = cmds.iter().map(|c| c.name.as_str()).collect();
+        assert!(names.contains(&"help"));
+        assert!(names.contains(&"clear"));
+        assert!(names.contains(&"compact"));
+    }
+
+    #[test]
+    fn test_discover_user_commands_from_directory() {
+        let dir = TempDir::new().unwrap();
+        let commands_dir = dir.path().join(".claude").join("commands");
+        std::fs::create_dir_all(&commands_dir).unwrap();
+        std::fs::write(commands_dir.join("deploy.md"), "# Deploy command").unwrap();
+        std::fs::write(commands_dir.join("test-all.md"), "# Test all").unwrap();
+        let cmds = discover_user_commands(dir.path());
+        let names: Vec<&str> = cmds.iter().map(|c| c.name.as_str()).collect();
+        assert!(names.contains(&"deploy"));
+        assert!(names.contains(&"test-all"));
+        assert_eq!(cmds[0].category, CommandCategory::ClaudeCode);
+        assert_eq!(cmds[0].execution_mode, ExecutionMode::Passthrough);
+    }
+
+    #[test]
+    fn test_discover_user_commands_missing_dir() {
+        let dir = TempDir::new().unwrap();
+        let cmds = discover_user_commands(dir.path());
+        assert!(cmds.is_empty());
+    }
+
+    #[test]
+    fn test_parse_help_output() {
+        let help_text = r#"
+Usage: claude [options]
+
+Commands:
+  /help        Show help
+  /clear       Clear conversation
+  /compact     Compact conversation
+  /unknown-new Some new command
+        "#;
+        let hardcoded = hardcoded_cc_commands("1.0.0");
+        let (known, unknown) = parse_help_output(help_text, &hardcoded);
+        assert!(known.iter().any(|c| c.name == "help"));
+        assert!(unknown.iter().any(|c| c.name == "unknown-new"));
+    }
+}

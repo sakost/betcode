@@ -1,6 +1,8 @@
 pub mod builtin;
+pub mod discovery;
 
 pub use builtin::builtin_commands;
+pub use discovery::{discover_user_commands, hardcoded_cc_commands, parse_help_output};
 
 /// Category of a command, determining its origin and handling.
 #[derive(Debug, Clone, PartialEq, Eq)]

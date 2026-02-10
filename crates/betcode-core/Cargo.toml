@@ -11,8 +11,10 @@ betcode-proto = { workspace = true }
 serde.workspace = true
 serde_json.workspace = true
 sqlx.workspace = true
+regex.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
 
 [dev-dependencies]
+tempfile.workspace = true
 tokio.workspace = true
