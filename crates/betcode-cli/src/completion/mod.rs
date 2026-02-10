@@ -4,3 +4,4 @@
 //! for inline autocompletion of commands, agents, files, and bash shortcuts.
 
 pub mod controller;
+pub mod ghost;
