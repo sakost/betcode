@@ -77,6 +77,19 @@ pub struct QuestionOptionDisplay {
     pub description: String,
 }
 
+/// Completion state for the inline autocomplete system.
+#[derive(Debug, Clone, Default)]
+pub struct CompletionState {
+    /// Whether the completion popup is visible.
+    pub popup_visible: bool,
+    /// Current completion items (text labels).
+    pub items: Vec<String>,
+    /// Currently selected item index.
+    pub selected_index: usize,
+    /// Ghost text suffix to display after the typed text.
+    pub ghost_text: Option<String>,
+}
+
 /// Token usage info for status bar.
 #[derive(Debug, Clone)]
 pub struct TokenUsage {
@@ -110,6 +123,7 @@ pub struct App {
     pub pending_question: Option<PendingUserQuestion>,
     pub pending_fingerprint: Option<FingerprintPrompt>,
     pub agent_busy: bool,
+    pub completion_state: CompletionState,
 }
 
 impl App {
@@ -134,6 +148,7 @@ impl App {
             pending_question: None,
             pending_fingerprint: None,
             agent_busy: false,
+            completion_state: CompletionState::default(),
         }
     }
 
