@@ -33,8 +33,7 @@ pub fn detect_trigger(input: &str, cursor_pos: usize) -> Option<CompletionTrigge
     // Check for bang command first: `!` at the start of input captures everything after it.
     // This is special because bash commands contain spaces.
     let trimmed = before_cursor.trim_start();
-    if trimmed.starts_with('!') {
-        let cmd = &trimmed[1..];
+    if let Some(cmd) = trimmed.strip_prefix('!') {
         return Some(CompletionTrigger::Bash {
             cmd: cmd.to_string(),
         });
@@ -51,16 +50,13 @@ pub fn detect_trigger(input: &str, cursor_pos: usize) -> Option<CompletionTrigge
         return None;
     }
 
-    if token.starts_with('/') {
-        let query = &token[1..];
+    if let Some(query) = token.strip_prefix('/') {
         return Some(CompletionTrigger::Command {
             query: query.to_string(),
         });
     }
 
-    if token.starts_with('@') {
-        let after_at = &token[1..];
-
+    if let Some(after_at) = token.strip_prefix('@') {
         // `@@...` -> forced Agent
         if let Some(rest) = after_at.strip_prefix('@') {
             return Some(CompletionTrigger::Agent {
@@ -69,10 +65,7 @@ pub fn detect_trigger(input: &str, cursor_pos: usize) -> Option<CompletionTrigge
         }
 
         // `@/...` or `@./...` or `@../...` -> forced File
-        if after_at.starts_with('/')
-            || after_at.starts_with("./")
-            || after_at.starts_with("../")
-        {
+        if after_at.starts_with('/') || after_at.starts_with("./") || after_at.starts_with("../") {
             return Some(CompletionTrigger::File {
                 query: after_at.to_string(),
             });
