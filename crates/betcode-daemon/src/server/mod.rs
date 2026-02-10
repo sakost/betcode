@@ -3,6 +3,7 @@
 //! Provides local socket and TCP server implementations.
 
 mod agent;
+pub mod command_svc;
 mod config;
 pub(crate) mod gitlab_convert;
 mod gitlab_svc;
@@ -14,6 +15,7 @@ mod worktree_svc;
 mod gitlab_svc_tests;
 
 pub use agent::AgentServiceImpl;
+pub use command_svc::CommandServiceImpl;
 pub use config::ServerConfig;
 pub use gitlab_svc::GitLabServiceImpl;
 pub use health::HealthServiceImpl;
