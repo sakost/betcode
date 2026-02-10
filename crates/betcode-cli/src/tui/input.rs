@@ -8,10 +8,88 @@ use betcode_proto::v1::AgentRequest;
 
 use super::TermEvent;
 
+/// Actions returned by completion key handling.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CompletionAction {
+    /// No completion action taken.
+    None,
+    /// Accept the selected completion text.
+    Accept(String),
+    /// Completion state was toggled/updated (no text change needed).
+    Updated,
+}
+
+/// Handle a key event related to completion UI.
+/// Returns a `CompletionAction` indicating what happened.
+pub fn handle_completion_key(app: &mut App, key: crossterm::event::KeyEvent) -> CompletionAction {
+    match key.code {
+        KeyCode::Tab => {
+            app.completion_state.popup_visible = !app.completion_state.popup_visible;
+            CompletionAction::Updated
+        }
+        KeyCode::Esc if app.completion_state.popup_visible => {
+            app.completion_state.popup_visible = false;
+            CompletionAction::Updated
+        }
+        KeyCode::Up if app.completion_state.popup_visible => {
+            if !app.completion_state.items.is_empty() {
+                if app.completion_state.selected_index == 0 {
+                    app.completion_state.selected_index =
+                        app.completion_state.items.len() - 1;
+                } else {
+                    app.completion_state.selected_index -= 1;
+                }
+                app.completion_state.ghost_text = app
+                    .completion_state
+                    .items
+                    .get(app.completion_state.selected_index)
+                    .cloned();
+            }
+            CompletionAction::Updated
+        }
+        KeyCode::Down if app.completion_state.popup_visible => {
+            if !app.completion_state.items.is_empty() {
+                app.completion_state.selected_index =
+                    (app.completion_state.selected_index + 1) % app.completion_state.items.len();
+                app.completion_state.ghost_text = app
+                    .completion_state
+                    .items
+                    .get(app.completion_state.selected_index)
+                    .cloned();
+            }
+            CompletionAction::Updated
+        }
+        KeyCode::Enter if app.completion_state.popup_visible => {
+            let text = app
+                .completion_state
+                .items
+                .get(app.completion_state.selected_index)
+                .cloned()
+                .unwrap_or_default();
+            app.completion_state.popup_visible = false;
+            if !text.is_empty() {
+                CompletionAction::Accept(text)
+            } else {
+                CompletionAction::None
+            }
+        }
+        _ => CompletionAction::None,
+    }
+}
+
 /// Process a terminal event, updating app state and optionally sending gRPC requests.
 pub async fn handle_term_event(app: &mut App, tx: &mpsc::Sender<AgentRequest>, event: TermEvent) {
     match event {
         TermEvent::Key(key) => {
+            // Ctrl+I toggles the status panel overlay.
+            if key
+                .modifiers
+                .contains(crossterm::event::KeyModifiers::CONTROL)
+                && key.code == KeyCode::Char('i')
+            {
+                app.show_status_panel = !app.show_status_panel;
+                return;
+            }
             if key
                 .modifiers
                 .contains(crossterm::event::KeyModifiers::CONTROL)
@@ -176,6 +254,21 @@ async fn handle_input_key(
     tx: &mpsc::Sender<AgentRequest>,
     key: crossterm::event::KeyEvent,
 ) {
+    // Check completion keys first — if they handle the event, skip normal input handling.
+    let completion_action = handle_completion_key(app, key);
+    match completion_action {
+        CompletionAction::Accept(text) => {
+            app.input = text;
+            app.cursor_pos = app.input.len();
+            app.update_completion_state();
+            return;
+        }
+        CompletionAction::Updated => {
+            return;
+        }
+        CompletionAction::None => {}
+    }
+
     let shift = key
         .modifiers
         .contains(crossterm::event::KeyModifiers::SHIFT);
@@ -200,12 +293,14 @@ async fn handle_input_key(
         KeyCode::Char(c) => {
             app.input.insert(app.cursor_pos, c);
             app.cursor_pos += 1;
+            app.update_completion_state();
         }
         KeyCode::Backspace => {
             if app.cursor_pos > 0 {
                 app.cursor_pos -= 1;
                 app.input.remove(app.cursor_pos);
             }
+            app.update_completion_state();
         }
         KeyCode::Left => {
             app.cursor_pos = app.cursor_pos.saturating_sub(1);

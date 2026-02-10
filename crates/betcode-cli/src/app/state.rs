@@ -124,6 +124,7 @@ pub struct App {
     pub pending_fingerprint: Option<FingerprintPrompt>,
     pub agent_busy: bool,
     pub completion_state: CompletionState,
+    pub show_status_panel: bool,
 }
 
 impl App {
@@ -149,6 +150,34 @@ impl App {
             pending_fingerprint: None,
             agent_busy: false,
             completion_state: CompletionState::default(),
+            show_status_panel: false,
+        }
+    }
+
+    /// Update completion state based on current input and cursor position.
+    pub fn update_completion_state(&mut self) {
+        use crate::completion::controller::detect_trigger;
+
+        let trigger = detect_trigger(&self.input, self.cursor_pos);
+
+        match trigger {
+            Some(crate::completion::controller::CompletionTrigger::Command { query: _ }) => {
+                // For commands, update ghost text from the items if available.
+                self.completion_state.ghost_text =
+                    self.completion_state.items.first().cloned();
+            }
+            Some(_) => {
+                // Agent/File/Bash triggers - ghost text from items
+                self.completion_state.ghost_text =
+                    self.completion_state.items.first().cloned();
+            }
+            None => {
+                // No trigger - clear completion state
+                self.completion_state.ghost_text = None;
+                self.completion_state.popup_visible = false;
+                self.completion_state.items.clear();
+                self.completion_state.selected_index = 0;
+            }
         }
     }
 

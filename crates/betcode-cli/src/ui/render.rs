@@ -3,7 +3,7 @@
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Paragraph, Wrap};
+use ratatui::widgets::{Block, Borders, Clear, Paragraph, Wrap};
 use ratatui::Frame;
 use unicode_width::UnicodeWidthStr;
 
@@ -93,6 +93,65 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     }
 
     draw_status_bar(frame, app, chunks[3]);
+
+    // Render completion popup overlay if visible
+    let area = frame.area();
+    if app.completion_state.popup_visible && !app.completion_state.items.is_empty() {
+        let popup_height = (app.completion_state.items.len() as u16).min(8) + 2; // +2 for borders
+        let popup_area = Rect {
+            x: area.x + 1,
+            y: area
+                .height
+                .saturating_sub(bottom_height + popup_height + 1),
+            width: area.width.saturating_sub(2).min(60),
+            height: popup_height,
+        };
+
+        let items: Vec<Line> = app
+            .completion_state
+            .items
+            .iter()
+            .enumerate()
+            .map(|(i, item)| {
+                let style = if i == app.completion_state.selected_index {
+                    Style::default().fg(Color::Black).bg(Color::Cyan)
+                } else {
+                    Style::default()
+                };
+                Line::from(Span::styled(item.clone(), style))
+            })
+            .collect();
+
+        let popup = Paragraph::new(items)
+            .block(Block::default().borders(Borders::ALL).title("Completions"));
+        frame.render_widget(Clear, popup_area);
+        frame.render_widget(popup, popup_area);
+    }
+
+    // Render status panel overlay if visible
+    if app.show_status_panel {
+        use crate::ui::status_panel::{render_status_panel, SessionStatusInfo};
+        let info = SessionStatusInfo {
+            cwd: std::env::current_dir()
+                .map(|p| p.display().to_string())
+                .unwrap_or_else(|_| "unknown".to_string()),
+            session_id: app
+                .session_id
+                .clone()
+                .unwrap_or_else(|| "none".to_string()),
+            connection: "local".to_string(),
+            model: app.model.clone(),
+            active_agents: 0,
+            pending_permissions: if app.pending_permission.is_some() {
+                1
+            } else {
+                0
+            },
+            worktree: None,
+            uptime_secs: 0,
+        };
+        render_status_panel(frame, frame.area(), &info);
+    }
 }
 
 fn draw_header(frame: &mut Frame, app: &App, area: Rect) {
@@ -176,8 +235,7 @@ fn draw_messages(frame: &mut Frame, app: &mut App, area: Rect) {
 
     // Use ratatui's own word-wrap line count so scroll range exactly matches
     // what the Paragraph widget actually renders.
-    let paragraph = Paragraph::new(lines)
-        .wrap(Wrap { trim: false });
+    let paragraph = Paragraph::new(lines).wrap(Wrap { trim: false });
     let total = paragraph.line_count(inner_width) as u16;
 
     app.viewport_height = inner_height;
@@ -250,7 +308,11 @@ fn draw_status_bar(frame: &mut Frame, app: &App, area: Rect) {
         | AppMode::PermissionDenyMessage => " | Enter:submit Esc:back",
         AppMode::UserQuestion => " | Enter:submit Esc:cancel",
         AppMode::FingerprintVerification => {
-            if app.pending_fingerprint.as_ref().is_some_and(|fp| fp.needs_action()) {
+            if app
+                .pending_fingerprint
+                .as_ref()
+                .is_some_and(|fp| fp.needs_action())
+            {
                 " | Y:accept N/Esc:reject"
             } else {
                 " | Press any key to continue"
@@ -436,7 +498,8 @@ fn compute_word_wrap_breaks(text: &str, max_width: u16) -> Vec<usize> {
                 }
                 // Word alone may exceed line width: break at character boundary
                 if tok_w > max_width {
-                    let remaining = break_long_word(text, tok_start, tok_end, max_width, &mut breaks);
+                    let remaining =
+                        break_long_word(text, tok_start, tok_end, max_width, &mut breaks);
                     line_width = remaining;
                 } else {
                     line_width = tok_w;
@@ -514,7 +577,11 @@ mod tests {
 
         // Cursor at pos 5 (the space) should still be on row 0
         let (row, col) = compute_wrapped_cursor("abcde fghij", 5, 10);
-        assert_eq!((row, col), (0, 5), "cursor at space should stay on first line");
+        assert_eq!(
+            (row, col),
+            (0, 5),
+            "cursor at space should stay on first line"
+        );
 
         // Cursor at end of "fghij" (pos 11) should be row 1, col 5
         let (row, col) = compute_wrapped_cursor("abcde fghij", 11, 10);
