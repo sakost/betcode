@@ -1,5 +1,6 @@
 pub mod builtin;
 pub mod discovery;
+pub mod matcher;
 
 pub use builtin::builtin_commands;
 pub use discovery::{discover_user_commands, hardcoded_cc_commands, parse_help_output};
