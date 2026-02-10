@@ -16,6 +16,12 @@ pub struct PluginManager {
     plugins: HashMap<String, PluginClient>,
 }
 
+impl Default for PluginManager {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl PluginManager {
     pub fn new() -> Self {
         Self {
