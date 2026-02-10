@@ -5,3 +5,4 @@
 
 pub mod controller;
 pub mod ghost;
+pub mod popup;
