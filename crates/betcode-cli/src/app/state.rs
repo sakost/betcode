@@ -130,6 +130,8 @@ pub struct App {
     pub command_cache: CommandCache,
     /// Sender to request async completion fetches (agents, files).
     pub completion_request_tx: Option<tokio::sync::mpsc::Sender<CompletionRequest>>,
+    /// Sender for slash-command execution requests.
+    pub service_command_tx: Option<tokio::sync::mpsc::Sender<crate::tui::ServiceCommandExec>>,
 }
 
 /// A request for async completion data from the daemon.
@@ -172,6 +174,7 @@ impl App {
             show_status_panel: false,
             command_cache: CommandCache::new(),
             completion_request_tx: None,
+            service_command_tx: None,
         }
     }
 
@@ -188,6 +191,7 @@ impl App {
                 self.completion_state.items = results.iter().map(|c| c.name.clone()).collect();
                 self.completion_state.selected_index = 0;
                 self.completion_state.ghost_text = self.completion_state.items.first().cloned();
+                self.completion_state.popup_visible = !self.completion_state.items.is_empty();
             }
             Some(CompletionTrigger::Agent { ref query }) => {
                 // Send async fetch request for agents.

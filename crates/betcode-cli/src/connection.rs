@@ -30,6 +30,27 @@ use betcode_crypto::{
     CryptoSession, FingerprintCheck, FingerprintStore, IdentityKeyPair, KeyExchangeState,
 };
 
+/// Attach relay authorization and machine-id headers to a gRPC request.
+///
+/// Intended for use inside spawned tasks where only cloned token/machine_id
+/// strings are available (not a full `DaemonConnection` reference).
+pub fn attach_relay_metadata<T>(
+    request: &mut tonic::Request<T>,
+    auth_token: Option<&str>,
+    machine_id: Option<&str>,
+) {
+    if let Some(token) = auth_token {
+        if let Ok(val) = format!("Bearer {}", token).parse() {
+            request.metadata_mut().insert("authorization", val);
+        }
+    }
+    if let Some(mid) = machine_id {
+        if let Ok(val) = mid.parse() {
+            request.metadata_mut().insert("x-machine-id", val);
+        }
+    }
+}
+
 /// Connection configuration.
 #[derive(Debug, Clone)]
 pub struct ConnectionConfig {
@@ -353,6 +374,11 @@ impl DaemonConnection {
     /// Get the configured machine ID for relay routing.
     pub fn machine_id(&self) -> Option<&str> {
         self.config.machine_id.as_deref()
+    }
+
+    /// Get the auth token for relay connections.
+    pub fn auth_token(&self) -> Option<&String> {
+        self.config.auth_token.as_ref()
     }
 
     /// Start a bidirectional conversation stream.

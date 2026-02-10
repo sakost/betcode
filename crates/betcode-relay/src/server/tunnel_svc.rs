@@ -167,7 +167,11 @@ impl TunnelService for TunnelServiceImpl {
                         }
                     }
                     Err(e) => {
-                        error!(machine_id = %machine_id, error = %e, "Tunnel stream error");
+                        if crate::server::grpc_util::is_peer_disconnect(&e) {
+                            info!(machine_id = %machine_id, "Daemon disconnected from tunnel");
+                        } else {
+                            error!(machine_id = %machine_id, error = %e, "Tunnel stream error");
+                        }
                         break;
                     }
                 }

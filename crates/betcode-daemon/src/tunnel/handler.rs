@@ -7,16 +7,23 @@ use prost::Message;
 use tokio::sync::{mpsc, RwLock};
 use tracing::{debug, error, info, warn};
 
+use tokio_stream::StreamExt as _;
+use tonic::Request;
+
+use betcode_proto::v1::command_service_server::CommandService as CommandServiceTrait;
 use betcode_proto::v1::{
     AgentRequest, CancelTurnRequest, CancelTurnResponse, CompactSessionRequest,
-    CompactSessionResponse, EncryptedPayload, FrameType, InputLockRequest, InputLockResponse,
-    KeyExchangeRequest, KeyExchangeResponse, ListSessionsRequest, ListSessionsResponse,
-    ResumeSessionRequest, SessionSummary, StreamPayload, TunnelError, TunnelErrorCode, TunnelFrame,
+    CompactSessionResponse, EncryptedPayload, ExecuteServiceCommandRequest, FrameType,
+    GetCommandRegistryRequest, InputLockRequest, InputLockResponse, KeyExchangeRequest,
+    KeyExchangeResponse, ListAgentsRequest, ListPathRequest, ListSessionsRequest,
+    ListSessionsResponse, ResumeSessionRequest, SessionSummary, StreamPayload, TunnelError,
+    TunnelErrorCode, TunnelFrame,
 };
 
 use betcode_crypto::{CryptoSession, IdentityKeyPair, KeyExchangeState};
 
 use crate::relay::SessionRelay;
+use crate::server::CommandServiceImpl;
 use crate::session::SessionMultiplexer;
 use crate::storage::Database;
 
@@ -28,6 +35,12 @@ pub const METHOD_REQUEST_INPUT_LOCK: &str = "AgentService/RequestInputLock";
 pub const METHOD_CONVERSE: &str = "AgentService/Converse";
 pub const METHOD_RESUME_SESSION: &str = "AgentService/ResumeSession";
 pub const METHOD_EXCHANGE_KEYS: &str = "AgentService/ExchangeKeys";
+
+// CommandService methods
+pub const METHOD_GET_COMMAND_REGISTRY: &str = "CommandService/GetCommandRegistry";
+pub const METHOD_LIST_AGENTS: &str = "CommandService/ListAgents";
+pub const METHOD_LIST_PATH: &str = "CommandService/ListPath";
+pub const METHOD_EXECUTE_SERVICE_COMMAND: &str = "CommandService/ExecuteServiceCommand";
 
 /// Default maximum number of sessions returned by ListSessions.
 const DEFAULT_LIST_SESSIONS_LIMIT: u32 = 50;
@@ -70,6 +83,8 @@ pub struct TunnelRequestHandler {
     crypto: Arc<RwLock<Option<Arc<CryptoSession>>>>,
     /// Identity keypair for key exchange. None = key exchange disabled.
     identity: Option<Arc<IdentityKeyPair>>,
+    /// CommandService implementation for handling command-related RPCs through the tunnel.
+    command_service: Option<CommandServiceImpl>,
 }
 
 impl TunnelRequestHandler {
@@ -91,7 +106,13 @@ impl TunnelRequestHandler {
             active_streams: Arc::new(RwLock::new(HashMap::new())),
             crypto: Arc::new(RwLock::new(crypto)),
             identity,
+            command_service: None,
         }
+    }
+
+    /// Set the CommandService implementation for handling command RPCs through the tunnel.
+    pub fn set_command_service(&mut self, service: CommandServiceImpl) {
+        self.command_service = Some(service);
     }
 
     /// Process an incoming frame and produce zero or more response frames.
@@ -212,6 +233,15 @@ impl TunnelRequestHandler {
             return self.handle_exchange_keys(&request_id, &data).await;
         }
 
+        // Detect relay-forwarded requests (no tunnel-layer encryption).
+        // When the relay forwards data, the nonce is empty because the relay
+        // doesn't have crypto keys. Responses to relay-forwarded requests must
+        // also skip tunnel-layer encryption so the relay can decode the protobuf.
+        let relay_forwarded = payload
+            .encrypted
+            .as_ref()
+            .map_or(true, |e| e.nonce.is_empty());
+
         let data = match payload.encrypted.as_ref() {
             Some(enc) => match self.decrypt_payload(enc).await {
                 Ok(d) => d,
@@ -227,15 +257,45 @@ impl TunnelRequestHandler {
         };
 
         match payload.method.as_str() {
-            METHOD_LIST_SESSIONS => self.handle_list_sessions(&request_id, &data).await,
-            METHOD_COMPACT_SESSION => self.handle_compact_session(&request_id, &data).await,
-            METHOD_CANCEL_TURN => self.handle_cancel_turn(&request_id, &data).await,
-            METHOD_REQUEST_INPUT_LOCK => self.handle_request_input_lock(&request_id, &data).await,
+            METHOD_LIST_SESSIONS => {
+                self.handle_list_sessions(&request_id, &data, relay_forwarded)
+                    .await
+            }
+            METHOD_COMPACT_SESSION => {
+                self.handle_compact_session(&request_id, &data, relay_forwarded)
+                    .await
+            }
+            METHOD_CANCEL_TURN => {
+                self.handle_cancel_turn(&request_id, &data, relay_forwarded)
+                    .await
+            }
+            METHOD_REQUEST_INPUT_LOCK => {
+                self.handle_request_input_lock(&request_id, &data, relay_forwarded)
+                    .await
+            }
             METHOD_CONVERSE => {
                 self.handle_converse(&request_id, &data).await;
                 vec![] // Responses sent asynchronously via outbound_tx
             }
             METHOD_RESUME_SESSION => self.handle_resume_session(&request_id, &data).await,
+            // CommandService RPCs
+            METHOD_GET_COMMAND_REGISTRY => {
+                self.handle_get_command_registry(&request_id, &data, relay_forwarded)
+                    .await
+            }
+            METHOD_LIST_AGENTS => {
+                self.handle_list_agents(&request_id, &data, relay_forwarded)
+                    .await
+            }
+            METHOD_LIST_PATH => {
+                self.handle_list_path(&request_id, &data, relay_forwarded)
+                    .await
+            }
+            METHOD_EXECUTE_SERVICE_COMMAND => {
+                self.handle_execute_service_command(&request_id, &data, relay_forwarded)
+                    .await;
+                vec![] // Responses sent asynchronously via outbound_tx
+            }
             other => vec![Self::error_response(
                 &request_id,
                 TunnelErrorCode::NotFound,
@@ -244,7 +304,12 @@ impl TunnelRequestHandler {
         }
     }
 
-    async fn handle_list_sessions(&self, request_id: &str, data: &[u8]) -> Vec<TunnelFrame> {
+    async fn handle_list_sessions(
+        &self,
+        request_id: &str,
+        data: &[u8],
+        relay_forwarded: bool,
+    ) -> Vec<TunnelFrame> {
         let req = match ListSessionsRequest::decode(data) {
             Ok(r) => r,
             Err(e) => {
@@ -293,12 +358,13 @@ impl TunnelRequestHandler {
                     .collect();
                 let total = summaries.len() as u32;
                 vec![
-                    self.response_frame_or_error(
+                    self.unary_response_frame(
                         request_id,
                         &ListSessionsResponse {
                             sessions: summaries,
                             total,
                         },
+                        relay_forwarded,
                     )
                     .await,
                 ]
@@ -311,7 +377,12 @@ impl TunnelRequestHandler {
         }
     }
 
-    async fn handle_compact_session(&self, request_id: &str, data: &[u8]) -> Vec<TunnelFrame> {
+    async fn handle_compact_session(
+        &self,
+        request_id: &str,
+        data: &[u8],
+        relay_forwarded: bool,
+    ) -> Vec<TunnelFrame> {
         let req = match CompactSessionRequest::decode(data) {
             Ok(r) => r,
             Err(e) => {
@@ -335,13 +406,14 @@ impl TunnelRequestHandler {
         };
         if messages_before == 0 {
             return vec![
-                self.response_frame_or_error(
+                self.unary_response_frame(
                     request_id,
                     &CompactSessionResponse {
                         messages_before: 0,
                         messages_after: 0,
                         tokens_saved: 0,
                     },
+                    relay_forwarded,
                 )
                 .await,
             ];
@@ -362,13 +434,14 @@ impl TunnelRequestHandler {
         let cutoff = max_seq - keep_count as i64;
         if cutoff <= 0 {
             return vec![
-                self.response_frame_or_error(
+                self.unary_response_frame(
                     request_id,
                     &CompactSessionResponse {
                         messages_before,
                         messages_after: messages_before,
                         tokens_saved: 0,
                     },
+                    relay_forwarded,
                 )
                 .await,
             ];
@@ -388,19 +461,25 @@ impl TunnelRequestHandler {
         let tokens_saved = deleted as u32 * ESTIMATED_TOKENS_PER_MESSAGE;
         info!(session_id = %sid, messages_before, messages_after, "Session compacted via tunnel");
         vec![
-            self.response_frame_or_error(
+            self.unary_response_frame(
                 request_id,
                 &CompactSessionResponse {
                     messages_before,
                     messages_after,
                     tokens_saved,
                 },
+                relay_forwarded,
             )
             .await,
         ]
     }
 
-    async fn handle_cancel_turn(&self, request_id: &str, data: &[u8]) -> Vec<TunnelFrame> {
+    async fn handle_cancel_turn(
+        &self,
+        request_id: &str,
+        data: &[u8],
+        relay_forwarded: bool,
+    ) -> Vec<TunnelFrame> {
         let req = match CancelTurnRequest::decode(data) {
             Ok(r) => r,
             Err(e) => {
@@ -417,12 +496,21 @@ impl TunnelRequestHandler {
             .await
             .unwrap_or(false);
         vec![
-            self.response_frame_or_error(request_id, &CancelTurnResponse { was_active })
-                .await,
+            self.unary_response_frame(
+                request_id,
+                &CancelTurnResponse { was_active },
+                relay_forwarded,
+            )
+            .await,
         ]
     }
 
-    async fn handle_request_input_lock(&self, request_id: &str, data: &[u8]) -> Vec<TunnelFrame> {
+    async fn handle_request_input_lock(
+        &self,
+        request_id: &str,
+        data: &[u8],
+        relay_forwarded: bool,
+    ) -> Vec<TunnelFrame> {
         let req = match InputLockRequest::decode(data) {
             Ok(r) => r,
             Err(e) => {
@@ -440,12 +528,13 @@ impl TunnelRequestHandler {
             .await
         {
             Ok(previous) => vec![
-                self.response_frame_or_error(
+                self.unary_response_frame(
                     request_id,
                     &InputLockResponse {
                         granted: true,
                         previous_holder: previous.unwrap_or_default(),
                     },
+                    relay_forwarded,
                 )
                 .await,
             ],
@@ -947,9 +1036,9 @@ impl TunnelRequestHandler {
         // one side ends up with a different session than the other.
         let mut crypto_guard = self.crypto.write().await;
         if crypto_guard.is_some() {
-            warn!(
+            info!(
                 request_id = %request_id,
-                "Replacing existing crypto session with new key exchange"
+                "Replacing crypto session (new client connection)"
             );
         }
 
@@ -1121,6 +1210,265 @@ impl TunnelRequestHandler {
         });
 
         vec![] // Frames sent async
+    }
+
+    // --- CommandService handlers ---
+
+    async fn handle_get_command_registry(
+        &self,
+        request_id: &str,
+        data: &[u8],
+        relay_forwarded: bool,
+    ) -> Vec<TunnelFrame> {
+        let cmd_svc = match &self.command_service {
+            Some(s) => s,
+            None => {
+                return vec![Self::error_response(
+                    request_id,
+                    TunnelErrorCode::Internal,
+                    "CommandService not available in tunnel handler",
+                )]
+            }
+        };
+        let req = match GetCommandRegistryRequest::decode(data) {
+            Ok(r) => r,
+            Err(e) => {
+                return vec![Self::error_response(
+                    request_id,
+                    TunnelErrorCode::Internal,
+                    &format!("Decode error: {}", e),
+                )]
+            }
+        };
+        match cmd_svc.get_command_registry(Request::new(req)).await {
+            Ok(resp) => {
+                vec![
+                    self.unary_response_frame(request_id, &resp.into_inner(), relay_forwarded)
+                        .await,
+                ]
+            }
+            Err(status) => vec![Self::error_response(
+                request_id,
+                TunnelErrorCode::Internal,
+                &format!("GetCommandRegistry failed: {}", status.message()),
+            )],
+        }
+    }
+
+    async fn handle_list_agents(
+        &self,
+        request_id: &str,
+        data: &[u8],
+        relay_forwarded: bool,
+    ) -> Vec<TunnelFrame> {
+        let cmd_svc = match &self.command_service {
+            Some(s) => s,
+            None => {
+                return vec![Self::error_response(
+                    request_id,
+                    TunnelErrorCode::Internal,
+                    "CommandService not available in tunnel handler",
+                )]
+            }
+        };
+        let req = match ListAgentsRequest::decode(data) {
+            Ok(r) => r,
+            Err(e) => {
+                return vec![Self::error_response(
+                    request_id,
+                    TunnelErrorCode::Internal,
+                    &format!("Decode error: {}", e),
+                )]
+            }
+        };
+        match cmd_svc.list_agents(Request::new(req)).await {
+            Ok(resp) => {
+                vec![
+                    self.unary_response_frame(request_id, &resp.into_inner(), relay_forwarded)
+                        .await,
+                ]
+            }
+            Err(status) => vec![Self::error_response(
+                request_id,
+                TunnelErrorCode::Internal,
+                &format!("ListAgents failed: {}", status.message()),
+            )],
+        }
+    }
+
+    async fn handle_list_path(
+        &self,
+        request_id: &str,
+        data: &[u8],
+        relay_forwarded: bool,
+    ) -> Vec<TunnelFrame> {
+        let cmd_svc = match &self.command_service {
+            Some(s) => s,
+            None => {
+                return vec![Self::error_response(
+                    request_id,
+                    TunnelErrorCode::Internal,
+                    "CommandService not available in tunnel handler",
+                )]
+            }
+        };
+        let req = match ListPathRequest::decode(data) {
+            Ok(r) => r,
+            Err(e) => {
+                return vec![Self::error_response(
+                    request_id,
+                    TunnelErrorCode::Internal,
+                    &format!("Decode error: {}", e),
+                )]
+            }
+        };
+        match cmd_svc.list_path(Request::new(req)).await {
+            Ok(resp) => {
+                vec![
+                    self.unary_response_frame(request_id, &resp.into_inner(), relay_forwarded)
+                        .await,
+                ]
+            }
+            Err(status) => vec![Self::error_response(
+                request_id,
+                TunnelErrorCode::Internal,
+                &format!("ListPath failed: {}", status.message()),
+            )],
+        }
+    }
+
+    async fn handle_execute_service_command(
+        &self,
+        request_id: &str,
+        data: &[u8],
+        relay_forwarded: bool,
+    ) {
+        let cmd_svc = match &self.command_service {
+            Some(s) => s,
+            None => {
+                let _ = self
+                    .outbound_tx
+                    .send(Self::error_response(
+                        request_id,
+                        TunnelErrorCode::Internal,
+                        "CommandService not available in tunnel handler",
+                    ))
+                    .await;
+                return;
+            }
+        };
+        let req = match ExecuteServiceCommandRequest::decode(data) {
+            Ok(r) => r,
+            Err(e) => {
+                let _ = self
+                    .outbound_tx
+                    .send(Self::error_response(
+                        request_id,
+                        TunnelErrorCode::Internal,
+                        &format!("Decode error: {}", e),
+                    ))
+                    .await;
+                return;
+            }
+        };
+        let stream_resp = match cmd_svc.execute_service_command(Request::new(req)).await {
+            Ok(resp) => resp,
+            Err(status) => {
+                let _ = self
+                    .outbound_tx
+                    .send(Self::error_response(
+                        request_id,
+                        TunnelErrorCode::Internal,
+                        &format!("ExecuteServiceCommand failed: {}", status.message()),
+                    ))
+                    .await;
+                return;
+            }
+        };
+
+        let outbound_tx = self.outbound_tx.clone();
+        let rid = request_id.to_string();
+        // Skip tunnel-layer encryption for relay-forwarded requests (relay can't decrypt)
+        let crypto_for_response = if relay_forwarded {
+            None
+        } else {
+            self.crypto_snapshot().await
+        };
+        tokio::spawn(async move {
+            let mut stream = stream_resp.into_inner();
+            while let Some(item) = stream.next().await {
+                match item {
+                    Ok(output) => {
+                        let mut buf = Vec::with_capacity(output.encoded_len());
+                        if output.encode(&mut buf).is_err() {
+                            continue;
+                        }
+                        let encrypted =
+                            match make_encrypted_payload(crypto_for_response.as_deref(), &buf) {
+                                Ok(e) => e,
+                                Err(_) => continue,
+                            };
+                        let frame = TunnelFrame {
+                            request_id: rid.clone(),
+                            frame_type: FrameType::StreamData as i32,
+                            timestamp: Some(prost_types::Timestamp::from(
+                                std::time::SystemTime::now(),
+                            )),
+                            payload: Some(betcode_proto::v1::tunnel_frame::Payload::StreamData(
+                                StreamPayload {
+                                    method: String::new(),
+                                    encrypted: Some(encrypted),
+                                    sequence: 0,
+                                    metadata: HashMap::new(),
+                                },
+                            )),
+                        };
+                        if outbound_tx.send(frame).await.is_err() {
+                            break;
+                        }
+                    }
+                    Err(e) => {
+                        warn!(error = %e, request_id = %rid, "ExecuteServiceCommand stream error");
+                        let _ = outbound_tx
+                            .send(TunnelRequestHandler::error_response(
+                                &rid,
+                                TunnelErrorCode::Internal,
+                                &format!("Stream error: {}", e),
+                            ))
+                            .await;
+                        break;
+                    }
+                }
+            }
+            // Send StreamEnd
+            let _ = outbound_tx
+                .send(TunnelFrame {
+                    request_id: rid.clone(),
+                    frame_type: FrameType::StreamEnd as i32,
+                    timestamp: Some(prost_types::Timestamp::from(std::time::SystemTime::now())),
+                    payload: None,
+                })
+                .await;
+            info!(request_id = %rid, "ExecuteServiceCommand stream ended");
+        });
+    }
+
+    /// Build a unary response frame, skipping tunnel-layer encryption for
+    /// relay-forwarded requests (so the relay can decode the protobuf).
+    async fn unary_response_frame<M: Message>(
+        &self,
+        request_id: &str,
+        msg: &M,
+        relay_forwarded: bool,
+    ) -> TunnelFrame {
+        if relay_forwarded {
+            match Self::plaintext_response_frame(request_id, msg) {
+                Ok(f) => f,
+                Err(e) => Self::error_response(request_id, TunnelErrorCode::Internal, &e),
+            }
+        } else {
+            self.response_frame_or_error(request_id, msg).await
+        }
     }
 
     /// Build a unary response frame, returning an error frame if encryption fails.

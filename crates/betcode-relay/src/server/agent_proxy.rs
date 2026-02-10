@@ -39,7 +39,7 @@ pub fn extract_machine_id<T>(req: &Request<T>) -> Result<String, Status> {
 }
 
 /// Map a RouterError to a gRPC Status.
-fn router_error_to_status(err: RouterError) -> Status {
+pub fn router_error_to_status(err: RouterError) -> Status {
     match err {
         RouterError::MachineOffline(m) => Status::unavailable(format!("Machine offline: {}", m)),
         RouterError::Buffered(m) => {
@@ -56,7 +56,7 @@ fn router_error_to_status(err: RouterError) -> Status {
 /// The relay decodes only the outer frame envelope — the encrypted payload
 /// inside StreamPayload is forwarded opaquely to the client for decryption.
 #[allow(clippy::result_large_err)]
-fn decode_response<M: Message + Default>(frame: &TunnelFrame) -> Result<M, Status> {
+pub fn decode_response<M: Message + Default>(frame: &TunnelFrame) -> Result<M, Status> {
     if frame.frame_type == FrameType::Error as i32 {
         if let Some(betcode_proto::v1::tunnel_frame::Payload::Error(ref e)) = frame.payload {
             return Err(Status::internal(format!("Daemon error: {}", e.message)));
@@ -154,7 +154,11 @@ async fn converse_proxy_task(
                     }
                 }
                 Err(e) => {
-                    warn!(error = %e, "Client stream error in converse proxy");
+                    if super::grpc_util::is_peer_disconnect(&e) {
+                        info!("Client disconnected from converse proxy");
+                    } else {
+                        warn!(error = %e, "Client stream error in converse proxy");
+                    }
                     break;
                 }
             }

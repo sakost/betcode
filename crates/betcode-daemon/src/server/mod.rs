@@ -28,11 +28,18 @@ use thiserror::Error;
 use tonic::transport::Server;
 use tracing::info;
 
+use tokio::sync::RwLock;
+
 use betcode_proto::v1::agent_service_server::AgentServiceServer;
 use betcode_proto::v1::bet_code_health_server::BetCodeHealthServer;
+use betcode_proto::v1::command_service_server::CommandServiceServer;
 use betcode_proto::v1::health_server::HealthServer;
 use betcode_proto::v1::worktree_service_server::WorktreeServiceServer;
 
+use crate::commands::service_executor::ServiceExecutor;
+use crate::commands::CommandRegistry;
+use crate::completion::agent_lister::AgentLister;
+use crate::completion::file_index::FileIndex;
 use crate::relay::SessionRelay;
 use crate::session::SessionMultiplexer;
 use crate::storage::Database;
@@ -59,11 +66,26 @@ pub struct GrpcServer {
     subprocess_manager: Arc<SubprocessManager>,
     multiplexer: Arc<SessionMultiplexer>,
     relay: Arc<SessionRelay>,
+    command_registry: Arc<RwLock<CommandRegistry>>,
+    file_index: Arc<RwLock<FileIndex>>,
+    agent_lister: Arc<RwLock<AgentLister>>,
+    service_executor: Arc<RwLock<ServiceExecutor>>,
+    /// Sender for daemon-level shutdown (triggered by `exit-daemon` command).
+    shutdown_tx: tokio::sync::watch::Sender<bool>,
 }
 
 impl GrpcServer {
     /// Create a new gRPC server with all components wired together.
-    pub fn new(config: ServerConfig, db: Database, subprocess_manager: SubprocessManager) -> Self {
+    ///
+    /// `shutdown_tx` is used by the `exit-daemon` command to trigger graceful
+    /// daemon shutdown.  The caller should subscribe to this channel and stop
+    /// the server when `true` is received.
+    pub fn new(
+        config: ServerConfig,
+        db: Database,
+        subprocess_manager: SubprocessManager,
+        shutdown_tx: tokio::sync::watch::Sender<bool>,
+    ) -> Self {
         let subprocess_manager = Arc::new(subprocess_manager);
         let multiplexer = Arc::new(SessionMultiplexer::with_defaults());
         let relay = Arc::new(SessionRelay::new(
@@ -72,12 +94,31 @@ impl GrpcServer {
             db.clone(),
         ));
 
+        let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+        let mut registry = CommandRegistry::new();
+
+        // Discover Claude Code commands (hardcoded + user-defined)
+        let discovery = crate::commands::cc_discovery::discover_all_cc_commands(&cwd, None);
+        for cmd in discovery.commands {
+            registry.add(cmd);
+        }
+
+        let command_registry = Arc::new(RwLock::new(registry));
+        let file_index = Arc::new(RwLock::new(FileIndex::empty()));
+        let agent_lister = Arc::new(RwLock::new(AgentLister::new()));
+        let service_executor = Arc::new(RwLock::new(ServiceExecutor::new(cwd)));
+
         Self {
             config,
             db,
             subprocess_manager,
             multiplexer,
             relay,
+            command_registry,
+            file_index,
+            agent_lister,
+            service_executor,
+            shutdown_tx,
         }
     }
 
@@ -91,6 +132,13 @@ impl GrpcServer {
         let health_service =
             HealthServiceImpl::new(self.db.clone(), Arc::clone(&self.subprocess_manager));
         let worktree_service = WorktreeServiceImpl::new(WorktreeManager::new(self.db));
+        let command_service = CommandServiceImpl::new(
+            Arc::clone(&self.command_registry),
+            Arc::clone(&self.file_index),
+            Arc::clone(&self.agent_lister),
+            Arc::clone(&self.service_executor),
+            self.shutdown_tx.clone(),
+        );
 
         info!(%addr, "Starting gRPC server on TCP");
 
@@ -98,6 +146,7 @@ impl GrpcServer {
             .http2_keepalive_interval(Some(Duration::from_secs(30)))
             .http2_keepalive_timeout(Some(Duration::from_secs(10)))
             .add_service(AgentServiceServer::new(agent_service))
+            .add_service(CommandServiceServer::new(command_service))
             .add_service(HealthServer::new(health_service.clone()))
             .add_service(BetCodeHealthServer::new(health_service))
             .add_service(WorktreeServiceServer::new(worktree_service))
@@ -131,6 +180,13 @@ impl GrpcServer {
         let health_service =
             HealthServiceImpl::new(self.db.clone(), Arc::clone(&self.subprocess_manager));
         let worktree_service = WorktreeServiceImpl::new(WorktreeManager::new(self.db));
+        let command_service = CommandServiceImpl::new(
+            Arc::clone(&self.command_registry),
+            Arc::clone(&self.file_index),
+            Arc::clone(&self.agent_lister),
+            Arc::clone(&self.service_executor),
+            self.shutdown_tx.clone(),
+        );
 
         info!(path = %path.display(), "Starting gRPC server on Unix socket");
 
@@ -138,6 +194,7 @@ impl GrpcServer {
             .http2_keepalive_interval(Some(Duration::from_secs(30)))
             .http2_keepalive_timeout(Some(Duration::from_secs(10)))
             .add_service(AgentServiceServer::new(agent_service))
+            .add_service(CommandServiceServer::new(command_service))
             .add_service(HealthServer::new(health_service.clone()))
             .add_service(BetCodeHealthServer::new(health_service))
             .add_service(WorktreeServiceServer::new(worktree_service))
@@ -165,5 +222,16 @@ impl GrpcServer {
     /// Get a clone of the database (for tunnel handler).
     pub fn db(&self) -> &Database {
         &self.db
+    }
+
+    /// Build a CommandServiceImpl that shares state with the gRPC server.
+    pub fn command_service_impl(&self) -> CommandServiceImpl {
+        CommandServiceImpl::new(
+            Arc::clone(&self.command_registry),
+            Arc::clone(&self.file_index),
+            Arc::clone(&self.agent_lister),
+            Arc::clone(&self.service_executor),
+            self.shutdown_tx.clone(),
+        )
     }
 }

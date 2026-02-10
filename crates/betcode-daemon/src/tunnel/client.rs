@@ -22,6 +22,7 @@ use super::error::TunnelClientError;
 use super::handler::TunnelRequestHandler;
 
 use crate::relay::SessionRelay;
+use crate::server::CommandServiceImpl;
 use crate::session::SessionMultiplexer;
 use crate::storage::Database;
 
@@ -33,6 +34,8 @@ pub struct TunnelClient {
     db: Database,
     /// X25519 identity keypair for E2E encryption key exchange.
     identity: Arc<IdentityKeyPair>,
+    /// Optional CommandServiceImpl for handling command RPCs through the tunnel.
+    command_service: Option<CommandServiceImpl>,
 }
 
 impl TunnelClient {
@@ -53,7 +56,13 @@ impl TunnelClient {
             multiplexer,
             db,
             identity,
+            command_service: None,
         })
+    }
+
+    /// Set the CommandService implementation for handling command RPCs through the tunnel.
+    pub fn set_command_service(&mut self, service: CommandServiceImpl) {
+        self.command_service = Some(service);
     }
 
     /// Load or generate the X25519 identity keypair.
@@ -156,7 +165,7 @@ impl TunnelClient {
         let (outbound_tx, outbound_rx) = mpsc::channel::<TunnelFrame>(128);
         self.send_init_frame(&outbound_tx).await?;
 
-        let handler = Arc::new(TunnelRequestHandler::new(
+        let mut handler = TunnelRequestHandler::new(
             self.config.machine_id.clone(),
             Arc::clone(&self.relay),
             Arc::clone(&self.multiplexer),
@@ -164,7 +173,11 @@ impl TunnelClient {
             outbound_tx.clone(),
             None, // Crypto session will be set by ExchangeKeys RPC
             Some(Arc::clone(&self.identity)),
-        ));
+        );
+        if let Some(cmd_svc) = &self.command_service {
+            handler.set_command_service(cmd_svc.clone());
+        }
+        let handler = Arc::new(handler);
 
         let outbound_stream = ReceiverStream::new(outbound_rx);
         let mut request = Request::new(outbound_stream);

@@ -24,11 +24,14 @@ use crate::completion::agent_lister::AgentLister;
 use crate::completion::file_index::FileIndex;
 
 /// CommandService gRPC handler.
+#[derive(Clone)]
 pub struct CommandServiceImpl {
     registry: Arc<RwLock<CommandRegistry>>,
     file_index: Arc<RwLock<FileIndex>>,
     agent_lister: Arc<RwLock<AgentLister>>,
     service_executor: Arc<RwLock<ServiceExecutor>>,
+    /// When sent `true`, triggers graceful daemon shutdown.
+    shutdown_tx: tokio::sync::watch::Sender<bool>,
 }
 
 impl CommandServiceImpl {
@@ -37,12 +40,14 @@ impl CommandServiceImpl {
         file_index: Arc<RwLock<FileIndex>>,
         agent_lister: Arc<RwLock<AgentLister>>,
         service_executor: Arc<RwLock<ServiceExecutor>>,
+        shutdown_tx: tokio::sync::watch::Sender<bool>,
     ) -> Self {
         Self {
             registry,
             file_index,
             agent_lister,
             service_executor,
+            shutdown_tx,
         }
     }
 }
@@ -114,6 +119,7 @@ impl CommandService for CommandServiceImpl {
 
         let executor = Arc::clone(&self.service_executor);
         let registry = Arc::clone(&self.registry);
+        let shutdown_tx = self.shutdown_tx.clone();
         let command = req.command;
         let args = req.args;
 
@@ -171,9 +177,10 @@ impl CommandService for CommandServiceImpl {
                     }
                 }
                 "exit-daemon" => {
-                    let _ = tx
-                        .send(Ok(stdout_output("Daemon shutdown requested")))
-                        .await;
+                    let _ = tx.send(Ok(stdout_output("Daemon shutting down..."))).await;
+                    // Give a brief moment for the response to be sent before triggering shutdown
+                    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                    let _ = shutdown_tx.send(true);
                 }
                 "reload-commands" => {
                     let exec = executor.read().await;
@@ -390,7 +397,14 @@ async fn create_test_service_with_dir(path: &std::path::Path) -> CommandServiceI
     ));
     let agent_lister = Arc::new(RwLock::new(AgentLister::new()));
     let service_executor = Arc::new(RwLock::new(ServiceExecutor::new(path.to_path_buf())));
-    CommandServiceImpl::new(registry, file_index, agent_lister, service_executor)
+    let (shutdown_tx, _) = tokio::sync::watch::channel(false);
+    CommandServiceImpl::new(
+        registry,
+        file_index,
+        agent_lister,
+        service_executor,
+        shutdown_tx,
+    )
 }
 
 #[cfg(test)]

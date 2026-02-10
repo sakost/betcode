@@ -108,12 +108,12 @@ async fn main() -> anyhow::Result<()> {
     // Create subprocess manager
     let subprocess_manager = SubprocessManager::new(args.max_processes);
 
+    // Daemon-level shutdown channel (triggered by exit-daemon command or Ctrl+C)
+    let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
+
     // Create and start gRPC server
     let config = ServerConfig::tcp(args.addr).with_max_sessions(args.max_sessions);
-    let server = GrpcServer::new(config, db, subprocess_manager);
-
-    // Shutdown signal for tunnel client
-    let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
+    let server = GrpcServer::new(config, db, subprocess_manager, shutdown_tx.clone());
 
     // Optionally spawn tunnel client
     let tunnel_handle = if let Some(relay_url) = &args.relay_url {
@@ -139,12 +139,13 @@ async fn main() -> anyhow::Result<()> {
             "Spawning tunnel client"
         );
 
-        let tunnel_client = TunnelClient::new(
+        let mut tunnel_client = TunnelClient::new(
             tunnel_config,
             Arc::clone(server.relay()),
             Arc::clone(server.multiplexer()),
             server.db().clone(),
         )?;
+        tunnel_client.set_command_service(server.command_service_impl());
         Some(tokio::spawn(async move {
             tunnel_client.run(shutdown_rx).await;
         }))
@@ -155,13 +156,19 @@ async fn main() -> anyhow::Result<()> {
 
     info!(addr = %args.addr, "gRPC server listening");
 
+    // Subscribe for daemon-level shutdown (triggered by exit-daemon command)
+    let mut daemon_shutdown_rx = shutdown_tx.subscribe();
+
     // Serve until shutdown signal
     tokio::select! {
         result = server.serve_tcp(args.addr) => {
             result?;
         }
         _ = tokio::signal::ctrl_c() => {
-            info!("Received shutdown signal");
+            info!("Received Ctrl+C shutdown signal");
+        }
+        _ = daemon_shutdown_rx.changed() => {
+            info!("Daemon shutdown requested via exit-daemon command");
         }
     }
 

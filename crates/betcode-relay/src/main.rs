@@ -14,15 +14,19 @@ use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 use betcode_proto::v1::agent_service_server::AgentServiceServer;
 use betcode_proto::v1::auth_service_server::AuthServiceServer;
+use betcode_proto::v1::command_service_server::CommandServiceServer;
+use betcode_proto::v1::git_lab_service_server::GitLabServiceServer;
 use betcode_proto::v1::machine_service_server::MachineServiceServer;
 use betcode_proto::v1::tunnel_service_server::TunnelServiceServer;
+use betcode_proto::v1::worktree_service_server::WorktreeServiceServer;
 
 use betcode_relay::auth::JwtManager;
 use betcode_relay::buffer::BufferManager;
 use betcode_relay::registry::ConnectionRegistry;
 use betcode_relay::router::RequestRouter;
 use betcode_relay::server::{
-    AgentProxyService, AuthServiceImpl, MachineServiceImpl, TunnelServiceImpl,
+    AgentProxyService, AuthServiceImpl, CommandProxyService, GitLabProxyService,
+    MachineServiceImpl, TunnelServiceImpl, WorktreeProxyService,
 };
 use betcode_relay::storage::RelayDatabase;
 use betcode_relay::tls::TlsMode;
@@ -135,6 +139,9 @@ async fn main() -> anyhow::Result<()> {
     let tunnel = TunnelServiceImpl::new(Arc::clone(&registry), db.clone(), Arc::clone(&buffer));
     let machine = MachineServiceImpl::new(db.clone());
     let agent_proxy = AgentProxyService::new(Arc::clone(&router));
+    let command_proxy = CommandProxyService::new(Arc::clone(&router));
+    let worktree_proxy = WorktreeProxyService::new(Arc::clone(&router));
+    let gitlab_proxy = GitLabProxyService::new(Arc::clone(&router));
 
     let jwt_check = betcode_relay::server::jwt_interceptor(Arc::clone(&jwt));
 
@@ -195,7 +202,22 @@ async fn main() -> anyhow::Result<()> {
             machine,
             jwt_check.clone(),
         ))
-        .add_service(AgentServiceServer::with_interceptor(agent_proxy, jwt_check));
+        .add_service(AgentServiceServer::with_interceptor(
+            agent_proxy,
+            jwt_check.clone(),
+        ))
+        .add_service(CommandServiceServer::with_interceptor(
+            command_proxy,
+            jwt_check.clone(),
+        ))
+        .add_service(WorktreeServiceServer::with_interceptor(
+            worktree_proxy,
+            jwt_check.clone(),
+        ))
+        .add_service(GitLabServiceServer::with_interceptor(
+            gitlab_proxy,
+            jwt_check,
+        ));
 
     tokio::select! {
         result = grpc_router.serve(args.addr) => {

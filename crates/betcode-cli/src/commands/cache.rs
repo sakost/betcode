@@ -34,6 +34,16 @@ impl CommandCache {
         self.entries = entries;
     }
 
+    /// Look up a command by exact name.
+    pub fn find_by_name(&self, name: &str) -> Option<&CachedCommand> {
+        self.entries.iter().find(|e| e.name == name)
+    }
+
+    /// Return all cached entries.
+    pub fn all(&self) -> &[CachedCommand] {
+        &self.entries
+    }
+
     /// Fuzzy-search cached commands by name, returning up to `max_results`.
     pub fn search(&self, query: &str, max_results: usize) -> Vec<&CachedCommand> {
         if query.is_empty() {
