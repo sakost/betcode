@@ -2,6 +2,7 @@
 
 use std::collections::VecDeque;
 
+use crate::commands::cache::CommandCache;
 use crate::tui::fingerprint_panel::FingerprintPrompt;
 use betcode_proto::v1::AgentEvent;
 
@@ -125,6 +126,24 @@ pub struct App {
     pub agent_busy: bool,
     pub completion_state: CompletionState,
     pub show_status_panel: bool,
+    /// Local cache of commands fetched from daemon for `/` completion.
+    pub command_cache: CommandCache,
+    /// Sender to request async completion fetches (agents, files).
+    pub completion_request_tx: Option<tokio::sync::mpsc::Sender<CompletionRequest>>,
+}
+
+/// A request for async completion data from the daemon.
+#[derive(Debug, Clone)]
+pub struct CompletionRequest {
+    pub kind: CompletionFetchKind,
+    pub query: String,
+}
+
+/// What kind of completion data to fetch.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CompletionFetchKind {
+    Agents,
+    Files,
 }
 
 impl App {
@@ -151,25 +170,52 @@ impl App {
             agent_busy: false,
             completion_state: CompletionState::default(),
             show_status_panel: false,
+            command_cache: CommandCache::new(),
+            completion_request_tx: None,
         }
     }
 
     /// Update completion state based on current input and cursor position.
     pub fn update_completion_state(&mut self) {
-        use crate::completion::controller::detect_trigger;
+        use crate::completion::controller::{detect_trigger, CompletionTrigger};
 
         let trigger = detect_trigger(&self.input, self.cursor_pos);
 
         match trigger {
-            Some(crate::completion::controller::CompletionTrigger::Command { query: _ }) => {
-                // For commands, update ghost text from the items if available.
+            Some(CompletionTrigger::Command { ref query }) => {
+                // Search local cache instantly for `/` commands.
+                let results = self.command_cache.search(query, 8);
+                self.completion_state.items =
+                    results.iter().map(|c| c.name.clone()).collect();
+                self.completion_state.selected_index = 0;
                 self.completion_state.ghost_text =
                     self.completion_state.items.first().cloned();
             }
-            Some(_) => {
-                // Agent/File/Bash triggers - ghost text from items
+            Some(CompletionTrigger::Agent { ref query }) => {
+                // Send async fetch request for agents.
+                if let Some(tx) = &self.completion_request_tx {
+                    let _ = tx.try_send(CompletionRequest {
+                        kind: CompletionFetchKind::Agents,
+                        query: query.clone(),
+                    });
+                }
                 self.completion_state.ghost_text =
                     self.completion_state.items.first().cloned();
+            }
+            Some(CompletionTrigger::File { ref query }) => {
+                // Send async fetch request for file paths.
+                if let Some(tx) = &self.completion_request_tx {
+                    let _ = tx.try_send(CompletionRequest {
+                        kind: CompletionFetchKind::Files,
+                        query: query.clone(),
+                    });
+                }
+                self.completion_state.ghost_text =
+                    self.completion_state.items.first().cloned();
+            }
+            Some(CompletionTrigger::Bash { .. }) => {
+                // No completion for bash commands
+                self.completion_state.ghost_text = None;
             }
             None => {
                 // No trigger - clear completion state

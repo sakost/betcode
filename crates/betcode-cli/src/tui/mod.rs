@@ -13,7 +13,7 @@ mod question_input;
 mod question_tests;
 
 use std::io;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use crossterm::event::{self, Event, KeyEventKind};
 use crossterm::execute;
@@ -23,13 +23,20 @@ use crossterm::terminal::{
 use ratatui::backend::CrosstermBackend;
 use ratatui::Terminal;
 use tokio_util::sync::CancellationToken;
-use tracing::error;
+use tracing::{error, warn};
 
+use crate::app::{CompletionFetchKind, CompletionRequest};
 use crate::app::App;
+use crate::commands::cache::CachedCommand;
 use crate::connection::DaemonConnection;
 use crate::ui;
 use betcode_crypto::FingerprintCheck;
 use betcode_proto::v1::{AgentRequest, StartConversation};
+
+/// Response from the async completion fetcher.
+struct CompletionResponse {
+    items: Vec<String>,
+}
 
 /// Terminal events forwarded from the UI reader thread.
 pub enum TermEvent {
@@ -163,6 +170,107 @@ pub async fn run(
         }
     }
     app.status = format!("Connected | Session: {}", &sid[..8.min(sid.len())]);
+
+    // 6. Fetch command registry and load into local cache
+    match conn.get_command_registry().await {
+        Ok(registry) => {
+            let cached: Vec<CachedCommand> = registry
+                .commands
+                .into_iter()
+                .map(|c| CachedCommand {
+                    name: c.name,
+                    description: c.description,
+                    category: format!("{:?}", c.category),
+                    source: c.source,
+                })
+                .collect();
+            app.command_cache.load(cached);
+        }
+        Err(e) => {
+            warn!(?e, "Could not fetch command registry, completions may be limited");
+        }
+    }
+
+    // 7. Spawn async completion fetcher task
+    let (completion_req_tx, mut completion_req_rx) =
+        tokio::sync::mpsc::channel::<CompletionRequest>(16);
+    let (completion_resp_tx, mut completion_resp_rx) =
+        tokio::sync::mpsc::channel::<CompletionResponse>(16);
+    app.completion_request_tx = Some(completion_req_tx);
+
+    let completion_handle =
+        conn.command_service_client()
+            .map(|mut cmd_client| {
+                tokio::spawn(async move {
+                    let debounce = Duration::from_millis(100);
+                    let mut last_request_time = Instant::now() - debounce;
+
+                    while let Some(req) = completion_req_rx.recv().await {
+                        // Debounce: drain any newer requests that arrived
+                        let mut latest = req;
+                        while let Ok(newer) = completion_req_rx.try_recv() {
+                            latest = newer;
+                        }
+
+                        // Wait for debounce period since last request
+                        let elapsed = last_request_time.elapsed();
+                        if elapsed < debounce {
+                            tokio::time::sleep(debounce - elapsed).await;
+                            // Drain again after sleep
+                            while let Ok(newer) = completion_req_rx.try_recv() {
+                                latest = newer;
+                            }
+                        }
+                        last_request_time = Instant::now();
+
+                        let items = match latest.kind {
+                            CompletionFetchKind::Agents => {
+                                let request = tonic::Request::new(
+                                    betcode_proto::v1::ListAgentsRequest {
+                                        query: latest.query,
+                                        max_results: 8,
+                                    },
+                                );
+                                match cmd_client.list_agents(request).await {
+                                    Ok(resp) => resp
+                                        .into_inner()
+                                        .agents
+                                        .into_iter()
+                                        .map(|a| a.name)
+                                        .collect(),
+                                    Err(_) => Vec::new(),
+                                }
+                            }
+                            CompletionFetchKind::Files => {
+                                let request = tonic::Request::new(
+                                    betcode_proto::v1::ListPathRequest {
+                                        query: latest.query,
+                                        max_results: 8,
+                                    },
+                                );
+                                match cmd_client.list_path(request).await {
+                                    Ok(resp) => resp
+                                        .into_inner()
+                                        .entries
+                                        .into_iter()
+                                        .map(|p| p.path)
+                                        .collect(),
+                                    Err(_) => Vec::new(),
+                                }
+                            }
+                        };
+
+                        if completion_resp_tx
+                            .send(CompletionResponse { items })
+                            .await
+                            .is_err()
+                        {
+                            break;
+                        }
+                    }
+                })
+            });
+
     let mut tick = tokio::time::interval(Duration::from_millis(50));
 
     let result: anyhow::Result<()> = loop {
@@ -172,6 +280,12 @@ pub async fn run(
             }
             Some(term_event) = term_rx.recv() => {
                 input::handle_term_event(&mut app, &request_tx, term_event).await;
+            }
+            Some(resp) = completion_resp_rx.recv() => {
+                app.completion_state.items = resp.items;
+                app.completion_state.selected_index = 0;
+                app.completion_state.ghost_text =
+                    app.completion_state.items.first().cloned();
             }
             Some(grpc_result) = event_rx.recv() => {
                 match grpc_result {
@@ -197,14 +311,18 @@ pub async fn run(
         }
     };
 
-    // 6. Shutdown: signal UI thread to stop, clean up gRPC resources
+    // 8. Shutdown: signal UI thread to stop, clean up gRPC resources
     cancel.cancel();
     let _ = ui_thread.join(); // fast — <50ms due to poll timeout
     drop(request_tx);
     drop(event_rx);
+    drop(completion_resp_rx);
+    if let Some(h) = completion_handle {
+        h.abort();
+    }
     stream_handle.abort();
 
-    // 7. Restore terminal
+    // 9. Restore terminal
     let _ = disable_raw_mode();
     let _ = execute!(terminal.backend_mut(), LeaveAlternateScreen);
     let _ = terminal.show_cursor();

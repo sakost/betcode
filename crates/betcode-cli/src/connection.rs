@@ -819,6 +819,11 @@ impl DaemonConnection {
     // Command service methods
     // =========================================================================
 
+    /// Get a clone of the CommandServiceClient for use in background tasks.
+    pub fn command_service_client(&self) -> Option<CommandServiceClient<Channel>> {
+        self.command_client.clone()
+    }
+
     /// Fetch the full command registry from the daemon.
     pub async fn get_command_registry(
         &mut self,
