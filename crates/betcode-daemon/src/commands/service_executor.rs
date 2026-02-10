@@ -5,6 +5,9 @@ use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::Command;
 use tokio::sync::mpsc;
 
+use super::cc_discovery::discover_all_cc_commands;
+use super::CommandRegistry;
+
 /// Output messages from command execution.
 #[derive(Debug)]
 pub enum ServiceOutput {
@@ -51,6 +54,30 @@ impl ServiceExecutor {
 
         self.cwd = resolved;
         Ok(())
+    }
+
+    /// Reloads the command registry by re-discovering Claude Code commands.
+    ///
+    /// Clears existing CC-sourced commands, re-runs discovery, and adds
+    /// the fresh commands back into the registry.
+    pub fn execute_reload_commands(&self, registry: &mut CommandRegistry) -> Result<String> {
+        // Clear existing CC commands
+        registry.clear_source("claude-code");
+        registry.clear_source("user");
+
+        // Re-discover commands
+        let result = discover_all_cc_commands(&self.cwd, None);
+
+        let count = result.commands.len();
+        for cmd in result.commands {
+            registry.add(cmd);
+        }
+
+        let mut msg = format!("Reloaded {count} Claude Code commands");
+        if !result.warnings.is_empty() {
+            msg.push_str(&format!(" ({} warnings)", result.warnings.len()));
+        }
+        Ok(msg)
     }
 
     /// Executes a bash command, streaming stdout/stderr line-by-line via the channel.
@@ -148,5 +175,27 @@ mod tests {
             }
         }
         assert!(found_hello);
+    }
+
+    #[test]
+    fn test_execute_reload_commands() {
+        let dir = TempDir::new().unwrap();
+        // Create a user command file to be discovered
+        let commands_dir = dir.path().join(".claude").join("commands");
+        std::fs::create_dir_all(&commands_dir).unwrap();
+        std::fs::write(commands_dir.join("deploy.md"), "# Deploy").unwrap();
+
+        let executor = ServiceExecutor::new(dir.path().to_path_buf());
+        let mut registry = CommandRegistry::new();
+
+        let msg = executor.execute_reload_commands(&mut registry).unwrap();
+        assert!(msg.contains("Reloaded"));
+
+        // Should have CC commands + user commands + builtins
+        let all = registry.get_all();
+        assert!(all.iter().any(|c| c.name == "deploy"));
+        assert!(all.iter().any(|c| c.name == "help"));
+        // Builtins should still be there
+        assert!(all.iter().any(|c| c.name == "cd"));
     }
 }

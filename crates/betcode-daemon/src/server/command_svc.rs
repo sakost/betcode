@@ -113,6 +113,7 @@ impl CommandService for CommandServiceImpl {
         let (tx, rx) = mpsc::channel::<Result<ServiceCommandOutput, Status>>(64);
 
         let executor = Arc::clone(&self.service_executor);
+        let registry = Arc::clone(&self.registry);
         let command = req.command;
         let args = req.args;
 
@@ -175,9 +176,16 @@ impl CommandService for CommandServiceImpl {
                         .await;
                 }
                 "reload-commands" => {
-                    let _ = tx
-                        .send(Ok(stdout_output("Command registry reload requested")))
-                        .await;
+                    let exec = executor.read().await;
+                    let mut reg = registry.write().await;
+                    match exec.execute_reload_commands(&mut reg) {
+                        Ok(msg) => {
+                            let _ = tx.send(Ok(stdout_output(&msg))).await;
+                        }
+                        Err(e) => {
+                            let _ = tx.send(Ok(error_output(&e.to_string()))).await;
+                        }
+                    }
                 }
                 other => {
                     let _ = tx
