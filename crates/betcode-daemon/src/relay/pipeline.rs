@@ -102,17 +102,17 @@ impl SessionRelay {
         };
 
         // Spawn the NDJSON reader pipeline
-        spawn_stdout_pipeline(
-            session_id.clone(),
+        spawn_stdout_pipeline(StdoutPipelineContext {
+            session_id: session_id.clone(),
             stdout_rx,
             event_forwarder,
-            self.db.clone(),
-            Arc::clone(&self.sessions),
-            Arc::clone(&self.subprocess_manager),
+            db: self.db.clone(),
+            sessions: Arc::clone(&self.sessions),
+            subprocess_manager: Arc::clone(&self.subprocess_manager),
             sequence_counter,
             pending_question_inputs,
             pending_permission_inputs,
-        );
+        });
 
         // Store the relay handle
         self.sessions
@@ -302,11 +302,10 @@ impl SessionRelay {
     }
 }
 
-/// Spawn the stdout → NDJSON parser → EventBridge → forwarder pipeline.
-#[allow(clippy::too_many_arguments)]
-fn spawn_stdout_pipeline(
+/// Shared context for the stdout pipeline task.
+struct StdoutPipelineContext {
     session_id: String,
-    mut stdout_rx: mpsc::Receiver<String>,
+    stdout_rx: mpsc::Receiver<String>,
     event_forwarder: mpsc::Sender<AgentEvent>,
     db: Database,
     sessions: Arc<RwLock<HashMap<String, RelayHandle>>>,
@@ -314,7 +313,21 @@ fn spawn_stdout_pipeline(
     sequence_counter: Arc<AtomicU64>,
     pending_question_inputs: Arc<tokio::sync::RwLock<HashMap<String, serde_json::Value>>>,
     pending_permission_inputs: Arc<tokio::sync::RwLock<HashMap<String, serde_json::Value>>>,
-) {
+}
+
+/// Spawn the stdout → NDJSON parser → EventBridge → forwarder pipeline.
+fn spawn_stdout_pipeline(ctx: StdoutPipelineContext) {
+    let StdoutPipelineContext {
+        session_id,
+        mut stdout_rx,
+        event_forwarder,
+        db,
+        sessions,
+        subprocess_manager,
+        sequence_counter,
+        pending_question_inputs,
+        pending_permission_inputs,
+    } = ctx;
     tokio::spawn(async move {
         let sid = session_id.clone();
         // Read the shared counter (may have been advanced by send_user_message).

@@ -10,7 +10,7 @@ use tracing::{info, warn};
 use betcode_proto::v1::{EncryptedPayload, FrameType, StreamPayload, TunnelFrame};
 
 use crate::registry::ConnectionRegistry;
-use crate::storage::RelayDatabase;
+use crate::storage::{BufferMessageParams, RelayDatabase};
 
 /// Manages message buffering for offline machines.
 pub struct BufferManager {
@@ -40,15 +40,15 @@ impl BufferManager {
     ) -> Result<i64, BufferError> {
         let id = self
             .db
-            .buffer_message(
+            .buffer_message(&BufferMessageParams {
                 machine_id,
                 request_id,
                 method,
-                data,
-                metadata_json,
-                0, // default priority
-                self.default_ttl_secs,
-            )
+                payload: data,
+                metadata: metadata_json,
+                priority: 0,
+                ttl_secs: self.default_ttl_secs,
+            })
             .await
             .map_err(|e| BufferError::Storage(e.to_string()))?;
 
@@ -267,7 +267,15 @@ mod tests {
         // Buffer with very short TTL (already expired by using negative TTL trick)
         manager
             .db
-            .buffer_message("m1", "req-1", "Test", b"data", "{}", 0, -1)
+            .buffer_message(&BufferMessageParams {
+                machine_id: "m1",
+                request_id: "req-1",
+                method: "Test",
+                payload: b"data",
+                metadata: "{}",
+                priority: 0,
+                ttl_secs: -1,
+            })
             .await
             .unwrap();
 
@@ -284,12 +292,28 @@ mod tests {
         // Buffer messages with different priorities
         manager
             .db
-            .buffer_message("m1", "low", "Test", b"low", "{}", 0, 3600)
+            .buffer_message(&BufferMessageParams {
+                machine_id: "m1",
+                request_id: "low",
+                method: "Test",
+                payload: b"low",
+                metadata: "{}",
+                priority: 0,
+                ttl_secs: 3600,
+            })
             .await
             .unwrap();
         manager
             .db
-            .buffer_message("m1", "high", "Test", b"high", "{}", 10, 3600)
+            .buffer_message(&BufferMessageParams {
+                machine_id: "m1",
+                request_id: "high",
+                method: "Test",
+                payload: b"high",
+                metadata: "{}",
+                priority: 10,
+                ttl_secs: 3600,
+            })
             .await
             .unwrap();
 

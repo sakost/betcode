@@ -1,3 +1,5 @@
+#![allow(clippy::unwrap_used)] // Integration tests use unwrap for brevity
+
 //! End-to-end integration test for the command system.
 //!
 //! Verifies that CommandServiceImpl correctly wires together:
@@ -52,7 +54,14 @@ async fn test_full_command_flow() {
     let agent_lister = Arc::new(RwLock::new(AgentLister::new()));
     let service_executor = Arc::new(RwLock::new(ServiceExecutor::new(dir.path().to_path_buf())));
 
-    let service = CommandServiceImpl::new(registry, file_index, agent_lister, service_executor);
+    let (shutdown_tx, _) = tokio::sync::watch::channel(false);
+    let service = CommandServiceImpl::new(
+        registry,
+        file_index,
+        agent_lister,
+        service_executor,
+        shutdown_tx,
+    );
 
     // Test 1: get_command_registry returns builtins + user commands
     let response = service

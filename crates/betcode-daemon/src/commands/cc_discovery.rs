@@ -27,7 +27,7 @@ pub async fn detect_cc_version() -> anyhow::Result<String> {
 
 /// Extracts a version number (e.g. "1.0.22") from Claude Code version output.
 pub fn parse_version(output: &str) -> Option<String> {
-    let re = Regex::new(r"v(\d+\.\d+\.\d+)").unwrap();
+    let re = Regex::new(r"v(\d+\.\d+\.\d+)").expect("static regex pattern is valid");
     re.captures(output).map(|cap| cap[1].to_string())
 }
 

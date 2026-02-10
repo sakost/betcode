@@ -1,0 +1,9 @@
+{
+  "threshold": 0,
+  "reporters": ["console", "json"],
+  "output": "./jscpd-report",
+  "pattern": "**/*.rs",
+  "ignore": ["**/target/**", "**/betcode-proto/src/lib.rs"],
+  "minLines": 6,
+  "minTokens": 50
+}

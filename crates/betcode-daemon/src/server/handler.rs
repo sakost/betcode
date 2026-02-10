@@ -12,14 +12,18 @@ use crate::relay::{RelaySessionConfig, SessionRelay};
 use crate::session::SessionMultiplexer;
 use crate::storage::Database;
 
+/// Shared context for agent request handling.
+pub struct HandlerContext<'a> {
+    pub relay: &'a SessionRelay,
+    pub multiplexer: &'a SessionMultiplexer,
+    pub db: &'a Database,
+    pub tx: &'a mpsc::Sender<Result<AgentEvent, Status>>,
+    pub client_id: &'a str,
+}
+
 /// Handle a single agent request using the relay.
-#[allow(clippy::too_many_arguments)]
 pub async fn handle_agent_request(
-    relay: &SessionRelay,
-    multiplexer: &SessionMultiplexer,
-    db: &Database,
-    tx: &mpsc::Sender<Result<AgentEvent, Status>>,
-    client_id: &str,
+    ctx: &HandlerContext<'_>,
     session_id: &mut Option<String>,
     request: AgentRequest,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
@@ -27,12 +31,12 @@ pub async fn handle_agent_request(
 
     match request.request {
         Some(Request::Start(start)) => {
-            handle_start(relay, multiplexer, db, tx, client_id, session_id, start).await?;
+            handle_start(ctx, session_id, start).await?;
         }
         Some(Request::Message(msg)) => {
             if let Some(ref sid) = session_id {
                 info!(session_id = %sid, content_len = msg.content.len(), "User message");
-                relay
+                ctx.relay
                     .send_user_message(sid, &msg.content)
                     .await
                     .map_err(|e| e.to_string())?;
@@ -47,7 +51,7 @@ pub async fn handle_agent_request(
                 info!(session_id = %sid, request_id = %perm.request_id, granted, "Permission");
 
                 // Look up original tool input from pending map.
-                let original_input = if let Some(handle) = relay.get_handle(sid).await {
+                let original_input = if let Some(handle) = ctx.relay.get_handle(sid).await {
                     handle
                         .pending_permission_inputs
                         .write()
@@ -58,7 +62,7 @@ pub async fn handle_agent_request(
                     serde_json::Value::Object(Default::default())
                 };
 
-                relay
+                ctx.relay
                     .send_permission_response(sid, &perm.request_id, granted, &original_input)
                     .await
                     .map_err(|e| e.to_string())?;
@@ -70,7 +74,7 @@ pub async fn handle_agent_request(
                 let answers: HashMap<String, String> = qr.answers.into_iter().collect();
 
                 // Look up the original AskUserQuestion input from the pending map.
-                let original_input = if let Some(handle) = relay.get_handle(sid).await {
+                let original_input = if let Some(handle) = ctx.relay.get_handle(sid).await {
                     handle
                         .pending_question_inputs
                         .write()
@@ -81,7 +85,7 @@ pub async fn handle_agent_request(
                     serde_json::Value::Object(Default::default())
                 };
 
-                relay
+                ctx.relay
                     .send_question_response(sid, &qr.question_id, &answers, &original_input)
                     .await
                     .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> {
@@ -92,7 +96,10 @@ pub async fn handle_agent_request(
         Some(Request::Cancel(cancel)) => {
             if let Some(ref sid) = session_id {
                 info!(session_id = %sid, reason = %cancel.reason, "Cancel request");
-                relay.cancel_session(sid).await.map_err(|e| e.to_string())?;
+                ctx.relay
+                    .cancel_session(sid)
+                    .await
+                    .map_err(|e| e.to_string())?;
             }
         }
         Some(Request::Encrypted(_)) => {
@@ -109,13 +116,8 @@ pub async fn handle_agent_request(
 }
 
 /// Handle a StartConversation request.
-#[allow(clippy::too_many_arguments)]
 async fn handle_start(
-    relay: &SessionRelay,
-    multiplexer: &SessionMultiplexer,
-    db: &Database,
-    tx: &mpsc::Sender<Result<AgentEvent, Status>>,
-    client_id: &str,
+    ctx: &HandlerContext<'_>,
     session_id: &mut Option<String>,
     start: betcode_proto::v1::StartConversation,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
@@ -134,14 +136,15 @@ async fn handle_start(
     let working_dir: std::path::PathBuf = start.working_directory.clone().into();
 
     // Check if session already exists in DB; create if new
-    let resume_session = match db.get_session(&sid).await {
+    let resume_session = match ctx.db.get_session(&sid).await {
         Ok(existing) => {
             info!(session_id = %sid, "Resuming existing session");
             existing.claude_session_id.filter(|s| !s.is_empty())
         }
         Err(_) => {
             // New session - create in DB
-            db.create_session(&sid, &model, &start.working_directory)
+            ctx.db
+                .create_session(&sid, &model, &start.working_directory)
                 .await
                 .map_err(|e| e.to_string())?;
             info!(session_id = %sid, "Created new session in database");
@@ -150,13 +153,15 @@ async fn handle_start(
     };
 
     // Mark session as active
-    db.update_session_status(&sid, crate::storage::SessionStatus::Active)
+    ctx.db
+        .update_session_status(&sid, crate::storage::SessionStatus::Active)
         .await
         .map_err(|e| e.to_string())?;
 
     // Subscribe this client to the session's broadcast channel
-    let handle = multiplexer
-        .subscribe(&sid, client_id, "grpc")
+    let handle = ctx
+        .multiplexer
+        .subscribe(&sid, ctx.client_id, "grpc")
         .await
         .map_err(|e| e.to_string())?;
 
@@ -171,13 +176,13 @@ async fn handle_start(
         worktree_id: start.worktree_id,
     };
 
-    relay
+    ctx.relay
         .start_session(config)
         .await
         .map_err(|e| e.to_string())?;
 
     // Forward broadcast events to this client's gRPC stream
-    let tx_clone = tx.clone();
+    let tx_clone = ctx.tx.clone();
     let mut event_rx = handle.event_rx;
     tokio::spawn(async move {
         while let Ok(event) = event_rx.recv().await {

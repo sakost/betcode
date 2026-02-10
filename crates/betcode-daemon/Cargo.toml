@@ -39,3 +39,6 @@ notify.workspace = true
 [dev-dependencies]
 betcode-crypto = { workspace = true, features = ["test-utils"] }
 tempfile.workspace = true
+
+[lints]
+workspace = true

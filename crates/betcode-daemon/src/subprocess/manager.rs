@@ -81,7 +81,6 @@ struct ProcessState {
     child: Child,
     session_id: Option<String>,
     stdin_tx: mpsc::Sender<String>,
-    #[allow(dead_code)] // Used for future process info queries
     working_directory: PathBuf,
 }
 
@@ -271,10 +270,19 @@ impl SubprocessManager {
                     id: process_id.to_string(),
                 })?;
 
+        debug!(
+            process_id,
+            working_dir = %state.working_directory.display(),
+            "Terminating subprocess"
+        );
+
         // Try graceful shutdown first
         #[cfg(unix)]
         {
             if let Some(pid) = state.child.id() {
+                // SAFETY: pid is a valid process ID obtained from our own Child handle.
+                // kill(2) with SIGINT is safe to call on any owned subprocess.
+                #[allow(unsafe_code)]
                 let ret = unsafe { libc::kill(pid as i32, libc::SIGINT) };
                 if ret != 0 {
                     let err = std::io::Error::last_os_error();

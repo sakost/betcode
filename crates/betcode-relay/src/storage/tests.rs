@@ -1,6 +1,7 @@
 //! Storage layer tests for BetCode relay.
 
 use super::db::RelayDatabase;
+use super::queries_buffer::{BufferMessageParams, CertificateParams};
 use betcode_core::db::unix_timestamp;
 
 async fn test_db() -> RelayDatabase {
@@ -199,12 +200,28 @@ async fn buffer_and_drain_messages() {
         .unwrap();
     db.create_machine("m1", "laptop", "u1", "{}").await.unwrap();
 
-    db.buffer_message("m1", "r1", "Converse", b"data1", "{}", 0, 3600)
-        .await
-        .unwrap();
-    db.buffer_message("m1", "r2", "Converse", b"data2", "{}", 1, 3600)
-        .await
-        .unwrap();
+    db.buffer_message(&BufferMessageParams {
+        machine_id: "m1",
+        request_id: "r1",
+        method: "Converse",
+        payload: b"data1",
+        metadata: "{}",
+        priority: 0,
+        ttl_secs: 3600,
+    })
+    .await
+    .unwrap();
+    db.buffer_message(&BufferMessageParams {
+        machine_id: "m1",
+        request_id: "r2",
+        method: "Converse",
+        payload: b"data2",
+        metadata: "{}",
+        priority: 1,
+        ttl_secs: 3600,
+    })
+    .await
+    .unwrap();
 
     let messages = db.drain_buffer("m1").await.unwrap();
     assert_eq!(messages.len(), 2);
@@ -229,12 +246,28 @@ async fn cleanup_expired_buffer() {
         .unwrap();
     db.create_machine("m1", "laptop", "u1", "{}").await.unwrap();
 
-    db.buffer_message("m1", "r1", "Converse", b"old", "{}", 0, -1)
-        .await
-        .unwrap();
-    db.buffer_message("m1", "r2", "Converse", b"new", "{}", 0, 3600)
-        .await
-        .unwrap();
+    db.buffer_message(&BufferMessageParams {
+        machine_id: "m1",
+        request_id: "r1",
+        method: "Converse",
+        payload: b"old",
+        metadata: "{}",
+        priority: 0,
+        ttl_secs: -1,
+    })
+    .await
+    .unwrap();
+    db.buffer_message(&BufferMessageParams {
+        machine_id: "m1",
+        request_id: "r2",
+        method: "Converse",
+        payload: b"new",
+        metadata: "{}",
+        priority: 0,
+        ttl_secs: 3600,
+    })
+    .await
+    .unwrap();
 
     let cleaned = db.cleanup_expired_buffer().await.unwrap();
     assert_eq!(cleaned, 1);
@@ -253,15 +286,15 @@ async fn create_and_get_certificate() {
 
     let now = unix_timestamp();
     let cert = db
-        .create_certificate(
-            "c1",
-            Some("m1"),
-            "m1.betcode.dev",
-            "SN001",
-            now,
-            now + 86400,
-            "-----BEGIN CERTIFICATE-----\ntest\n-----END CERTIFICATE-----",
-        )
+        .create_certificate(&CertificateParams {
+            id: "c1",
+            machine_id: Some("m1"),
+            subject_cn: "m1.betcode.dev",
+            serial_number: "SN001",
+            not_before: now,
+            not_after: now + 86400,
+            pem_cert: "-----BEGIN CERTIFICATE-----\ntest\n-----END CERTIFICATE-----",
+        })
         .await
         .unwrap();
 
@@ -279,9 +312,17 @@ async fn revoke_certificate_hides_from_machine_certs() {
     db.create_machine("m1", "laptop", "u1", "{}").await.unwrap();
 
     let now = unix_timestamp();
-    db.create_certificate("c1", Some("m1"), "cn", "SN001", now, now + 86400, "pem")
-        .await
-        .unwrap();
+    db.create_certificate(&CertificateParams {
+        id: "c1",
+        machine_id: Some("m1"),
+        subject_cn: "cn",
+        serial_number: "SN001",
+        not_before: now,
+        not_after: now + 86400,
+        pem_cert: "pem",
+    })
+    .await
+    .unwrap();
 
     assert!(db.revoke_certificate("c1").await.unwrap());
 

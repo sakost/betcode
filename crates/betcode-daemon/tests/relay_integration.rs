@@ -1,3 +1,5 @@
+#![allow(clippy::unwrap_used)] // Integration tests use unwrap for brevity
+
 //! Integration tests for the relay pipeline and handler wiring.
 //!
 //! Tests the full flow: handler → relay → multiplexer → DB,

@@ -77,7 +77,7 @@ pub fn parse_help_output(
     help_text: &str,
     hardcoded: &[CommandEntry],
 ) -> (Vec<CommandEntry>, Vec<CommandEntry>) {
-    let re = Regex::new(r"/([a-zA-Z][\w-]*)").unwrap();
+    let re = Regex::new(r"/([a-zA-Z][\w-]*)").expect("static regex is valid");
 
     let mut known = Vec::new();
     let mut unknown = Vec::new();

@@ -32,3 +32,6 @@ jsonwebtoken = { version = "10.3.0", features = ["rust_crypto"] }
 argon2 = "0.5.3"
 sha2 = "0.10.9"
 rcgen = "0.14.7"
+
+[lints]
+workspace = true

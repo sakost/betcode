@@ -8,7 +8,7 @@
 //! - `ConfigService` for settings management
 //! - `Health` services for health checking
 
-#![allow(clippy::derive_partial_eq_without_eq)]
+#![allow(clippy::derive_partial_eq_without_eq)] // generated protobuf code
 
 /// BetCode v1 API definitions.
 ///

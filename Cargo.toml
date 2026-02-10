@@ -62,3 +62,28 @@ notify = "7"
 betcode-proto = { path = "crates/betcode-proto" }
 betcode-core = { path = "crates/betcode-core" }
 betcode-crypto = { path = "crates/betcode-crypto" }
+
+[workspace.lints.rust]
+unsafe_code = "deny"
+unused_must_use = "deny"
+elided_lifetimes_in_paths = "warn"
+
+[workspace.lints.clippy]
+# Enable strict groups as warn (priority -1 so individual overrides work)
+pedantic = { level = "warn", priority = -1 }
+nursery = { level = "warn", priority = -1 }
+
+# Deny outright bugs and bad patterns
+unwrap_used = "deny"
+expect_used = "warn"
+panic = "warn"
+todo = "deny"
+dbg_macro = "deny"
+print_stdout = "warn"
+print_stderr = "warn"
+
+# Allow known-noisy pedantic lints
+module_name_repetitions = "allow"
+must_use_candidate = "allow"
+missing_errors_doc = "allow"
+missing_docs_in_private_items = "allow"

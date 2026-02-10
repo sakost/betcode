@@ -12,3 +12,4 @@ mod tests;
 
 pub use db::{DatabaseError, RelayDatabase};
 pub use models::*;
+pub use queries_buffer::{BufferMessageParams, CertificateParams};

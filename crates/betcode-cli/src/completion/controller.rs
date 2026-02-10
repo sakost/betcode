@@ -42,7 +42,13 @@ pub fn detect_trigger(input: &str, cursor_pos: usize) -> Option<CompletionTrigge
     // Find the start of the current token by scanning backwards to whitespace
     let token_start = before_cursor
         .rfind(char::is_whitespace)
-        .map(|i| i + before_cursor[i..].chars().next().unwrap().len_utf8())
+        .map(|i| {
+            i + before_cursor[i..]
+                .chars()
+                .next()
+                .expect("rfind returned a valid char index")
+                .len_utf8()
+        })
         .unwrap_or(0);
 
     let token = &before_cursor[token_start..];

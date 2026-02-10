@@ -155,13 +155,16 @@ async fn main() -> anyhow::Result<()> {
         if cli_config.auth.is_none() {
             anyhow::bail!(
                 "Relay URL set but not logged in. Run: betcode --relay {} auth login -u <user> -p <pass>",
-                cli_config.relay_url.as_ref().unwrap()
+                cli_config.relay_url.as_ref().expect("relay_url checked above")
             );
         }
         if cli_config.active_machine.is_none() {
             anyhow::bail!(
                 "Relay URL set but no active machine. Run: betcode --relay {} machine list",
-                cli_config.relay_url.as_ref().unwrap()
+                cli_config
+                    .relay_url
+                    .as_ref()
+                    .expect("relay_url checked above")
             );
         }
     }
@@ -190,7 +193,7 @@ async fn main() -> anyhow::Result<()> {
     if cli.continue_session && session_id.is_none() {
         let working_dir = cli.working_dir.clone().unwrap_or_else(|| {
             std::env::current_dir()
-                .unwrap()
+                .expect("current directory must be accessible")
                 .to_string_lossy()
                 .to_string()
         });
@@ -215,7 +218,7 @@ async fn main() -> anyhow::Result<()> {
         // Headless mode
         let working_dir = cli.working_dir.unwrap_or_else(|| {
             std::env::current_dir()
-                .unwrap()
+                .expect("current directory must be accessible")
                 .to_string_lossy()
                 .to_string()
         });

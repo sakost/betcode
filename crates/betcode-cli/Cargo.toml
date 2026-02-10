@@ -31,3 +31,6 @@ thiserror.workspace = true
 uuid = { version = "1.20.0", features = ["v4"] }
 dirs = "6"
 unicode-width = "0.2.2"
+
+[lints]
+workspace = true

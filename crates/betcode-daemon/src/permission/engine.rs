@@ -13,8 +13,28 @@ use betcode_core::permissions::{PermissionAction, PermissionEngine};
 
 use crate::storage::Database;
 
-use super::pending::{PendingConfig, PendingManager, PendingRequest};
+use super::pending::{PendingConfig, PendingManager, PendingRequest, PendingRequestParams};
 use super::types::*;
+
+/// Parameters for a permission evaluation request.
+pub struct PermissionEvalRequest<'a> {
+    /// Session identifier.
+    pub session_id: &'a str,
+    /// Unique request identifier.
+    pub request_id: &'a str,
+    /// Tool name being requested.
+    pub tool_name: &'a str,
+    /// Human-readable description.
+    pub description: &'a str,
+    /// Tool input as JSON.
+    pub input_json: &'a str,
+    /// Optional file path context.
+    pub path: Option<&'a Path>,
+    /// Client that should respond (if any).
+    pub target_client: Option<&'a str>,
+    /// Whether the client is currently connected.
+    pub client_connected: bool,
+}
 
 /// Daemon permission engine with session grants and pending tracking.
 pub struct DaemonPermissionEngine {
@@ -50,21 +70,18 @@ impl DaemonPermissionEngine {
     }
 
     /// Evaluate a permission request.
-    #[allow(clippy::too_many_arguments)]
-    pub async fn evaluate(
-        &self,
-        session_id: &str,
-        request_id: &str,
-        tool_name: &str,
-        description: &str,
-        input_json: &str,
-        path: Option<&Path>,
-        target_client: Option<&str>,
-        client_connected: bool,
-    ) -> PermissionEvaluation {
+    pub async fn evaluate(&self, req: &PermissionEvalRequest<'_>) -> PermissionEvaluation {
         // 1. Check session grants first
-        if let Some(grant) = self.check_session_grant(session_id, tool_name, path).await {
-            debug!(session_id, tool_name, granted = grant, "Session grant hit");
+        if let Some(grant) = self
+            .check_session_grant(req.session_id, req.tool_name, req.path)
+            .await
+        {
+            debug!(
+                session_id = req.session_id,
+                tool_name = req.tool_name,
+                granted = grant,
+                "Session grant hit"
+            );
             return if grant {
                 PermissionEvaluation::Allowed { cached: true }
             } else {
@@ -74,9 +91,14 @@ impl DaemonPermissionEngine {
 
         // 2. Check database grants
         if let Some(ref db) = self.db {
-            if let Ok(Some(grant)) = db.get_permission_grant(session_id, tool_name).await {
+            if let Ok(Some(grant)) = db.get_permission_grant(req.session_id, req.tool_name).await {
                 let granted = grant.action == "allow";
-                debug!(session_id, tool_name, granted, "Database grant hit");
+                debug!(
+                    session_id = req.session_id,
+                    tool_name = req.tool_name,
+                    granted,
+                    "Database grant hit"
+                );
                 return if granted {
                     PermissionEvaluation::Allowed { cached: true }
                 } else {
@@ -86,34 +108,46 @@ impl DaemonPermissionEngine {
         }
 
         // 3. Evaluate against rules
-        let decision = self.rule_engine.evaluate(tool_name, path);
+        let decision = self.rule_engine.evaluate(req.tool_name, req.path);
 
         match decision.action {
             PermissionAction::Allow => {
-                debug!(session_id, tool_name, rule = ?decision.rule_id, "Rule allows");
+                debug!(
+                    session_id = req.session_id,
+                    tool_name = req.tool_name,
+                    rule = ?decision.rule_id,
+                    "Rule allows"
+                );
                 PermissionEvaluation::Allowed { cached: false }
             }
             PermissionAction::Deny => {
-                debug!(session_id, tool_name, rule = ?decision.rule_id, "Rule denies");
+                debug!(
+                    session_id = req.session_id,
+                    tool_name = req.tool_name,
+                    rule = ?decision.rule_id,
+                    "Rule denies"
+                );
                 PermissionEvaluation::Denied { cached: false }
             }
             PermissionAction::Ask | PermissionAction::AskSession => {
                 let request = self
                     .pending
-                    .create(
-                        request_id.to_string(),
-                        session_id.to_string(),
-                        tool_name.to_string(),
-                        description.to_string(),
-                        input_json.to_string(),
-                        target_client.map(String::from),
-                        client_connected,
-                    )
+                    .create(PendingRequestParams {
+                        request_id: req.request_id.to_string(),
+                        session_id: req.session_id.to_string(),
+                        tool_name: req.tool_name.to_string(),
+                        description: req.description.to_string(),
+                        input_json: req.input_json.to_string(),
+                        target_client: req.target_client.map(String::from),
+                        client_connected: req.client_connected,
+                    })
                     .await;
 
                 info!(
-                    session_id,
-                    request_id, tool_name, "Permission request pending"
+                    session_id = req.session_id,
+                    request_id = req.request_id,
+                    tool_name = req.tool_name,
+                    "Permission request pending"
                 );
                 PermissionEvaluation::Pending { request }
             }
@@ -254,16 +288,16 @@ mod tests {
         let engine = DaemonPermissionEngine::new(PermissionEngine::new(), PendingConfig::default());
 
         let result = engine
-            .evaluate(
-                "session-1",
-                "req-1",
-                "Read",
-                "Read file",
-                "{}",
-                None,
-                None,
-                true,
-            )
+            .evaluate(&PermissionEvalRequest {
+                session_id: "session-1",
+                request_id: "req-1",
+                tool_name: "Read",
+                description: "Read file",
+                input_json: "{}",
+                path: None,
+                target_client: None,
+                client_connected: true,
+            })
             .await;
 
         assert!(matches!(
@@ -277,16 +311,16 @@ mod tests {
         let engine = DaemonPermissionEngine::new(PermissionEngine::new(), PendingConfig::default());
 
         let result = engine
-            .evaluate(
-                "session-1",
-                "req-1",
-                "Bash",
-                "Run command",
-                "{}",
-                None,
-                None,
-                true,
-            )
+            .evaluate(&PermissionEvalRequest {
+                session_id: "session-1",
+                request_id: "req-1",
+                tool_name: "Bash",
+                description: "Run command",
+                input_json: "{}",
+                path: None,
+                target_client: None,
+                client_connected: true,
+            })
             .await;
 
         assert!(matches!(result, PermissionEvaluation::Pending { .. }));
@@ -301,16 +335,16 @@ mod tests {
             .await;
 
         let result = engine
-            .evaluate(
-                "session-1",
-                "req-1",
-                "Bash",
-                "Run command",
-                "{}",
-                None,
-                None,
-                true,
-            )
+            .evaluate(&PermissionEvalRequest {
+                session_id: "session-1",
+                request_id: "req-1",
+                tool_name: "Bash",
+                description: "Run command",
+                input_json: "{}",
+                path: None,
+                target_client: None,
+                client_connected: true,
+            })
             .await;
 
         assert!(matches!(
@@ -324,16 +358,16 @@ mod tests {
         let engine = DaemonPermissionEngine::new(PermissionEngine::new(), PendingConfig::default());
 
         engine
-            .evaluate(
-                "session-1",
-                "req-1",
-                "Bash",
-                "Run command",
-                "{}",
-                None,
-                None,
-                true,
-            )
+            .evaluate(&PermissionEvalRequest {
+                session_id: "session-1",
+                request_id: "req-1",
+                tool_name: "Bash",
+                description: "Run command",
+                input_json: "{}",
+                path: None,
+                target_client: None,
+                client_connected: true,
+            })
             .await;
 
         let response = PermissionResponse {
@@ -347,16 +381,16 @@ mod tests {
         assert!(result.granted);
 
         let result = engine
-            .evaluate(
-                "session-1",
-                "req-2",
-                "Bash",
-                "Another",
-                "{}",
-                None,
-                None,
-                true,
-            )
+            .evaluate(&PermissionEvalRequest {
+                session_id: "session-1",
+                request_id: "req-2",
+                tool_name: "Bash",
+                description: "Another",
+                input_json: "{}",
+                path: None,
+                target_client: None,
+                client_connected: true,
+            })
             .await;
 
         assert!(matches!(

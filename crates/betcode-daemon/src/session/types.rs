@@ -41,9 +41,7 @@ pub struct ClientHandle {
 
 /// Client state tracked by the multiplexer.
 pub(crate) struct ClientState {
-    #[allow(dead_code)] // Used for logging and future APIs
     pub client_id: String,
-    #[allow(dead_code)] // Used for logging and future APIs
     pub client_type: String,
     pub last_heartbeat: Instant,
     pub has_input_lock: bool,

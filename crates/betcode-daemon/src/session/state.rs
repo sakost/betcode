@@ -4,6 +4,7 @@ use std::collections::HashMap;
 use std::time::Instant;
 
 use tokio::sync::broadcast;
+use tracing::debug;
 
 use betcode_proto::v1::AgentEvent;
 
@@ -12,7 +13,6 @@ use super::types::ClientState;
 /// Session state with connected clients.
 pub(crate) struct SessionState {
     /// Session identifier.
-    #[allow(dead_code)] // Used for logging and future APIs
     pub session_id: String,
     /// Broadcast sender for events.
     pub event_tx: broadcast::Sender<AgentEvent>,
@@ -42,6 +42,12 @@ impl SessionState {
     }
 
     pub fn add_client(&mut self, client_id: String, client_type: String) {
+        debug!(
+            session_id = %self.session_id,
+            client_id = %client_id,
+            client_type = %client_type,
+            "Adding client to session"
+        );
         let client_state = ClientState {
             client_id: client_id.clone(),
             client_type,
@@ -53,6 +59,11 @@ impl SessionState {
 
     pub fn remove_client(&mut self, client_id: &str) -> bool {
         if self.clients.remove(client_id).is_some() {
+            debug!(
+                session_id = %self.session_id,
+                client_id = %client_id,
+                "Removed client from session"
+            );
             // Release input lock if this client held it
             if self.input_lock_holder.as_deref() == Some(client_id) {
                 self.input_lock_holder = None;

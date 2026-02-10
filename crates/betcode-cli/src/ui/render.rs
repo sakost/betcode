@@ -261,7 +261,43 @@ fn draw_messages(frame: &mut Frame, app: &mut App, area: Rect) {
 }
 
 fn draw_input(frame: &mut Frame, app: &App, area: Rect) {
-    let input = Paragraph::new(app.input.as_str())
+    // Build input line with optional ghost text suffix inserted at cursor position
+    let input_line = if let Some(ref ghost) = app.completion_state.ghost_text {
+        use crate::completion::controller::detect_trigger;
+        use crate::completion::ghost::ghost_suffix;
+
+        let query = detect_trigger(&app.input, app.cursor_pos).and_then(|t| match t {
+            crate::completion::controller::CompletionTrigger::Command { query } => Some(query),
+            crate::completion::controller::CompletionTrigger::Agent { query } => Some(query),
+            crate::completion::controller::CompletionTrigger::File { query } => Some(query),
+            _ => None,
+        });
+
+        // Only show ghost text when cursor is at the end of the current token
+        let pos = app.cursor_pos.min(app.input.len());
+        let at_token_end =
+            pos == app.input.len() || app.input[pos..].starts_with(char::is_whitespace);
+
+        if at_token_end {
+            if let Some(suffix) = query.as_deref().and_then(|q| ghost_suffix(q, ghost)) {
+                let before = &app.input[..pos];
+                let after = &app.input[pos..];
+                Line::from(vec![
+                    Span::raw(before.to_string()),
+                    Span::styled(suffix.to_string(), Style::default().fg(Color::DarkGray)),
+                    Span::raw(after.to_string()),
+                ])
+            } else {
+                Line::from(app.input.as_str())
+            }
+        } else {
+            Line::from(app.input.as_str())
+        }
+    } else {
+        Line::from(app.input.as_str())
+    };
+
+    let input = Paragraph::new(input_line)
         .block(
             Block::default()
                 .borders(Borders::ALL)
@@ -401,7 +437,12 @@ fn compute_word_wrap_breaks(text: &str, max_width: u16) -> Vec<usize> {
                 tok_width += ch_w;
             }
             Some(_) => {
-                tokens.push((tok_start, bi, tok_width, tok_is_ws.unwrap()));
+                tokens.push((
+                    tok_start,
+                    bi,
+                    tok_width,
+                    tok_is_ws.expect("tok_is_ws is Some in this match arm"),
+                ));
                 tok_start = bi;
                 tok_width = ch_w;
                 tok_is_ws = Some(is_ws);
@@ -457,7 +498,7 @@ fn compute_word_wrap_breaks(text: &str, max_width: u16) -> Vec<usize> {
                         }
                     }
                     // Re-compute line_width for the new line from the break point
-                    let bp = *breaks.last().unwrap();
+                    let bp = *breaks.last().expect("breaks is non-empty after push");
                     // The new line includes the remaining whitespace + the word
                     let remaining_ws: u16 = text[bp..word_start]
                         .chars()

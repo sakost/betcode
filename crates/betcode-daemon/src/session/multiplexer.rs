@@ -200,16 +200,16 @@ impl SessionMultiplexer {
         let mut removed = Vec::new();
 
         for (session_id, session) in sessions.iter_mut() {
-            let stale: Vec<String> = session
+            let stale: Vec<(String, String)> = session
                 .clients
                 .iter()
                 .filter(|(_, c)| c.last_heartbeat.elapsed() > self.config.heartbeat_timeout)
-                .map(|(id, _)| id.clone())
+                .map(|(_, c)| (c.client_id.clone(), c.client_type.clone()))
                 .collect();
 
-            for client_id in stale {
+            for (client_id, client_type) in stale {
                 session.remove_client(&client_id);
-                warn!(session_id, client_id, "Removed stale client");
+                warn!(session_id, client_id, client_type, "Removed stale client");
                 removed.push((session_id.clone(), client_id));
             }
         }

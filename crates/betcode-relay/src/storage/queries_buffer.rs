@@ -4,35 +4,50 @@ use super::db::{DatabaseError, RelayDatabase};
 use super::models::*;
 use betcode_core::db::unix_timestamp;
 
+/// Parameters for buffering a message.
+pub struct BufferMessageParams<'a> {
+    pub machine_id: &'a str,
+    pub request_id: &'a str,
+    pub method: &'a str,
+    pub payload: &'a [u8],
+    pub metadata: &'a str,
+    pub priority: i64,
+    pub ttl_secs: i64,
+}
+
+/// Parameters for creating a certificate.
+pub struct CertificateParams<'a> {
+    pub id: &'a str,
+    pub machine_id: Option<&'a str>,
+    pub subject_cn: &'a str,
+    pub serial_number: &'a str,
+    pub not_before: i64,
+    pub not_after: i64,
+    pub pem_cert: &'a str,
+}
+
 impl RelayDatabase {
     // =========================================================================
     // Message buffer queries
     // =========================================================================
 
     /// Buffer a request for an offline machine.
-    #[allow(clippy::too_many_arguments)]
     pub async fn buffer_message(
         &self,
-        machine_id: &str,
-        request_id: &str,
-        method: &str,
-        payload: &[u8],
-        metadata: &str,
-        priority: i64,
-        ttl_secs: i64,
+        params: &BufferMessageParams<'_>,
     ) -> Result<i64, DatabaseError> {
         let now = unix_timestamp();
-        let expires_at = now + ttl_secs;
+        let expires_at = now + params.ttl_secs;
 
         let result = sqlx::query(
             "INSERT INTO message_buffer (machine_id, request_id, method, payload, metadata, priority, expires_at, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
         )
-        .bind(machine_id)
-        .bind(request_id)
-        .bind(method)
-        .bind(payload)
-        .bind(metadata)
-        .bind(priority)
+        .bind(params.machine_id)
+        .bind(params.request_id)
+        .bind(params.method)
+        .bind(params.payload)
+        .bind(params.metadata)
+        .bind(params.priority)
         .bind(expires_at)
         .bind(now)
         .execute(self.pool())
@@ -98,34 +113,27 @@ impl RelayDatabase {
     // =========================================================================
 
     /// Store a certificate record.
-    #[allow(clippy::too_many_arguments)]
     pub async fn create_certificate(
         &self,
-        id: &str,
-        machine_id: Option<&str>,
-        subject_cn: &str,
-        serial_number: &str,
-        not_before: i64,
-        not_after: i64,
-        pem_cert: &str,
+        params: &CertificateParams<'_>,
     ) -> Result<Certificate, DatabaseError> {
         let now = unix_timestamp();
 
         sqlx::query(
             "INSERT INTO certificates (id, machine_id, subject_cn, serial_number, not_before, not_after, pem_cert, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
         )
-        .bind(id)
-        .bind(machine_id)
-        .bind(subject_cn)
-        .bind(serial_number)
-        .bind(not_before)
-        .bind(not_after)
-        .bind(pem_cert)
+        .bind(params.id)
+        .bind(params.machine_id)
+        .bind(params.subject_cn)
+        .bind(params.serial_number)
+        .bind(params.not_before)
+        .bind(params.not_after)
+        .bind(params.pem_cert)
         .bind(now)
         .execute(self.pool())
         .await?;
 
-        self.get_certificate(id).await
+        self.get_certificate(params.id).await
     }
 
     /// Get a certificate by ID.

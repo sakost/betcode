@@ -15,7 +15,7 @@ use betcode_proto::v1::{
     ListSessionsResponse, ResumeSessionRequest, SessionSummary,
 };
 
-use super::handler::handle_agent_request;
+use super::handler::{handle_agent_request, HandlerContext};
 use crate::relay::SessionRelay;
 use crate::session::SessionMultiplexer;
 use crate::storage::Database;
@@ -68,16 +68,15 @@ impl AgentService for AgentServiceImpl {
             while let Some(result) = in_stream.next().await {
                 match result {
                     Ok(req) => {
-                        if let Err(e) = handle_agent_request(
-                            &relay,
-                            &multiplexer,
-                            &db,
-                            &tx,
-                            &client_id,
-                            &mut session_id,
-                            req,
-                        )
-                        .await
+                        let handler_ctx = HandlerContext {
+                            relay: &relay,
+                            multiplexer: &multiplexer,
+                            db: &db,
+                            tx: &tx,
+                            client_id: &client_id,
+                        };
+                        if let Err(e) =
+                            handle_agent_request(&handler_ctx, &mut session_id, req).await
                         {
                             error!(?e, "Error handling agent request");
                             let _ = tx.send(Err(Status::internal(e.to_string()))).await;

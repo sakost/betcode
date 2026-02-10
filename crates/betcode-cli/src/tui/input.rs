@@ -247,6 +247,139 @@ mod tests {
     }
 }
 
+/// Replace the current token (at cursor) with `replacement`, updating cursor position.
+fn replace_token(app: &mut App, replacement: &str) {
+    let mut pos = app.cursor_pos.min(app.input.len());
+    // Clamp to nearest char boundary to avoid panics on multi-byte UTF-8.
+    while pos > 0 && !app.input.is_char_boundary(pos) {
+        pos -= 1;
+    }
+    let before_cursor = &app.input[..pos];
+
+    // Find the start of the current token by scanning backwards to whitespace
+    let token_start = before_cursor
+        .rfind(char::is_whitespace)
+        .map(|i| {
+            i + before_cursor[i..]
+                .chars()
+                .next()
+                .expect("rfind returned a valid char index")
+                .len_utf8()
+        })
+        .unwrap_or(0);
+
+    // Find the end of the current token by scanning forward to whitespace
+    let token_end = app.input[pos..]
+        .find(char::is_whitespace)
+        .map(|i| pos + i)
+        .unwrap_or(app.input.len());
+
+    app.input.replace_range(token_start..token_end, replacement);
+    app.cursor_pos = token_start + replacement.len();
+}
+
+/// Clear the conversation: wipe TUI messages and start a fresh session.
+async fn clear_session(app: &mut App, tx: &mpsc::Sender<AgentRequest>) {
+    use crate::app::MessageRole;
+
+    app.messages.clear();
+    app.agent_busy = false;
+
+    // Generate a new session ID and send a StartConversation to reset context.
+    let new_sid = uuid::Uuid::new_v4().to_string();
+    let wd = std::env::current_dir()
+        .map(|p| p.to_string_lossy().to_string())
+        .unwrap_or_default();
+    let model = app.model.clone();
+
+    let send_result = tx
+        .send(AgentRequest {
+            request: Some(betcode_proto::v1::agent_request::Request::Start(
+                betcode_proto::v1::StartConversation {
+                    session_id: new_sid.clone(),
+                    working_directory: wd,
+                    model,
+                    allowed_tools: Vec::new(),
+                    plan_mode: false,
+                    worktree_id: String::new(),
+                    metadata: Default::default(),
+                },
+            )),
+        })
+        .await;
+
+    if send_result.is_err() {
+        app.add_system_message(
+            MessageRole::System,
+            "Failed to reset session — agent stream closed.".to_string(),
+        );
+    } else {
+        app.session_id = Some(new_sid.clone());
+        app.status = format!("Connected | Session: {}", &new_sid[..8.min(new_sid.len())]);
+        app.add_system_message(MessageRole::System, "Conversation cleared.".to_string());
+    }
+    app.scroll_to_bottom();
+}
+
+/// Display help message listing all available commands.
+fn show_help(app: &mut App) {
+    use crate::app::MessageRole;
+
+    let mut lines = Vec::new();
+    lines.push("BetCode CLI - Available Commands".to_string());
+    lines.push(String::new());
+
+    // Collect commands grouped by category
+    let mut service_cmds = Vec::new();
+    let mut cc_cmds = Vec::new();
+    let mut plugin_cmds = Vec::new();
+
+    for cmd in app.command_cache.all() {
+        let entry = format!("  /{:<20} {}", cmd.name, cmd.description);
+        match cmd.category.as_str() {
+            "Service" => service_cmds.push(entry),
+            "ClaudeCode" => cc_cmds.push(entry),
+            "Plugin" => plugin_cmds.push(entry),
+            _ => plugin_cmds.push(entry),
+        }
+    }
+
+    // Always include built-in CLI commands not from the cache
+    lines.push("Built-in:".to_string());
+    lines.push("  /exit                 Exit the CLI".to_string());
+    lines.push("  /help                 Show this help message".to_string());
+    lines.push("  /clear                Clear conversation and reset context".to_string());
+
+    if !service_cmds.is_empty() {
+        lines.push(String::new());
+        lines.push("Service:".to_string());
+        lines.extend(service_cmds);
+    }
+
+    if !cc_cmds.is_empty() {
+        lines.push(String::new());
+        lines.push("Claude Code:".to_string());
+        lines.extend(cc_cmds);
+    }
+
+    if !plugin_cmds.is_empty() {
+        lines.push(String::new());
+        lines.push("Plugins:".to_string());
+        lines.extend(plugin_cmds);
+    }
+
+    lines.push(String::new());
+    lines.push("Keyboard shortcuts:".to_string());
+    lines.push("  Ctrl+C               Quit".to_string());
+    lines.push("  Ctrl+I               Toggle status panel".to_string());
+    lines.push("  Tab                  Toggle completion popup".to_string());
+    lines.push("  Shift+Up/Down        Scroll messages".to_string());
+    lines.push("  PageUp/PageDown      Scroll messages (page)".to_string());
+
+    app.add_system_message(MessageRole::System, lines.join("\n"));
+    app.scroll_to_bottom();
+}
+
 /// Handle a key press in normal input mode.
 async fn handle_input_key(
     app: &mut App,
@@ -257,8 +390,28 @@ async fn handle_input_key(
     let completion_action = handle_completion_key(app, key);
     match completion_action {
         CompletionAction::Accept(text) => {
-            app.input = text;
-            app.cursor_pos = app.input.len();
+            // Replace only the trigger token, preserving the prefix character(s).
+            use crate::completion::controller::{detect_trigger, CompletionTrigger};
+            let trigger = detect_trigger(&app.input, app.cursor_pos);
+            match trigger {
+                Some(CompletionTrigger::Command { .. }) => {
+                    replace_token(app, &format!("/{}", text));
+                }
+                Some(CompletionTrigger::Agent { ref query })
+                    if app.input[..app.cursor_pos].ends_with(&format!("@@{}", query)) =>
+                {
+                    replace_token(app, &format!("@@{}", text));
+                }
+                Some(CompletionTrigger::Agent { .. }) => {
+                    replace_token(app, &format!("@{}", text));
+                }
+                Some(CompletionTrigger::File { .. }) => {
+                    replace_token(app, &format!("@{}", text));
+                }
+                _ => {
+                    replace_token(app, &text);
+                }
+            }
             app.update_completion_state();
             return;
         }
@@ -275,17 +428,73 @@ async fn handle_input_key(
     match key.code {
         KeyCode::Enter => {
             if let Some(text) = app.submit_input() {
-                let _ = tx
-                    .send(AgentRequest {
-                        request: Some(betcode_proto::v1::agent_request::Request::Message(
-                            betcode_proto::v1::UserMessage {
-                                content: text,
-                                attachments: Vec::new(),
-                            },
-                        )),
-                    })
-                    .await;
-                app.agent_busy = true;
+                let trimmed = text.trim();
+                if let Some(cmd_body) = trimmed.strip_prefix('/') {
+                    // Slash command — dispatch based on command category.
+                    let mut parts = cmd_body.splitn(2, char::is_whitespace);
+                    let command = parts.next().unwrap_or("").to_string();
+                    let args: Vec<String> = parts
+                        .next()
+                        .map(|a| a.split_whitespace().map(|s| s.to_string()).collect())
+                        .unwrap_or_default();
+
+                    // Determine routing based on command category from cache.
+                    let is_service = app
+                        .command_cache
+                        .find_by_name(&command)
+                        .is_some_and(|c| c.category == "Service");
+
+                    match command.as_str() {
+                        "exit" => {
+                            app.should_quit = true;
+                        }
+                        "help" => {
+                            show_help(app);
+                        }
+                        "clear" => {
+                            clear_session(app, tx).await;
+                        }
+                        _ if is_service => {
+                            // Service commands (cd, pwd, exit-daemon, etc.)
+                            // executed on the daemon via CommandService.
+                            if let Some(cmd_tx) = &app.service_command_tx {
+                                let _ =
+                                    cmd_tx.try_send(super::ServiceCommandExec { command, args });
+                            }
+                        }
+                        _ => {
+                            // Claude Code / Plugin / unknown commands:
+                            // forward as user message to the agent stream
+                            // (the Claude subprocess handles them).
+                            let _ = tx
+                                .send(AgentRequest {
+                                    request: Some(
+                                        betcode_proto::v1::agent_request::Request::Message(
+                                            betcode_proto::v1::UserMessage {
+                                                content: trimmed.to_string(),
+                                                attachments: Vec::new(),
+                                            },
+                                        ),
+                                    ),
+                                })
+                                .await;
+                            app.agent_busy = true;
+                        }
+                    }
+                } else {
+                    // Regular user message
+                    let _ = tx
+                        .send(AgentRequest {
+                            request: Some(betcode_proto::v1::agent_request::Request::Message(
+                                betcode_proto::v1::UserMessage {
+                                    content: text,
+                                    attachments: Vec::new(),
+                                },
+                            )),
+                        })
+                        .await;
+                    app.agent_busy = true;
+                }
                 app.scroll_to_bottom();
             }
         }

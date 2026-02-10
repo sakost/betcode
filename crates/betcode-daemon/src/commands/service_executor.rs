@@ -95,8 +95,8 @@ impl ServiceExecutor {
             .spawn()
             .context("Failed to spawn shell process")?;
 
-        let stdout = child.stdout.take().unwrap();
-        let stderr = child.stderr.take().unwrap();
+        let stdout = child.stdout.take().expect("stdout is piped");
+        let stderr = child.stderr.take().expect("stderr is piped");
 
         let tx_out = output_tx.clone();
         let stdout_handle = tokio::spawn(async move {

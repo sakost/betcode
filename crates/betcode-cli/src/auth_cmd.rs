@@ -103,7 +103,10 @@ pub async fn ensure_valid_token(config: &mut CliConfig) -> anyhow::Result<()> {
         .map_err(|e| anyhow::anyhow!("Token refresh failed (re-login required): {}", e.message()))?
         .into_inner();
 
-    let auth_mut = config.auth.as_mut().unwrap();
+    let auth_mut = config
+        .auth
+        .as_mut()
+        .expect("auth was verified present above");
     auth_mut.access_token = resp.access_token;
     auth_mut.refresh_token = resp.refresh_token;
     config.save()?;
@@ -205,7 +208,10 @@ async fn status(config: &mut CliConfig) -> anyhow::Result<()> {
     }
 
     // Print local credentials first (before mutable borrow for token refresh)
-    let auth = config.auth.as_ref().unwrap();
+    let auth = config
+        .auth
+        .as_ref()
+        .expect("auth checked via is_none() guard above");
     writeln!(out, "Logged in as: {}", auth.username)?;
     writeln!(out, "User ID: {}", auth.user_id)?;
     if let Some(url) = &config.relay_url {

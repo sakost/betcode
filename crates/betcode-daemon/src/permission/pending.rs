@@ -72,6 +72,24 @@ impl PendingRequest {
     }
 }
 
+/// Parameters for creating a new pending request.
+pub struct PendingRequestParams {
+    /// Unique request ID.
+    pub request_id: String,
+    /// Session this request belongs to.
+    pub session_id: String,
+    /// Tool name being requested.
+    pub tool_name: String,
+    /// Tool description.
+    pub description: String,
+    /// Tool input (as JSON string).
+    pub input_json: String,
+    /// Client that should respond (if any).
+    pub target_client: Option<String>,
+    /// Whether the client is connected.
+    pub client_connected: bool,
+}
+
 /// Manager for pending permission requests.
 pub struct PendingManager {
     /// Pending requests keyed by request_id.
@@ -105,33 +123,23 @@ impl PendingManager {
     }
 
     /// Create and add a new pending request.
-    #[allow(clippy::too_many_arguments)]
-    pub async fn create(
-        &self,
-        request_id: String,
-        session_id: String,
-        tool_name: String,
-        description: String,
-        input_json: String,
-        target_client: Option<String>,
-        client_connected: bool,
-    ) -> PendingRequest {
-        let timeout = if client_connected {
+    pub async fn create(&self, params: PendingRequestParams) -> PendingRequest {
+        let timeout = if params.client_connected {
             self.config.connected_timeout
         } else {
             self.config.disconnected_timeout
         };
 
         let request = PendingRequest {
-            request_id: request_id.clone(),
-            session_id,
-            tool_name,
-            description,
-            input_json,
-            target_client,
+            request_id: params.request_id,
+            session_id: params.session_id,
+            tool_name: params.tool_name,
+            description: params.description,
+            input_json: params.input_json,
+            target_client: params.target_client,
             created_at: Instant::now(),
             expires_at: Instant::now() + timeout,
-            client_connected,
+            client_connected: params.client_connected,
         };
 
         self.add(request.clone()).await;
@@ -216,15 +224,15 @@ mod tests {
         let manager = PendingManager::with_defaults();
 
         let request = manager
-            .create(
-                "req-1".to_string(),
-                "session-1".to_string(),
-                "Bash".to_string(),
-                "Run ls command".to_string(),
-                r#"{"command": "ls"}"#.to_string(),
-                Some("client-1".to_string()),
-                true,
-            )
+            .create(PendingRequestParams {
+                request_id: "req-1".to_string(),
+                session_id: "session-1".to_string(),
+                tool_name: "Bash".to_string(),
+                description: "Run ls command".to_string(),
+                input_json: r#"{"command": "ls"}"#.to_string(),
+                target_client: Some("client-1".to_string()),
+                client_connected: true,
+            })
             .await;
 
         assert_eq!(request.request_id, "req-1");
@@ -237,15 +245,15 @@ mod tests {
         let manager = PendingManager::with_defaults();
 
         manager
-            .create(
-                "req-1".to_string(),
-                "session-1".to_string(),
-                "Bash".to_string(),
-                "desc".to_string(),
-                "{}".to_string(),
-                None,
-                true,
-            )
+            .create(PendingRequestParams {
+                request_id: "req-1".to_string(),
+                session_id: "session-1".to_string(),
+                tool_name: "Bash".to_string(),
+                description: "desc".to_string(),
+                input_json: "{}".to_string(),
+                target_client: None,
+                client_connected: true,
+            })
             .await;
 
         assert!(manager.contains("req-1").await);
@@ -259,37 +267,37 @@ mod tests {
         let manager = PendingManager::with_defaults();
 
         manager
-            .create(
-                "req-1".to_string(),
-                "session-1".to_string(),
-                "Bash".to_string(),
-                "".to_string(),
-                "{}".to_string(),
-                None,
-                true,
-            )
+            .create(PendingRequestParams {
+                request_id: "req-1".to_string(),
+                session_id: "session-1".to_string(),
+                tool_name: "Bash".to_string(),
+                description: String::new(),
+                input_json: "{}".to_string(),
+                target_client: None,
+                client_connected: true,
+            })
             .await;
         manager
-            .create(
-                "req-2".to_string(),
-                "session-1".to_string(),
-                "Write".to_string(),
-                "".to_string(),
-                "{}".to_string(),
-                None,
-                true,
-            )
+            .create(PendingRequestParams {
+                request_id: "req-2".to_string(),
+                session_id: "session-1".to_string(),
+                tool_name: "Write".to_string(),
+                description: String::new(),
+                input_json: "{}".to_string(),
+                target_client: None,
+                client_connected: true,
+            })
             .await;
         manager
-            .create(
-                "req-3".to_string(),
-                "session-2".to_string(),
-                "Edit".to_string(),
-                "".to_string(),
-                "{}".to_string(),
-                None,
-                true,
-            )
+            .create(PendingRequestParams {
+                request_id: "req-3".to_string(),
+                session_id: "session-2".to_string(),
+                tool_name: "Edit".to_string(),
+                description: String::new(),
+                input_json: "{}".to_string(),
+                target_client: None,
+                client_connected: true,
+            })
             .await;
 
         let session1_requests = manager.get_for_session("session-1").await;
@@ -305,15 +313,15 @@ mod tests {
         let manager = PendingManager::new(config);
 
         manager
-            .create(
-                "req-1".to_string(),
-                "session-1".to_string(),
-                "Bash".to_string(),
-                "".to_string(),
-                "{}".to_string(),
-                None,
-                true,
-            )
+            .create(PendingRequestParams {
+                request_id: "req-1".to_string(),
+                session_id: "session-1".to_string(),
+                tool_name: "Bash".to_string(),
+                description: String::new(),
+                input_json: "{}".to_string(),
+                target_client: None,
+                client_connected: true,
+            })
             .await;
 
         // Wait for expiry
