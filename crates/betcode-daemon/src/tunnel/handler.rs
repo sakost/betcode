@@ -848,7 +848,11 @@ impl TunnelRequestHandler {
                         // Tunnel-layer wrapping: skip tunnel-layer encryption when
                         // app-layer is active (same key, redundant work). Pass None
                         // so the bytes go through as a passthrough EncryptedPayload.
-                        let tunnel_crypto = if crypto.is_some() { None } else { crypto.as_deref() };
+                        let tunnel_crypto = if crypto.is_some() {
+                            None
+                        } else {
+                            crypto.as_deref()
+                        };
                         let encrypted = match make_encrypted_payload(tunnel_crypto, &wire_bytes) {
                             Ok(enc) => enc,
                             Err(e) => {

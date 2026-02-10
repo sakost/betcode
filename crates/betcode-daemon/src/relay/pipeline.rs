@@ -89,10 +89,8 @@ impl SessionRelay {
         let start_seq = self.db.max_message_sequence(&session_id).await.unwrap_or(0) as u64;
         let sequence_counter = Arc::new(AtomicU64::new(start_seq));
 
-        let pending_question_inputs =
-            Arc::new(tokio::sync::RwLock::new(HashMap::new()));
-        let pending_permission_inputs =
-            Arc::new(tokio::sync::RwLock::new(HashMap::new()));
+        let pending_question_inputs = Arc::new(tokio::sync::RwLock::new(HashMap::new()));
+        let pending_permission_inputs = Arc::new(tokio::sync::RwLock::new(HashMap::new()));
 
         let relay_handle = RelayHandle {
             process_id: process_handle.id.clone(),
@@ -349,10 +347,10 @@ fn spawn_stdout_pipeline(
                     event.event
                 {
                     if let Some(input) = bridge.take_question_input(&q.question_id) {
-                        pending_question_inputs.write().await.insert(
-                            q.question_id.clone(),
-                            input,
-                        );
+                        pending_question_inputs
+                            .write()
+                            .await
+                            .insert(q.question_id.clone(), input);
                     }
                 }
                 // Transfer pending permission inputs from bridge → shared map
@@ -360,10 +358,10 @@ fn spawn_stdout_pipeline(
                     event.event
                 {
                     if let Some(input) = bridge.take_permission_input(&p.request_id) {
-                        pending_permission_inputs.write().await.insert(
-                            p.request_id.clone(),
-                            input,
-                        );
+                        pending_permission_inputs
+                            .write()
+                            .await
+                            .insert(p.request_id.clone(), input);
                     }
                 }
             }
@@ -705,7 +703,10 @@ mod tests {
         // Must have behavior: "allow" with updatedInput containing answers
         let response = &parsed["response"]["response"];
         assert_eq!(response["behavior"], "allow");
-        assert_eq!(response["updatedInput"]["answers"]["Which database?"], "SQLite");
+        assert_eq!(
+            response["updatedInput"]["answers"]["Which database?"],
+            "SQLite"
+        );
 
         // updatedInput must also preserve the original questions
         assert!(response["updatedInput"]["questions"].is_array());

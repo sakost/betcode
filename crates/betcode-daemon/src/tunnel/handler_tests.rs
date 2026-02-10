@@ -909,11 +909,7 @@ use betcode_proto::v1::AgentEvent;
 
 /// Build a tunnel-layer encrypted converse start frame with app-layer encryption.
 /// This is what the CLI actually sends: StartConversation → app-encrypt → serialize → tunnel-encrypt.
-fn encrypted_converse_frame(
-    rid: &str,
-    session_id: &str,
-    crypto: &CryptoSession,
-) -> TunnelFrame {
+fn encrypted_converse_frame(rid: &str, session_id: &str, crypto: &CryptoSession) -> TunnelFrame {
     let start_req = AgentRequest {
         request: Some(betcode_proto::v1::agent_request::Request::Start(
             betcode_proto::v1::StartConversation {
@@ -933,10 +929,7 @@ fn encrypted_converse_frame(
 }
 
 /// Build an AgentRequest with the Encrypted oneof variant wrapping a real request.
-fn make_app_encrypted_agent_request(
-    inner: &AgentRequest,
-    session: &CryptoSession,
-) -> AgentRequest {
+fn make_app_encrypted_agent_request(inner: &AgentRequest, session: &CryptoSession) -> AgentRequest {
     let mut buf = Vec::new();
     inner.encode(&mut buf).unwrap();
     let enc = session.encrypt(&buf).unwrap();
@@ -955,8 +948,12 @@ async fn encrypted_agent_request_is_decrypted() {
     let (h, client_crypto, _rx) = make_handler_with_crypto().await;
 
     // Start a converse session (app-layer + tunnel-layer encrypted, as the CLI does)
-    h.handle_frame(encrypted_converse_frame("enc-conv1", "enc-stream-1", &client_crypto))
-        .await;
+    h.handle_frame(encrypted_converse_frame(
+        "enc-conv1",
+        "enc-stream-1",
+        &client_crypto,
+    ))
+    .await;
     assert!(h.has_active_stream("enc-conv1").await);
 
     // Verify the pending_config exists before we send the message
@@ -1024,8 +1021,12 @@ async fn encrypted_agent_request_with_wrong_key_rejected() {
     let (h, client_crypto, _rx) = make_handler_with_crypto().await;
 
     // Start a converse session (app-layer + tunnel-layer encrypted)
-    h.handle_frame(encrypted_converse_frame("enc-conv3", "enc-stream-3", &client_crypto))
-        .await;
+    h.handle_frame(encrypted_converse_frame(
+        "enc-conv3",
+        "enc-stream-3",
+        &client_crypto,
+    ))
+    .await;
     assert!(h.has_active_stream("enc-conv3").await);
 
     // Encrypt with a DIFFERENT session
@@ -1076,8 +1077,12 @@ async fn encrypted_agent_request_with_corrupted_data_rejected() {
     let (h, client_crypto, _rx) = make_handler_with_crypto().await;
 
     // Start a converse session (app-layer + tunnel-layer encrypted)
-    h.handle_frame(encrypted_converse_frame("enc-conv4", "enc-stream-4", &client_crypto))
-        .await;
+    h.handle_frame(encrypted_converse_frame(
+        "enc-conv4",
+        "enc-stream-4",
+        &client_crypto,
+    ))
+    .await;
     assert!(h.has_active_stream("enc-conv4").await);
 
     // Create a valid encrypted request, then corrupt it
@@ -1137,8 +1142,12 @@ async fn plaintext_agent_request_rejected_when_crypto_active() {
     let (h, client_crypto, _rx) = make_handler_with_crypto().await;
 
     // Start a valid converse session (properly encrypted)
-    h.handle_frame(encrypted_converse_frame("da-conv1", "da-stream-1", &client_crypto))
-        .await;
+    h.handle_frame(encrypted_converse_frame(
+        "da-conv1",
+        "da-stream-1",
+        &client_crypto,
+    ))
+    .await;
     assert!(h.has_active_stream("da-conv1").await);
 
     // Send a plaintext UserMessage (NOT app-layer encrypted) via tunnel-encrypted frame
@@ -1201,9 +1210,16 @@ async fn event_forwarder_encrypts_when_crypto_active() {
     let (h, client_crypto, mut rx) = make_handler_with_crypto().await;
 
     // Create a session in DB + start converse (app-layer + tunnel-layer encrypted)
-    h.db().create_session("ef-enc1", "model", "/tmp").await.unwrap();
-    h.handle_frame(encrypted_converse_frame("ef-conv1", "ef-enc1", &client_crypto))
-        .await;
+    h.db()
+        .create_session("ef-enc1", "model", "/tmp")
+        .await
+        .unwrap();
+    h.handle_frame(encrypted_converse_frame(
+        "ef-conv1",
+        "ef-enc1",
+        &client_crypto,
+    ))
+    .await;
 
     // Broadcast an event into the session
     h.multiplexer()
@@ -1235,7 +1251,10 @@ async fn event_forwarder_encrypts_when_crypto_active() {
     // the raw serialized wrapper and nonce is empty.
     if let Some(betcode_proto::v1::tunnel_frame::Payload::StreamData(p)) = &frame.payload {
         let enc = p.encrypted.as_ref().unwrap();
-        assert!(enc.nonce.is_empty(), "Tunnel-layer should be passthrough when app-layer encrypts");
+        assert!(
+            enc.nonce.is_empty(),
+            "Tunnel-layer should be passthrough when app-layer encrypts"
+        );
         let wire_bytes = &enc.ciphertext; // passthrough: ciphertext IS the raw bytes
 
         // Decode the AgentEvent — should have Encrypted variant (app-layer)
@@ -1264,7 +1283,10 @@ async fn event_forwarder_no_encryption_when_no_crypto() {
     let (h, mut rx) = make_handler_with_outbound().await;
 
     // Create a session in DB + start converse
-    h.db().create_session("ef-plain1", "model", "/tmp").await.unwrap();
+    h.db()
+        .create_session("ef-plain1", "model", "/tmp")
+        .await
+        .unwrap();
     let start_data = make_start_request("ef-plain1");
     h.handle_frame(req_frame("ef-conv2", METHOD_CONVERSE, start_data))
         .await;
@@ -1374,7 +1396,10 @@ async fn relay_forwarded_plaintext_request_rejected_when_crypto_active() {
     // The handler should not process the request as a valid UserMessage.
     // It should either return an error or silently discard it.
     let has_active_stream = h.has_active_stream("r2").await;
-    assert!(!has_active_stream, "plaintext request should not create a stream");
+    assert!(
+        !has_active_stream,
+        "plaintext request should not create a stream"
+    );
 }
 
 /// Verify that resume_session with E2E crypto produces frames the relay can decode.

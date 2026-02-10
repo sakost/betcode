@@ -427,7 +427,9 @@ async fn encrypted_agent_event_forwards_through_proxy() {
 
     // Prepare an AgentEvent with the Encrypted variant (opaque ciphertext bytes)
     let opaque_ciphertext = vec![0xDE, 0xAD, 0xBE, 0xEF, 0x01, 0x02, 0x03, 0x04];
-    let opaque_nonce = vec![0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99, 0xAA, 0xBB, 0xCC];
+    let opaque_nonce = vec![
+        0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99, 0xAA, 0xBB, 0xCC,
+    ];
     let encrypted_event = AgentEvent {
         sequence: 42,
         timestamp: None,
@@ -485,8 +487,14 @@ async fn encrypted_agent_event_forwards_through_proxy() {
     // Verify the Encrypted variant passes through with ciphertext intact
     match &events[0].event {
         Some(betcode_proto::v1::agent_event::Event::Encrypted(env)) => {
-            assert_eq!(env.ciphertext, opaque_ciphertext, "ciphertext should pass through relay unchanged");
-            assert_eq!(env.nonce, opaque_nonce, "nonce should pass through relay unchanged");
+            assert_eq!(
+                env.ciphertext, opaque_ciphertext,
+                "ciphertext should pass through relay unchanged"
+            );
+            assert_eq!(
+                env.nonce, opaque_nonce,
+                "nonce should pass through relay unchanged"
+            );
         }
         other => panic!("Expected Encrypted event, got {:?}", other),
     }

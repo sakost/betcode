@@ -434,8 +434,7 @@ mod tests {
 
     #[tokio::test]
     async fn relay_channel_with_ca_cert_configures_tls() {
-        let dir =
-            std::env::temp_dir().join(format!("betcode-auth-tls-{}", uuid::Uuid::new_v4()));
+        let dir = std::env::temp_dir().join(format!("betcode-auth-tls-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&dir).unwrap();
         let ca_path = dir.join("ca.pem");
         std::fs::write(

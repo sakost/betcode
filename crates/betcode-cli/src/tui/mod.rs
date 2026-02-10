@@ -25,8 +25,8 @@ use ratatui::Terminal;
 use tokio_util::sync::CancellationToken;
 use tracing::{error, warn};
 
-use crate::app::{CompletionFetchKind, CompletionRequest};
 use crate::app::App;
+use crate::app::{CompletionFetchKind, CompletionRequest};
 use crate::commands::cache::CachedCommand;
 use crate::connection::DaemonConnection;
 use crate::ui;
@@ -187,7 +187,10 @@ pub async fn run(
             app.command_cache.load(cached);
         }
         Err(e) => {
-            warn!(?e, "Could not fetch command registry, completions may be limited");
+            warn!(
+                ?e,
+                "Could not fetch command registry, completions may be limited"
+            );
         }
     }
 
@@ -198,78 +201,72 @@ pub async fn run(
         tokio::sync::mpsc::channel::<CompletionResponse>(16);
     app.completion_request_tx = Some(completion_req_tx);
 
-    let completion_handle =
-        conn.command_service_client()
-            .map(|mut cmd_client| {
-                tokio::spawn(async move {
-                    let debounce = Duration::from_millis(100);
-                    let mut last_request_time = Instant::now() - debounce;
+    let completion_handle = conn.command_service_client().map(|mut cmd_client| {
+        tokio::spawn(async move {
+            let debounce = Duration::from_millis(100);
+            let mut last_request_time = Instant::now() - debounce;
 
-                    while let Some(req) = completion_req_rx.recv().await {
-                        // Debounce: drain any newer requests that arrived
-                        let mut latest = req;
-                        while let Ok(newer) = completion_req_rx.try_recv() {
-                            latest = newer;
-                        }
+            while let Some(req) = completion_req_rx.recv().await {
+                // Debounce: drain any newer requests that arrived
+                let mut latest = req;
+                while let Ok(newer) = completion_req_rx.try_recv() {
+                    latest = newer;
+                }
 
-                        // Wait for debounce period since last request
-                        let elapsed = last_request_time.elapsed();
-                        if elapsed < debounce {
-                            tokio::time::sleep(debounce - elapsed).await;
-                            // Drain again after sleep
-                            while let Ok(newer) = completion_req_rx.try_recv() {
-                                latest = newer;
-                            }
-                        }
-                        last_request_time = Instant::now();
+                // Wait for debounce period since last request
+                let elapsed = last_request_time.elapsed();
+                if elapsed < debounce {
+                    tokio::time::sleep(debounce - elapsed).await;
+                    // Drain again after sleep
+                    while let Ok(newer) = completion_req_rx.try_recv() {
+                        latest = newer;
+                    }
+                }
+                last_request_time = Instant::now();
 
-                        let items = match latest.kind {
-                            CompletionFetchKind::Agents => {
-                                let request = tonic::Request::new(
-                                    betcode_proto::v1::ListAgentsRequest {
-                                        query: latest.query,
-                                        max_results: 8,
-                                    },
-                                );
-                                match cmd_client.list_agents(request).await {
-                                    Ok(resp) => resp
-                                        .into_inner()
-                                        .agents
-                                        .into_iter()
-                                        .map(|a| a.name)
-                                        .collect(),
-                                    Err(_) => Vec::new(),
-                                }
-                            }
-                            CompletionFetchKind::Files => {
-                                let request = tonic::Request::new(
-                                    betcode_proto::v1::ListPathRequest {
-                                        query: latest.query,
-                                        max_results: 8,
-                                    },
-                                );
-                                match cmd_client.list_path(request).await {
-                                    Ok(resp) => resp
-                                        .into_inner()
-                                        .entries
-                                        .into_iter()
-                                        .map(|p| p.path)
-                                        .collect(),
-                                    Err(_) => Vec::new(),
-                                }
-                            }
-                        };
-
-                        if completion_resp_tx
-                            .send(CompletionResponse { items })
-                            .await
-                            .is_err()
-                        {
-                            break;
+                let items = match latest.kind {
+                    CompletionFetchKind::Agents => {
+                        let request = tonic::Request::new(betcode_proto::v1::ListAgentsRequest {
+                            query: latest.query,
+                            max_results: 8,
+                        });
+                        match cmd_client.list_agents(request).await {
+                            Ok(resp) => resp
+                                .into_inner()
+                                .agents
+                                .into_iter()
+                                .map(|a| a.name)
+                                .collect(),
+                            Err(_) => Vec::new(),
                         }
                     }
-                })
-            });
+                    CompletionFetchKind::Files => {
+                        let request = tonic::Request::new(betcode_proto::v1::ListPathRequest {
+                            query: latest.query,
+                            max_results: 8,
+                        });
+                        match cmd_client.list_path(request).await {
+                            Ok(resp) => resp
+                                .into_inner()
+                                .entries
+                                .into_iter()
+                                .map(|p| p.path)
+                                .collect(),
+                            Err(_) => Vec::new(),
+                        }
+                    }
+                };
+
+                if completion_resp_tx
+                    .send(CompletionResponse { items })
+                    .await
+                    .is_err()
+                {
+                    break;
+                }
+            }
+        })
+    });
 
     let mut tick = tokio::time::interval(Duration::from_millis(50));
 

@@ -185,11 +185,9 @@ impl App {
             Some(CompletionTrigger::Command { ref query }) => {
                 // Search local cache instantly for `/` commands.
                 let results = self.command_cache.search(query, 8);
-                self.completion_state.items =
-                    results.iter().map(|c| c.name.clone()).collect();
+                self.completion_state.items = results.iter().map(|c| c.name.clone()).collect();
                 self.completion_state.selected_index = 0;
-                self.completion_state.ghost_text =
-                    self.completion_state.items.first().cloned();
+                self.completion_state.ghost_text = self.completion_state.items.first().cloned();
             }
             Some(CompletionTrigger::Agent { ref query }) => {
                 // Send async fetch request for agents.
@@ -199,8 +197,7 @@ impl App {
                         query: query.clone(),
                     });
                 }
-                self.completion_state.ghost_text =
-                    self.completion_state.items.first().cloned();
+                self.completion_state.ghost_text = self.completion_state.items.first().cloned();
             }
             Some(CompletionTrigger::File { ref query }) => {
                 // Send async fetch request for file paths.
@@ -210,8 +207,7 @@ impl App {
                         query: query.clone(),
                     });
                 }
-                self.completion_state.ghost_text =
-                    self.completion_state.items.first().cloned();
+                self.completion_state.ghost_text = self.completion_state.items.first().cloned();
             }
             Some(CompletionTrigger::Bash { .. }) => {
                 // No completion for bash commands

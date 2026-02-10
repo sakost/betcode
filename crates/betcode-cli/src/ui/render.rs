@@ -100,9 +100,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         let popup_height = (app.completion_state.items.len() as u16).min(8) + 2; // +2 for borders
         let popup_area = Rect {
             x: area.x + 1,
-            y: area
-                .height
-                .saturating_sub(bottom_height + popup_height + 1),
+            y: area.height.saturating_sub(bottom_height + popup_height + 1),
             width: area.width.saturating_sub(2).min(60),
             height: popup_height,
         };
@@ -135,10 +133,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
             cwd: std::env::current_dir()
                 .map(|p| p.display().to_string())
                 .unwrap_or_else(|_| "unknown".to_string()),
-            session_id: app
-                .session_id
-                .clone()
-                .unwrap_or_else(|| "none".to_string()),
+            session_id: app.session_id.clone().unwrap_or_else(|| "none".to_string()),
             connection: "local".to_string(),
             model: app.model.clone(),
             active_agents: 0,

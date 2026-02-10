@@ -34,8 +34,7 @@ pub fn handle_completion_key(app: &mut App, key: crossterm::event::KeyEvent) -> 
         KeyCode::Up if app.completion_state.popup_visible => {
             if !app.completion_state.items.is_empty() {
                 if app.completion_state.selected_index == 0 {
-                    app.completion_state.selected_index =
-                        app.completion_state.items.len() - 1;
+                    app.completion_state.selected_index = app.completion_state.items.len() - 1;
                 } else {
                     app.completion_state.selected_index -= 1;
                 }

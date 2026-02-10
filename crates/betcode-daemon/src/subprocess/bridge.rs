@@ -236,7 +236,10 @@ impl EventBridge {
             .cloned()
             .unwrap_or_default();
 
-        let first = questions.first().cloned().unwrap_or(serde_json::Value::Null);
+        let first = questions
+            .first()
+            .cloned()
+            .unwrap_or(serde_json::Value::Null);
 
         let question_text = first
             .get("question")
@@ -746,7 +749,11 @@ mod tests {
             },
         };
         let events = bridge.convert(Message::ControlRequest(req));
-        assert_eq!(events.len(), 1, "AskUserQuestion should produce exactly 1 event");
+        assert_eq!(
+            events.len(),
+            1,
+            "AskUserQuestion should produce exactly 1 event"
+        );
         match &events[0].event {
             Some(proto::agent_event::Event::UserQuestion(q)) => {
                 assert_eq!(q.question_id, "req_q1");
@@ -811,7 +818,10 @@ mod tests {
         assert_eq!(events.len(), 1);
         // Must NOT be a PermissionRequest
         assert!(
-            !matches!(&events[0].event, Some(proto::agent_event::Event::PermissionRequest(_))),
+            !matches!(
+                &events[0].event,
+                Some(proto::agent_event::Event::PermissionRequest(_))
+            ),
             "AskUserQuestion must not be converted to PermissionRequest"
         );
     }
@@ -829,7 +839,10 @@ mod tests {
         let events = bridge.convert(Message::ControlRequest(req));
         assert_eq!(events.len(), 1);
         assert!(
-            matches!(&events[0].event, Some(proto::agent_event::Event::PermissionRequest(_))),
+            matches!(
+                &events[0].event,
+                Some(proto::agent_event::Event::PermissionRequest(_))
+            ),
             "Regular tool should still produce PermissionRequest"
         );
     }
