@@ -5,6 +5,7 @@
 
 pub mod app;
 pub mod auth_cmd;
+pub mod commands;
 pub mod completion;
 pub mod config;
 pub mod connection;
