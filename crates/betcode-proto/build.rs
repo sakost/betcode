@@ -16,6 +16,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         "betcode/v1/machine.proto",
         "betcode/v1/tunnel.proto",
         "betcode/v1/gitlab.proto",
+        "betcode/v1/commands.proto",
+        "betcode/v1/plugin.proto",
     ];
 
     let proto_paths: Vec<_> = protos

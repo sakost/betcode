@@ -1,0 +1,243 @@
+// BetCode Command Service
+// Registry, completion, service command execution, and plugin management.
+//
+// Version: v1
+
+syntax = "proto3";
+
+package betcode.v1;
+
+// =============================================================================
+// CommandService
+// =============================================================================
+
+// CommandService provides command registry, completion data, service command
+// execution, and plugin management.
+service CommandService {
+  // Registry
+  rpc GetCommandRegistry(GetCommandRegistryRequest) returns (GetCommandRegistryResponse);
+
+  // Completion
+  rpc ListAgents(ListAgentsRequest) returns (ListAgentsResponse);
+  rpc ListPath(ListPathRequest) returns (ListPathResponse);
+
+  // Service command execution
+  rpc ExecuteServiceCommand(ExecuteServiceCommandRequest) returns (stream ServiceCommandOutput);
+
+  // Plugin management
+  rpc ListPlugins(ListPluginsRequest) returns (ListPluginsResponse);
+  rpc GetPluginStatus(GetPluginStatusRequest) returns (GetPluginStatusResponse);
+  rpc AddPlugin(AddPluginRequest) returns (AddPluginResponse);
+  rpc RemovePlugin(RemovePluginRequest) returns (RemovePluginResponse);
+  rpc EnablePlugin(EnablePluginRequest) returns (EnablePluginResponse);
+  rpc DisablePlugin(DisablePluginRequest) returns (DisablePluginResponse);
+}
+
+// =============================================================================
+// Command Types
+// =============================================================================
+
+// CommandCategory identifies the source type of a command.
+enum CommandCategory {
+  COMMAND_CATEGORY_UNSPECIFIED = 0;
+  COMMAND_CATEGORY_SERVICE = 1;
+  COMMAND_CATEGORY_CLAUDE_CODE = 2;
+  COMMAND_CATEGORY_PLUGIN = 3;
+}
+
+// ExecutionMode describes how a command is executed.
+enum ExecutionMode {
+  EXECUTION_MODE_UNSPECIFIED = 0;
+  EXECUTION_MODE_LOCAL = 1;
+  EXECUTION_MODE_PASSTHROUGH = 2;
+  EXECUTION_MODE_PLUGIN = 3;
+}
+
+// CommandEntry represents a single command in the registry.
+message CommandEntry {
+  string name = 1;
+  string description = 2;
+  CommandCategory category = 3;
+  ExecutionMode execution_mode = 4;
+  string source = 5;
+  optional string args_schema = 6;
+}
+
+// =============================================================================
+// Agent Types
+// =============================================================================
+
+// AgentKind identifies the type of agent.
+enum AgentKind {
+  AGENT_KIND_UNSPECIFIED = 0;
+  AGENT_KIND_CLAUDE_INTERNAL = 1;
+  AGENT_KIND_DAEMON_ORCHESTRATED = 2;
+  AGENT_KIND_TEAM_MEMBER = 3;
+}
+
+// CommandAgentStatus represents the status of an agent in the command system.
+// Note: This is separate from common.proto's AgentStatus which tracks
+// the agent's runtime state (thinking, executing, etc.).
+enum CommandAgentStatus {
+  COMMAND_AGENT_STATUS_UNSPECIFIED = 0;
+  COMMAND_AGENT_STATUS_IDLE = 1;
+  COMMAND_AGENT_STATUS_WORKING = 2;
+  COMMAND_AGENT_STATUS_DONE = 3;
+  COMMAND_AGENT_STATUS_FAILED = 4;
+}
+
+// AgentInfo describes an agent for completion purposes.
+message AgentInfo {
+  string name = 1;
+  AgentKind kind = 2;
+  CommandAgentStatus status = 3;
+  string source = 4;
+  optional string session_id = 5;
+}
+
+// =============================================================================
+// Path Types
+// =============================================================================
+
+// PathKind identifies the type of a filesystem entry.
+enum PathKind {
+  PATH_KIND_UNSPECIFIED = 0;
+  PATH_KIND_FILE = 1;
+  PATH_KIND_DIRECTORY = 2;
+  PATH_KIND_SYMLINK = 3;
+}
+
+// PathEntry represents a filesystem path for completion.
+message PathEntry {
+  string path = 1;
+  PathKind kind = 2;
+  uint64 size = 3;
+  int64 modified_at = 4;
+}
+
+// =============================================================================
+// Service Command Output
+// =============================================================================
+
+// ServiceCommandOutput streams output from a service command execution.
+message ServiceCommandOutput {
+  oneof output {
+    string stdout_line = 1;
+    string stderr_line = 2;
+    int32 exit_code = 3;
+    string error = 4;
+  }
+}
+
+// =============================================================================
+// Plugin Info
+// =============================================================================
+
+// PluginInfo describes a registered plugin.
+message PluginInfo {
+  string name = 1;
+  string status = 2;
+  bool enabled = 3;
+  string socket_path = 4;
+  uint32 command_count = 5;
+  optional string health_message = 6;
+  optional bool healthy = 7;
+}
+
+// =============================================================================
+// Request/Response: Registry
+// =============================================================================
+
+message GetCommandRegistryRequest {}
+
+message GetCommandRegistryResponse {
+  repeated CommandEntry commands = 1;
+}
+
+// =============================================================================
+// Request/Response: ListAgents
+// =============================================================================
+
+message ListAgentsRequest {
+  string query = 1;
+  uint32 max_results = 2;
+}
+
+message ListAgentsResponse {
+  repeated AgentInfo agents = 1;
+}
+
+// =============================================================================
+// Request/Response: ListPath
+// =============================================================================
+
+message ListPathRequest {
+  string query = 1;
+  uint32 max_results = 2;
+}
+
+message ListPathResponse {
+  repeated PathEntry entries = 1;
+}
+
+// =============================================================================
+// Request/Response: ExecuteServiceCommand
+// =============================================================================
+
+message ExecuteServiceCommandRequest {
+  string command = 1;
+  repeated string args = 2;
+}
+
+// Response is the streaming ServiceCommandOutput defined above.
+
+// =============================================================================
+// Request/Response: Plugin Management
+// =============================================================================
+
+message ListPluginsRequest {}
+
+message ListPluginsResponse {
+  repeated PluginInfo plugins = 1;
+}
+
+message GetPluginStatusRequest {
+  string name = 1;
+}
+
+message GetPluginStatusResponse {
+  PluginInfo plugin = 1;
+}
+
+message AddPluginRequest {
+  string name = 1;
+  string socket_path = 2;
+}
+
+message AddPluginResponse {
+  PluginInfo plugin = 1;
+}
+
+message RemovePluginRequest {
+  string name = 1;
+}
+
+message RemovePluginResponse {
+  bool removed = 1;
+}
+
+message EnablePluginRequest {
+  string name = 1;
+}
+
+message EnablePluginResponse {
+  PluginInfo plugin = 1;
+}
+
+message DisablePluginRequest {
+  string name = 1;
+}
+
+message DisablePluginResponse {
+  PluginInfo plugin = 1;
+}

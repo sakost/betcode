@@ -1,0 +1,78 @@
+// BetCode Plugin Service
+// Interface that plugins implement to integrate with the daemon.
+// The daemon connects to plugins as a gRPC client over Unix sockets.
+//
+// Version: v1
+
+syntax = "proto3";
+
+package betcode.v1;
+
+// =============================================================================
+// PluginService
+// =============================================================================
+
+// PluginService is the interface that external plugins implement.
+// The daemon connects to each plugin's Unix socket and calls these RPCs.
+service PluginService {
+  // Register returns the plugin's command definitions.
+  rpc Register(PluginRegisterRequest) returns (PluginRegisterResponse);
+
+  // Execute runs a plugin command, streaming output back.
+  rpc Execute(PluginExecuteRequest) returns (stream PluginExecuteResponse);
+
+  // HealthCheck verifies the plugin is alive and functioning.
+  rpc PluginHealthCheck(PluginHealthCheckRequest) returns (PluginHealthCheckResponse);
+}
+
+// =============================================================================
+// Registration
+// =============================================================================
+
+// PluginRegisterRequest is sent by the daemon to discover plugin commands.
+message PluginRegisterRequest {}
+
+// CommandDefinition describes a single command provided by a plugin.
+message CommandDefinition {
+  string name = 1;
+  string description = 2;
+  string args_schema = 3;
+}
+
+// PluginRegisterResponse contains the plugin's command definitions.
+message PluginRegisterResponse {
+  repeated CommandDefinition commands = 1;
+}
+
+// =============================================================================
+// Execution
+// =============================================================================
+
+// PluginExecuteRequest asks the plugin to execute a command.
+message PluginExecuteRequest {
+  string command = 1;
+  string args = 2;
+}
+
+// PluginExecuteResponse streams output from a plugin command execution.
+message PluginExecuteResponse {
+  oneof output {
+    string stdout_line = 1;
+    string stderr_line = 2;
+    int32 exit_code = 3;
+    string error = 4;
+  }
+}
+
+// =============================================================================
+// Health Check
+// =============================================================================
+
+// PluginHealthCheckRequest is sent periodically to verify plugin health.
+message PluginHealthCheckRequest {}
+
+// PluginHealthCheckResponse indicates plugin health status.
+message PluginHealthCheckResponse {
+  bool status = 1;
+  optional string message = 2;
+}
