@@ -7,8 +7,11 @@
 //! - Session multiplexing for multi-client support
 //! - Permission bridge for tool authorization
 
+pub mod commands;
+pub mod completion;
 pub mod gitlab;
 pub mod permission;
+pub mod plugin;
 pub mod relay;
 pub mod server;
 pub mod session;
