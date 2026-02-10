@@ -79,10 +79,7 @@ mod tests {
             parse_version("claude v1.0.22 (anthropic-2024-12-01)"),
             Some("1.0.22".to_string())
         );
-        assert_eq!(
-            parse_version("claude v2.1.0"),
-            Some("2.1.0".to_string())
-        );
+        assert_eq!(parse_version("claude v2.1.0"), Some("2.1.0".to_string()));
         assert_eq!(parse_version("unexpected output"), None);
     }
 
