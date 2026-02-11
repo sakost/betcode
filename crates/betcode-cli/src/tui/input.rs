@@ -318,6 +318,31 @@ mod tests {
         assert_eq!(app.completion_state.selected_index, 19);
         assert_eq!(app.completion_state.scroll_offset, 12); // 19+1-8=12
     }
+
+    #[tokio::test]
+    async fn question_mark_shows_help() {
+        let mut app = App::new();
+        let (tx, _rx) = tokio::sync::mpsc::channel(16);
+
+        // Type "?" and press Enter
+        app.input = "?".to_string();
+        app.cursor_pos = 1;
+        let enter = crossterm::event::KeyEvent::new(
+            KeyCode::Enter,
+            crossterm::event::KeyModifiers::NONE,
+        );
+        handle_input_key(&mut app, &tx, enter).await;
+
+        // submit_input adds the user message, then show_help adds the help message
+        assert!(
+            app.messages.len() >= 2,
+            "? should produce user msg + help message"
+        );
+        assert!(
+            app.messages.last().unwrap().content.contains("Available Commands"),
+            "Last message should be the help output"
+        );
+    }
 }
 
 /// Replace the current token (at cursor) with `replacement`, updating cursor position.
@@ -502,7 +527,9 @@ async fn handle_input_key(
         KeyCode::Enter => {
             if let Some(text) = app.submit_input() {
                 let trimmed = text.trim();
-                if let Some(cmd_body) = trimmed.strip_prefix('/') {
+                if trimmed == "?" {
+                    show_help(app);
+                } else if let Some(cmd_body) = trimmed.strip_prefix('/') {
                     // Slash command — dispatch based on command category.
                     let mut parts = cmd_body.splitn(2, char::is_whitespace);
                     let command = parts.next().unwrap_or("").to_string();

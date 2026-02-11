@@ -1,6 +1,6 @@
 //! In-memory connection registry for tunnel management.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use tokio::sync::{mpsc, oneshot, RwLock};
@@ -20,6 +20,9 @@ pub struct TunnelConnection {
     pub pending: Arc<RwLock<HashMap<String, oneshot::Sender<TunnelFrame>>>>,
     /// Pending stream channels for streaming requests (multiple frames per request_id).
     stream_pending: Arc<RwLock<HashMap<String, mpsc::Sender<TunnelFrame>>>>,
+    /// Request IDs of streams whose receivers were dropped (client disconnected).
+    /// Used to silently drop subsequent frames instead of warning.
+    cancelled_streams: Arc<RwLock<HashSet<String>>>,
 }
 
 impl TunnelConnection {
@@ -30,6 +33,7 @@ impl TunnelConnection {
             frame_tx,
             pending: Arc::new(RwLock::new(HashMap::new())),
             stream_pending: Arc::new(RwLock::new(HashMap::new())),
+            cancelled_streams: Arc::new(RwLock::new(HashSet::new())),
         }
     }
 
@@ -84,6 +88,10 @@ impl TunnelConnection {
 
         if send_failed {
             self.stream_pending.write().await.remove(request_id);
+            self.cancelled_streams
+                .write()
+                .await
+                .insert(request_id.to_string());
             debug!(request_id = %request_id, "Cleaned up dead stream sender (receiver dropped)");
         }
         false
@@ -103,12 +111,23 @@ impl TunnelConnection {
         self.stream_pending.read().await.contains_key(request_id)
     }
 
+    /// Check if a stream was cancelled (receiver dropped by client disconnect).
+    pub async fn is_cancelled_stream(&self, request_id: &str) -> bool {
+        self.cancelled_streams.read().await.contains(request_id)
+    }
+
+    /// Remove a request_id from the cancelled set (e.g. after StreamEnd cleanup).
+    pub async fn clear_cancelled_stream(&self, request_id: &str) {
+        self.cancelled_streams.write().await.remove(request_id);
+    }
+
     // --- Shared ---
 
     /// Cancel all pending requests (both unary and streaming).
     pub async fn cancel_all_pending(&self) {
         self.pending.write().await.clear();
         self.stream_pending.write().await.clear();
+        self.cancelled_streams.write().await.clear();
         debug!(machine_id = %self.machine_id, "All pending requests cancelled");
     }
 
@@ -407,5 +426,16 @@ mod tests {
         // Dead sender should be cleaned up automatically
         assert!(!conn.has_stream_pending("drop").await);
         assert_eq!(conn.stream_pending_count().await, 0);
+
+        // Should be tracked as cancelled
+        assert!(conn.is_cancelled_stream("drop").await);
+
+        // Subsequent sends still return false, but stream is known-cancelled
+        assert!(!conn.send_stream_frame("drop", TunnelFrame::default()).await);
+        assert!(conn.is_cancelled_stream("drop").await);
+
+        // clear_cancelled_stream removes the tracking
+        conn.clear_cancelled_stream("drop").await;
+        assert!(!conn.is_cancelled_stream("drop").await);
     }
 }

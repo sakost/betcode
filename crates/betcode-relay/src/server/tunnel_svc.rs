@@ -142,6 +142,10 @@ impl TunnelService for TunnelServiceImpl {
                             if conn_ref.has_stream_pending(&rid).await {
                                 conn_ref.send_stream_frame(&rid, frame).await;
                                 conn_ref.complete_stream(&rid).await;
+                            } else if conn_ref.is_cancelled_stream(&rid).await {
+                                // Stream was cancelled (client disconnected) — clean up silently
+                                conn_ref.clear_cancelled_stream(&rid).await;
+                                debug!(request_id = %rid, "StreamEnd for cancelled stream, cleaned up");
                             } else if !conn_ref.complete_pending(&rid, frame).await {
                                 warn!(request_id = %rid, "No pending waiter for StreamEnd");
                             }
@@ -157,7 +161,11 @@ impl TunnelService for TunnelServiceImpl {
                             if !conn_ref.send_stream_frame(&rid, frame.clone()).await
                                 && !conn_ref.complete_pending(&rid, frame).await
                             {
-                                warn!(request_id = %rid, "No pending waiter for StreamData");
+                                if conn_ref.is_cancelled_stream(&rid).await {
+                                    debug!(request_id = %rid, "Dropping StreamData for cancelled stream");
+                                } else {
+                                    warn!(request_id = %rid, "No pending waiter for StreamData");
+                                }
                             }
                         } else if frame_type == FrameType::Response as i32 {
                             // Unary response: complete the oneshot pending
