@@ -1,20 +1,19 @@
 //! Tests for WorktreeProxyService.
 
-use std::collections::HashMap;
 use std::sync::Arc;
 
 use tonic::Request;
 
 use betcode_proto::v1::worktree_service_server::WorktreeService;
 use betcode_proto::v1::{
-    CreateWorktreeRequest, FrameType, GetWorktreeRequest, ListWorktreesRequest,
-    ListWorktreesResponse, RemoveWorktreeRequest, RemoveWorktreeResponse, TunnelFrame,
-    WorktreeDetail,
+    CreateWorktreeRequest, GetWorktreeRequest, ListWorktreesRequest, ListWorktreesResponse,
+    RemoveWorktreeRequest, RemoveWorktreeResponse, TunnelFrame, WorktreeDetail,
 };
 
 use super::WorktreeProxyService;
 use crate::server::test_helpers::{
-    make_request, setup_offline_router, setup_router_with_machine, spawn_responder, test_claims,
+    make_request, setup_offline_router, setup_router_with_machine, spawn_error_responder,
+    spawn_responder, test_claims,
 };
 
 async fn setup_with_machine(
@@ -42,16 +41,27 @@ async fn list_worktrees_routes_to_machine() {
         &router,
         "m1",
         rx,
-        ListWorktreesResponse { worktrees: vec![] },
+        ListWorktreesResponse {
+            worktrees: vec![WorktreeDetail {
+                id: "wt-10".into(),
+                name: "my-feature".into(),
+                path: "/tmp/wt-10".into(),
+                branch: "feat/my-feature".into(),
+                ..Default::default()
+            }],
+        },
     );
     let req = make_request(
         ListWorktreesRequest {
-            repo_path: String::new(),
+            repo_path: "/repo".into(),
         },
         "m1",
     );
     let resp = svc.list_worktrees(req).await.unwrap().into_inner();
-    assert!(resp.worktrees.is_empty());
+    assert_eq!(resp.worktrees.len(), 1);
+    assert_eq!(resp.worktrees[0].id, "wt-10");
+    assert_eq!(resp.worktrees[0].name, "my-feature");
+    assert_eq!(resp.worktrees[0].branch, "feat/my-feature");
 }
 
 #[tokio::test]
@@ -146,27 +156,8 @@ async fn missing_claims_returns_internal() {
 
 #[tokio::test]
 async fn daemon_error_propagated_to_client() {
-    let (svc, router, mut rx) = setup_with_machine("m1").await;
-    let rc = Arc::clone(&router);
-    tokio::spawn(async move {
-        if let Some(frame) = rx.recv().await {
-            let rid = frame.request_id.clone();
-            let err_frame = TunnelFrame {
-                request_id: rid.clone(),
-                frame_type: FrameType::Error as i32,
-                timestamp: None,
-                payload: Some(betcode_proto::v1::tunnel_frame::Payload::Error(
-                    betcode_proto::v1::TunnelError {
-                        code: betcode_proto::v1::TunnelErrorCode::Internal as i32,
-                        message: "daemon error".into(),
-                        details: HashMap::new(),
-                    },
-                )),
-            };
-            let conn = rc.registry().get("m1").await.unwrap();
-            conn.complete_pending(&rid, err_frame).await;
-        }
-    });
+    let (svc, router, rx) = setup_with_machine("m1").await;
+    spawn_error_responder(&router, "m1", rx, "daemon error");
     let req = make_request(
         ListWorktreesRequest {
             repo_path: String::new(),

@@ -68,13 +68,25 @@ impl TunnelConnection {
 
     /// Send a frame to a streaming pending channel.
     /// Returns true if delivered, false if no stream channel or receiver dropped.
+    /// Automatically cleans up dead senders when the receiver has been dropped.
     pub async fn send_stream_frame(&self, request_id: &str, frame: TunnelFrame) -> bool {
-        let guard = self.stream_pending.read().await;
-        if let Some(tx) = guard.get(request_id) {
-            tx.send(frame).await.is_ok()
-        } else {
-            false
+        let send_failed = {
+            let guard = self.stream_pending.read().await;
+            if let Some(tx) = guard.get(request_id) {
+                if tx.send(frame).await.is_ok() {
+                    return true;
+                }
+                true // entry exists but receiver dropped
+            } else {
+                false // no entry at all
+            }
+        };
+
+        if send_failed {
+            self.stream_pending.write().await.remove(request_id);
+            debug!(request_id = %request_id, "Cleaned up dead stream sender (receiver dropped)");
         }
+        false
     }
 
     /// Close a streaming channel by removing the sender.
@@ -382,11 +394,18 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn stream_dropped_receiver_returns_false() {
+    async fn stream_dropped_receiver_returns_false_and_cleans_up() {
         let (tx, _rx) = mpsc::channel(16);
         let conn = TunnelConnection::new("m1".into(), "u1".into(), tx);
         let stream_rx = conn.register_stream_pending("drop".into()).await;
+        assert!(conn.has_stream_pending("drop").await);
+        assert_eq!(conn.stream_pending_count().await, 1);
+
         drop(stream_rx);
         assert!(!conn.send_stream_frame("drop", TunnelFrame::default()).await);
+
+        // Dead sender should be cleaned up automatically
+        assert!(!conn.has_stream_pending("drop").await);
+        assert_eq!(conn.stream_pending_count().await, 0);
     }
 }

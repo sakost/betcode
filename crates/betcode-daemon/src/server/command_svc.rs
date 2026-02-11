@@ -119,6 +119,8 @@ impl CommandService for CommandServiceImpl {
 
         let executor = Arc::clone(&self.service_executor);
         let registry = Arc::clone(&self.registry);
+        let file_index = Arc::clone(&self.file_index);
+        let agent_lister = Arc::clone(&self.agent_lister);
         let shutdown_tx = self.shutdown_tx.clone();
         let command = req.command;
         let args = req.args;
@@ -182,17 +184,53 @@ impl CommandService for CommandServiceImpl {
                     tokio::time::sleep(std::time::Duration::from_millis(100)).await;
                     let _ = shutdown_tx.send(true);
                 }
-                "reload-commands" => {
+                "reload-remote" => {
+                    use crate::completion::agent_lister::{AgentInfo, AgentKind, AgentStatus};
+
                     let exec = executor.read().await;
+                    let cwd = exec.cwd().to_path_buf();
+
+                    // Reload commands
                     let mut reg = registry.write().await;
-                    match exec.execute_reload_commands(&mut reg) {
-                        Ok(msg) => {
-                            let _ = tx.send(Ok(stdout_output(&msg))).await;
-                        }
+                    let cmd_msg = match exec.execute_reload_remote(&mut reg) {
+                        Ok(msg) => msg,
                         Err(e) => {
                             let _ = tx.send(Ok(error_output(&e.to_string()))).await;
+                            return;
+                        }
+                    };
+                    drop(reg);
+
+                    // Reload agents
+                    let agents = betcode_core::commands::discover_agents(&cwd);
+                    let agent_count = agents.len();
+                    {
+                        let mut lister = agent_lister.write().await;
+                        *lister = crate::completion::agent_lister::AgentLister::new();
+                        for name in agents {
+                            lister.update(AgentInfo {
+                                name,
+                                kind: AgentKind::ClaudeInternal,
+                                status: AgentStatus::Idle,
+                                session_id: None,
+                            });
                         }
                     }
+
+                    // Reload file index
+                    let file_count = match FileIndex::build(&cwd, 10_000).await {
+                        Ok(new_index) => {
+                            let count = new_index.entry_count();
+                            *file_index.write().await = new_index;
+                            count
+                        }
+                        Err(_) => 0,
+                    };
+
+                    let msg = format!(
+                        "{cmd_msg}, {agent_count} agents, {file_count} files"
+                    );
+                    let _ = tx.send(Ok(stdout_output(&msg))).await;
                 }
                 other => {
                     let _ = tx

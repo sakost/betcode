@@ -12,7 +12,9 @@ use prost::Message;
 use tokio::sync::mpsc;
 use tonic::Request;
 
-use betcode_proto::v1::{EncryptedPayload, FrameType, StreamPayload, TunnelFrame};
+use betcode_proto::v1::{
+    EncryptedPayload, FrameType, StreamPayload, TunnelErrorCode, TunnelFrame,
+};
 
 use crate::auth::claims::Claims;
 use crate::buffer::BufferManager;
@@ -86,6 +88,39 @@ pub async fn setup_offline_router() -> Arc<RequestRouter> {
         .unwrap();
     let buffer = Arc::new(BufferManager::new(db, Arc::clone(&registry)));
     Arc::new(RequestRouter::new(registry, buffer, Duration::from_secs(5)))
+}
+
+/// Spawn a mock daemon that replies with a `TunnelError` frame to the first request.
+///
+/// This simulates a daemon-side error being propagated back through the relay.
+pub fn spawn_error_responder(
+    router: &Arc<RequestRouter>,
+    machine_id: &str,
+    mut rx: mpsc::Receiver<TunnelFrame>,
+    error_message: &str,
+) {
+    let router = Arc::clone(router);
+    let mid = machine_id.to_string();
+    let msg = error_message.to_string();
+    tokio::spawn(async move {
+        if let Some(frame) = rx.recv().await {
+            let rid = frame.request_id.clone();
+            let err_frame = TunnelFrame {
+                request_id: rid.clone(),
+                frame_type: FrameType::Error as i32,
+                timestamp: None,
+                payload: Some(betcode_proto::v1::tunnel_frame::Payload::Error(
+                    betcode_proto::v1::TunnelError {
+                        code: TunnelErrorCode::Internal as i32,
+                        message: msg,
+                        details: HashMap::new(),
+                    },
+                )),
+            };
+            let conn = router.registry().get(&mid).await.unwrap();
+            conn.complete_pending(&rid, err_frame).await;
+        }
+    });
 }
 
 /// Spawn a mock daemon that replies with an encoded response to the first request.

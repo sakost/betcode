@@ -109,8 +109,12 @@ impl RequestRouter {
         // Wait for response with timeout
         match timeout(self.request_timeout, response_rx).await {
             Ok(Ok(response)) => Ok(response),
-            Ok(Err(_)) => Err(RouterError::ResponseDropped(request_id.to_string())),
+            Ok(Err(_)) => {
+                conn.pending.write().await.remove(request_id);
+                Err(RouterError::ResponseDropped(request_id.to_string()))
+            }
             Err(_) => {
+                conn.pending.write().await.remove(request_id);
                 warn!(
                     machine_id = %machine_id,
                     request_id = %request_id,
@@ -346,6 +350,10 @@ mod tests {
             .await;
 
         assert!(matches!(result, Err(RouterError::Timeout(_))));
+
+        // Pending map entry should be cleaned up after timeout
+        let conn = registry.get("m1").await.unwrap();
+        assert_eq!(conn.pending_count().await, 0);
     }
 
     #[tokio::test]

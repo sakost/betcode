@@ -117,7 +117,7 @@ impl HandlerTestBuilder {
                 service_executor,
                 shutdown_tx,
             );
-            handler.set_command_service(cmd_svc);
+            handler.set_command_service(Arc::new(cmd_svc));
         }
 
         if self.with_gitlab_service {
@@ -2060,6 +2060,100 @@ async fn execute_service_command_not_set_sends_error() {
     assert_eq!(frame.request_id, "esc-none");
     if let Some(betcode_proto::v1::tunnel_frame::Payload::Error(e)) = &frame.payload {
         assert!(e.message.contains("CommandService not available"));
+    } else {
+        panic!("expected error payload");
+    }
+}
+
+// --- Plugin RPC tunnel handler tests ---
+
+#[tokio::test]
+async fn command_all_plugin_methods_dispatch_without_service() {
+    // All 6 plugin method constants should be recognized and hit the
+    // "CommandService not available" error path (not the unknown method path).
+    let HandlerTestOutput { handler: h, .. } = HandlerTestBuilder::new().build().await;
+    let methods = [
+        METHOD_LIST_PLUGINS,
+        METHOD_GET_PLUGIN_STATUS,
+        METHOD_ADD_PLUGIN,
+        METHOD_REMOVE_PLUGIN,
+        METHOD_ENABLE_PLUGIN,
+        METHOD_DISABLE_PLUGIN,
+    ];
+    for method in methods {
+        let r = h
+            .handle_frame(req_frame("plugin-dispatch", method, vec![]))
+            .await;
+        assert_eq!(r.len(), 1, "method: {method}");
+        assert_eq!(r[0].frame_type, FrameType::Error as i32, "method: {method}");
+        if let Some(betcode_proto::v1::tunnel_frame::Payload::Error(e)) = &r[0].payload {
+            assert!(
+                e.message.contains("CommandService not available"),
+                "method {method} should hit 'not available', got: {}",
+                e.message
+            );
+        }
+    }
+}
+
+#[tokio::test]
+async fn command_plugin_methods_dispatch_with_service() {
+    // When CommandService is configured, plugin RPCs should reach the service dispatch
+    // (not "Unknown method" or "CommandService not available"). The current implementation
+    // stubs return Status::unimplemented, which the dispatch_rpc! macro converts to an
+    // error frame with the service's status message.
+    let HandlerTestOutput { handler: h, .. } =
+        HandlerTestBuilder::new().with_command_service().build().await;
+    let methods = [
+        METHOD_LIST_PLUGINS,
+        METHOD_GET_PLUGIN_STATUS,
+        METHOD_ADD_PLUGIN,
+        METHOD_REMOVE_PLUGIN,
+        METHOD_ENABLE_PLUGIN,
+        METHOD_DISABLE_PLUGIN,
+    ];
+    for method in methods {
+        let r = h
+            .handle_frame(req_frame("plugin-svc", method, vec![]))
+            .await;
+        assert_eq!(r.len(), 1, "method: {method}");
+        assert_eq!(r[0].frame_type, FrameType::Error as i32, "method: {method}");
+        if let Some(betcode_proto::v1::tunnel_frame::Payload::Error(e)) = &r[0].payload {
+            assert!(
+                !e.message.contains("CommandService not available"),
+                "method {method} should reach service dispatch, not 'not available'. Got: {}",
+                e.message
+            );
+            assert!(
+                !e.message.contains("Unknown method"),
+                "method {method} should be recognized, not 'Unknown method'. Got: {}",
+                e.message
+            );
+        }
+    }
+}
+
+#[tokio::test]
+async fn list_plugins_with_valid_request_dispatches_through_service() {
+    // Send a properly encoded ListPluginsRequest to verify the full dispatch path:
+    // decode → service call → response frame. The service currently returns
+    // Status::unimplemented, but the key assertion is that it reaches the service
+    // (not "CommandService not available" or "Unknown method").
+    let HandlerTestOutput { handler: h, .. } =
+        HandlerTestBuilder::new().with_command_service().build().await;
+    let req = ListPluginsRequest {};
+    let r = h
+        .handle_frame(req_frame("plugin-list", METHOD_LIST_PLUGINS, encode(&req)))
+        .await;
+    assert_eq!(r.len(), 1);
+    assert_eq!(r[0].frame_type, FrameType::Error as i32);
+    if let Some(betcode_proto::v1::tunnel_frame::Payload::Error(e)) = &r[0].payload {
+        // Should contain the service stub message, not infrastructure errors
+        assert!(
+            e.message.contains("Plugin management not yet available"),
+            "Expected service-level stub message, got: {}",
+            e.message
+        );
     } else {
         panic!("expected error payload");
     }

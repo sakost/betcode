@@ -1,21 +1,21 @@
 //! Tests for GitLabProxyService.
 
-use std::collections::HashMap;
 use std::sync::Arc;
 
 use tonic::Request;
 
 use betcode_proto::v1::git_lab_service_server::GitLabService;
 use betcode_proto::v1::{
-    FrameType, GetIssueRequest, GetIssueResponse, GetMergeRequestRequest, GetMergeRequestResponse,
-    GetPipelineRequest, GetPipelineResponse, ListIssuesRequest, ListIssuesResponse,
+    GetIssueRequest, GetIssueResponse, GetMergeRequestRequest, GetMergeRequestResponse,
+    GetPipelineRequest, GetPipelineResponse, IssueInfo, ListIssuesRequest, ListIssuesResponse,
     ListMergeRequestsRequest, ListMergeRequestsResponse, ListPipelinesRequest,
     ListPipelinesResponse, MergeRequestInfo, PipelineInfo, TunnelFrame,
 };
 
 use super::GitLabProxyService;
 use crate::server::test_helpers::{
-    make_request, setup_offline_router, setup_router_with_machine, spawn_responder, test_claims,
+    make_request, setup_offline_router, setup_router_with_machine, spawn_error_responder,
+    spawn_responder, test_claims,
 };
 
 async fn setup_with_machine(
@@ -44,13 +44,18 @@ async fn list_merge_requests_routes_to_machine() {
         "m1",
         rx,
         ListMergeRequestsResponse {
-            merge_requests: vec![],
-            total: 0,
+            merge_requests: vec![MergeRequestInfo {
+                iid: 99,
+                title: "fix flaky test".into(),
+                source_branch: "fix/flaky".into(),
+                ..Default::default()
+            }],
+            total: 1,
         },
     );
     let req = make_request(
         ListMergeRequestsRequest {
-            project: String::new(),
+            project: "proj".into(),
             state_filter: 0,
             limit: 10,
             offset: 0,
@@ -58,7 +63,10 @@ async fn list_merge_requests_routes_to_machine() {
         "m1",
     );
     let resp = svc.list_merge_requests(req).await.unwrap().into_inner();
-    assert!(resp.merge_requests.is_empty());
+    assert_eq!(resp.merge_requests.len(), 1);
+    assert_eq!(resp.merge_requests[0].iid, 99);
+    assert_eq!(resp.merge_requests[0].title, "fix flaky test");
+    assert_eq!(resp.total, 1);
 }
 
 #[tokio::test]
@@ -97,13 +105,18 @@ async fn list_issues_routes_to_machine() {
         "m1",
         rx,
         ListIssuesResponse {
-            issues: vec![],
-            total: 0,
+            issues: vec![IssueInfo {
+                iid: 5,
+                title: "login page broken".into(),
+                author: "alice".into(),
+                ..Default::default()
+            }],
+            total: 1,
         },
     );
     let req = make_request(
         ListIssuesRequest {
-            project: String::new(),
+            project: "proj".into(),
             state_filter: 0,
             limit: 10,
             offset: 0,
@@ -111,7 +124,10 @@ async fn list_issues_routes_to_machine() {
         "m1",
     );
     let resp = svc.list_issues(req).await.unwrap().into_inner();
-    assert!(resp.issues.is_empty());
+    assert_eq!(resp.issues.len(), 1);
+    assert_eq!(resp.issues[0].iid, 5);
+    assert_eq!(resp.issues[0].title, "login page broken");
+    assert_eq!(resp.total, 1);
 }
 
 #[tokio::test]
@@ -251,27 +267,8 @@ async fn get_pipeline_routes_to_machine() {
 
 #[tokio::test]
 async fn daemon_error_propagated_to_client() {
-    let (svc, router, mut rx) = setup_with_machine("m1").await;
-    let rc = Arc::clone(&router);
-    tokio::spawn(async move {
-        if let Some(frame) = rx.recv().await {
-            let rid = frame.request_id.clone();
-            let err_frame = TunnelFrame {
-                request_id: rid.clone(),
-                frame_type: FrameType::Error as i32,
-                timestamp: None,
-                payload: Some(betcode_proto::v1::tunnel_frame::Payload::Error(
-                    betcode_proto::v1::TunnelError {
-                        code: betcode_proto::v1::TunnelErrorCode::Internal as i32,
-                        message: "daemon error".into(),
-                        details: HashMap::new(),
-                    },
-                )),
-            };
-            let conn = rc.registry().get("m1").await.unwrap();
-            conn.complete_pending(&rid, err_frame).await;
-        }
-    });
+    let (svc, router, rx) = setup_with_machine("m1").await;
+    spawn_error_responder(&router, "m1", rx, "daemon error");
     let req = make_request(
         ListMergeRequestsRequest {
             project: String::new(),

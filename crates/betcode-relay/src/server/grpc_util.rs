@@ -57,3 +57,70 @@ pub async fn forward_unary<Req: Message, Resp: Message + Default>(
         .map_err(router_error_to_status)?;
     decode_response(&frame)
 }
+
+#[cfg(test)]
+mod tests {
+    use tonic::{Code, Status};
+
+    use super::is_peer_disconnect;
+
+    // ── Primary signal: gRPC status code ────────────────────────────
+
+    #[test]
+    fn unavailable_is_peer_disconnect() {
+        let status = Status::unavailable("transport closing");
+        assert!(is_peer_disconnect(&status));
+    }
+
+    #[test]
+    fn cancelled_is_peer_disconnect() {
+        let status = Status::cancelled("request cancelled");
+        assert!(is_peer_disconnect(&status));
+    }
+
+    // ── Fallback: substring matching on Internal status ─────────────
+
+    #[test]
+    fn internal_h2_protocol_error_is_peer_disconnect() {
+        let status = Status::new(Code::Internal, "stream error: h2 protocol error");
+        assert!(is_peer_disconnect(&status));
+    }
+
+    #[test]
+    fn internal_broken_pipe_is_peer_disconnect() {
+        let status = Status::new(Code::Internal, "broken pipe");
+        assert!(is_peer_disconnect(&status));
+    }
+
+    #[test]
+    fn internal_connection_reset_is_peer_disconnect() {
+        let status = Status::new(Code::Internal, "connection reset by peer");
+        assert!(is_peer_disconnect(&status));
+    }
+
+    #[test]
+    fn internal_close_notify_is_peer_disconnect() {
+        let status = Status::new(Code::Internal, "received fatal alert: close_notify");
+        assert!(is_peer_disconnect(&status));
+    }
+
+    // ── Negative cases ──────────────────────────────────────────────
+
+    #[test]
+    fn internal_unrelated_message_is_not_peer_disconnect() {
+        let status = Status::new(Code::Internal, "some other error");
+        assert!(!is_peer_disconnect(&status));
+    }
+
+    #[test]
+    fn ok_is_not_peer_disconnect() {
+        let status = Status::ok("success");
+        assert!(!is_peer_disconnect(&status));
+    }
+
+    #[test]
+    fn not_found_is_not_peer_disconnect() {
+        let status = Status::not_found("resource missing");
+        assert!(!is_peer_disconnect(&status));
+    }
+}

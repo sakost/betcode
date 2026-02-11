@@ -50,23 +50,23 @@ mod tests {
 
     #[test]
     fn test_fuzzy_match_exact() {
-        let items = vec!["cd", "pwd", "exit", "exit-daemon", "reload-commands"];
+        let items = vec!["cd", "pwd", "exit", "exit-daemon", "reload-remote"];
         let results = fuzzy_match("cd", &items, 10);
         assert_eq!(results[0].text, "cd");
     }
 
     #[test]
     fn test_fuzzy_match_substring() {
-        let items = vec!["cd", "pwd", "exit", "exit-daemon", "reload-commands"];
+        let items = vec!["cd", "pwd", "exit", "exit-daemon", "reload-remote"];
         let results = fuzzy_match("rl", &items, 10);
-        assert!(results.iter().any(|r| r.text == "reload-commands"));
+        assert!(results.iter().any(|r| r.text == "reload-remote"));
     }
 
     #[test]
     fn test_fuzzy_match_fzf_style() {
-        let items = vec!["reload-commands", "remove-plugin", "restart"];
-        let results = fuzzy_match("rc", &items, 10);
-        assert_eq!(results[0].text, "reload-commands");
+        let items = vec!["reload-remote", "remove-plugin", "restart"];
+        let results = fuzzy_match("rr", &items, 10);
+        assert_eq!(results[0].text, "reload-remote");
     }
 
     #[test]
@@ -79,8 +79,8 @@ mod tests {
 
     #[test]
     fn test_match_result_has_positions() {
-        let items = vec!["reload-commands"];
-        let results = fuzzy_match("rc", &items, 10);
+        let items = vec!["reload-remote"];
+        let results = fuzzy_match("rr", &items, 10);
         assert!(!results[0].match_positions.is_empty());
     }
 }

@@ -75,8 +75,8 @@ mod tests {
         assert_eq!(ghost_suffix("hel", "help"), Some("p"));
         assert_eq!(ghost_suffix("/cd", "/cd"), None);
         assert_eq!(
-            ghost_suffix("/re", "/reload-commands"),
-            Some("load-commands")
+            ghost_suffix("/re", "/reload-remote"),
+            Some("load-remote")
         );
     }
 }

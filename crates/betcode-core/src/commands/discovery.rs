@@ -69,6 +69,29 @@ pub fn discover_user_commands(working_dir: &Path) -> Vec<CommandEntry> {
     commands
 }
 
+/// Discovers agent names from `.claude/agents/*.md` files.
+///
+/// Each `.md` file stem is treated as an agent name.
+pub fn discover_agents(working_dir: &Path) -> Vec<String> {
+    let agents_dir = working_dir.join(".claude").join("agents");
+
+    let entries = match std::fs::read_dir(&agents_dir) {
+        Ok(entries) => entries,
+        Err(_) => return Vec::new(),
+    };
+
+    let mut agents = Vec::new();
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.extension().and_then(|e| e.to_str()) == Some("md") {
+            if let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
+                agents.push(stem.to_string());
+            }
+        }
+    }
+    agents
+}
+
 /// Parses Claude Code `/help` output, extracting command names.
 ///
 /// Returns `(known, unknown)` where `known` are commands that exist in the
@@ -139,6 +162,26 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let cmds = discover_user_commands(dir.path());
         assert!(cmds.is_empty());
+    }
+
+    #[test]
+    fn test_discover_agents_from_directory() {
+        let dir = TempDir::new().unwrap();
+        let agents_dir = dir.path().join(".claude").join("agents");
+        std::fs::create_dir_all(&agents_dir).unwrap();
+        std::fs::write(agents_dir.join("researcher.md"), "# Researcher").unwrap();
+        std::fs::write(agents_dir.join("code-reviewer.md"), "# Code Reviewer").unwrap();
+        let agents = discover_agents(dir.path());
+        assert_eq!(agents.len(), 2);
+        assert!(agents.contains(&"researcher".to_string()));
+        assert!(agents.contains(&"code-reviewer".to_string()));
+    }
+
+    #[test]
+    fn test_discover_agents_missing_dir() {
+        let dir = TempDir::new().unwrap();
+        let agents = discover_agents(dir.path());
+        assert!(agents.is_empty());
     }
 
     #[test]

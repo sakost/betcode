@@ -11,13 +11,13 @@ use betcode_proto::v1::{
     AgentEvent, CancelTurnRequest, CancelTurnResponse, CompactSessionRequest,
     CompactSessionResponse, EncryptedPayload, FrameType, InputLockRequest, InputLockResponse,
     KeyExchangeRequest, KeyExchangeResponse, ListSessionsRequest, ListSessionsResponse,
-    ResumeSessionRequest, StreamPayload, TunnelFrame,
+    ResumeSessionRequest, SessionSummary, StreamPayload, TunnelFrame,
 };
 
 use super::{extract_machine_id, AgentProxyService};
 use crate::server::test_helpers::{
-    encode_msg, make_request, setup_offline_router, setup_router_with_machine, spawn_responder,
-    test_claims,
+    encode_msg, make_request, setup_offline_router, setup_router_with_machine,
+    spawn_error_responder, spawn_responder, test_claims,
 };
 
 async fn setup_with_machine(
@@ -63,13 +63,20 @@ async fn list_sessions_routes_to_machine() {
         "m1",
         rx,
         ListSessionsResponse {
-            sessions: vec![],
-            total: 0,
+            sessions: vec![SessionSummary {
+                id: "sess-42".into(),
+                model: "gpt-4".into(),
+                working_directory: "/home/dev".into(),
+                status: "active".into(),
+                message_count: 5,
+                ..Default::default()
+            }],
+            total: 1,
         },
     );
     let req = make_request(
         ListSessionsRequest {
-            working_directory: String::new(),
+            working_directory: "/home/dev".into(),
             worktree_id: String::new(),
             limit: 10,
             offset: 0,
@@ -77,7 +84,11 @@ async fn list_sessions_routes_to_machine() {
         "m1",
     );
     let resp = svc.list_sessions(req).await.unwrap().into_inner();
-    assert_eq!(resp.sessions.len(), 0);
+    assert_eq!(resp.sessions.len(), 1);
+    assert_eq!(resp.sessions[0].id, "sess-42");
+    assert_eq!(resp.sessions[0].model, "gpt-4");
+    assert_eq!(resp.sessions[0].message_count, 5);
+    assert_eq!(resp.total, 1);
 }
 
 #[tokio::test]
@@ -185,27 +196,8 @@ async fn missing_claims_returns_internal() {
 
 #[tokio::test]
 async fn daemon_error_propagated_to_client() {
-    let (svc, router, mut rx) = setup_with_machine("m1").await;
-    let rc = Arc::clone(&router);
-    tokio::spawn(async move {
-        if let Some(frame) = rx.recv().await {
-            let rid = frame.request_id.clone();
-            let err_frame = TunnelFrame {
-                request_id: rid.clone(),
-                frame_type: FrameType::Error as i32,
-                timestamp: None,
-                payload: Some(betcode_proto::v1::tunnel_frame::Payload::Error(
-                    betcode_proto::v1::TunnelError {
-                        code: betcode_proto::v1::TunnelErrorCode::Internal as i32,
-                        message: "daemon crashed".into(),
-                        details: HashMap::new(),
-                    },
-                )),
-            };
-            let conn = rc.registry().get("m1").await.unwrap();
-            conn.complete_pending(&rid, err_frame).await;
-        }
-    });
+    let (svc, router, rx) = setup_with_machine("m1").await;
+    spawn_error_responder(&router, "m1", rx, "daemon crashed");
     let req = make_request(
         ListSessionsRequest {
             working_directory: String::new(),

@@ -117,7 +117,7 @@ async fn main() -> anyhow::Result<()> {
 
     // Create and start gRPC server
     let config = ServerConfig::tcp(args.addr).with_max_sessions(args.max_sessions);
-    let server = GrpcServer::new(config, db, subprocess_manager, shutdown_tx.clone());
+    let server = GrpcServer::new(config, db, subprocess_manager, shutdown_tx.clone()).await;
 
     // Optionally spawn tunnel client
     let tunnel_handle = if let Some(relay_url) = &args.relay_url {
@@ -149,7 +149,7 @@ async fn main() -> anyhow::Result<()> {
             Arc::clone(server.multiplexer()),
             server.db().clone(),
         )?;
-        tunnel_client.set_command_service(server.command_service_impl());
+        tunnel_client.set_command_service(Arc::new(server.command_service_impl()));
         tunnel_client.set_worktree_service(Arc::new(server.worktree_service_impl()));
         if let Some(gitlab_svc) = GrpcServer::gitlab_service_impl_from_env() {
             info!("GitLab service configured for tunnel");

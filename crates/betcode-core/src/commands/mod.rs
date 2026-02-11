@@ -3,7 +3,7 @@ pub mod discovery;
 pub mod matcher;
 
 pub use builtin::builtin_commands;
-pub use discovery::{discover_user_commands, hardcoded_cc_commands, parse_help_output};
+pub use discovery::{discover_agents, discover_user_commands, hardcoded_cc_commands, parse_help_output};
 
 /// Category of a command, determining its origin and handling.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -83,6 +83,6 @@ mod tests {
         assert!(names.contains(&"pwd"));
         assert!(names.contains(&"exit"));
         assert!(names.contains(&"exit-daemon"));
-        assert!(names.contains(&"reload-commands"));
+        assert!(names.contains(&"reload-remote"));
     }
 }

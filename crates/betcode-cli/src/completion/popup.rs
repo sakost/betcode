@@ -115,13 +115,13 @@ mod tests {
     #[test]
     fn test_completion_item_display() {
         let item = CompletionItem {
-            text: "reload-commands".to_string(),
+            text: "reload-remote".to_string(),
             description: "Re-discover all commands".to_string(),
             category: CompletionCategory::Command,
             source_badge: "[bc]".to_string(),
             match_positions: vec![0, 7],
         };
-        assert_eq!(item.text, "reload-commands");
+        assert_eq!(item.text, "reload-remote");
     }
 
     #[test]

@@ -26,7 +26,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use thiserror::Error;
 use tonic::transport::Server;
-use tracing::info;
+use tracing::{info, warn};
 
 use tokio::sync::RwLock;
 
@@ -77,12 +77,14 @@ impl GrpcServer {
     /// `shutdown_tx` is used by the `exit-daemon` command to trigger graceful
     /// daemon shutdown.  The caller should subscribe to this channel and stop
     /// the server when `true` is received.
-    pub fn new(
+    pub async fn new(
         config: ServerConfig,
         db: Database,
         subprocess_manager: SubprocessManager,
         shutdown_tx: tokio::sync::watch::Sender<bool>,
     ) -> Self {
+        use crate::completion::agent_lister::{AgentInfo, AgentKind, AgentStatus};
+
         let subprocess_manager = Arc::new(subprocess_manager);
         let multiplexer = Arc::new(SessionMultiplexer::with_defaults());
         let relay = Arc::new(SessionRelay::new(
@@ -101,8 +103,21 @@ impl GrpcServer {
         }
 
         let command_registry = Arc::new(RwLock::new(registry));
-        let file_index = Arc::new(RwLock::new(FileIndex::empty()));
-        let agent_lister = Arc::new(RwLock::new(AgentLister::new()));
+        let file_index = Arc::new(RwLock::new(
+            FileIndex::build(&cwd, 10_000)
+                .await
+                .unwrap_or_else(|_| FileIndex::empty()),
+        ));
+        let mut lister = AgentLister::new();
+        for name in betcode_core::commands::discover_agents(&cwd) {
+            lister.update(AgentInfo {
+                name,
+                kind: AgentKind::ClaudeInternal,
+                status: AgentStatus::Idle,
+                session_id: None,
+            });
+        }
+        let agent_lister = Arc::new(RwLock::new(lister));
         let service_executor = Arc::new(RwLock::new(ServiceExecutor::new(cwd)));
 
         let command_service = CommandServiceImpl::new(
@@ -231,7 +246,13 @@ impl GrpcServer {
         let base_url = std::env::var("BETCODE_GITLAB_URL").ok().filter(|s| !s.is_empty())?;
         let token = std::env::var("BETCODE_GITLAB_TOKEN").ok().filter(|s| !s.is_empty())?;
         let config = GitLabConfig { base_url, token };
-        let client = GitLabClient::new(&config).ok()?;
+        let client = match GitLabClient::new(&config) {
+            Ok(c) => c,
+            Err(e) => {
+                warn!("Failed to create GitLab client: {e}");
+                return None;
+            }
+        };
         Some(GitLabServiceImpl::new(Arc::new(client)))
     }
 }

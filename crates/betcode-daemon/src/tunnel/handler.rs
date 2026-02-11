@@ -118,7 +118,7 @@ pub struct TunnelRequestHandler {
     /// Identity keypair for key exchange. None = key exchange disabled.
     identity: Option<Arc<IdentityKeyPair>>,
     /// CommandService implementation for handling command-related RPCs through the tunnel.
-    command_service: Option<CommandServiceImpl>,
+    command_service: Option<Arc<CommandServiceImpl>>,
     /// GitLabService implementation for handling GitLab-related RPCs through the tunnel.
     gitlab_service: Option<Arc<GitLabServiceImpl>>,
     /// WorktreeService implementation for handling worktree-related RPCs through the tunnel.
@@ -151,7 +151,7 @@ impl TunnelRequestHandler {
     }
 
     /// Set the CommandService implementation for handling command RPCs through the tunnel.
-    pub fn set_command_service(&mut self, service: CommandServiceImpl) {
+    pub fn set_command_service(&mut self, service: Arc<CommandServiceImpl>) {
         self.command_service = Some(service);
     }
 

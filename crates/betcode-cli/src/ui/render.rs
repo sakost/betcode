@@ -3,7 +3,7 @@
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Clear, Paragraph, Wrap};
+use ratatui::widgets::{Block, Borders, Clear, Padding, Paragraph, Wrap};
 use ratatui::Frame;
 use unicode_width::UnicodeWidthStr;
 
@@ -36,7 +36,8 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     let bottom_panel = bottom_panel_mode(app);
 
     let frame_width = frame.area().width;
-    let inner_input_width = frame_width.saturating_sub(2) as usize;
+    // 2 for borders + 2 for horizontal padding
+    let inner_input_width = frame_width.saturating_sub(4) as usize;
     let bottom_height = match bottom_panel {
         BottomPanel::Input => {
             let input_lines = if inner_input_width == 0 || app.input.is_empty() {
@@ -97,7 +98,10 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     // Render completion popup overlay if visible
     let area = frame.area();
     if app.completion_state.popup_visible && !app.completion_state.items.is_empty() {
-        let popup_height = (app.completion_state.items.len() as u16).min(8) + 2; // +2 for borders
+        use crate::app::COMPLETION_VISIBLE_COUNT;
+        let visible_count = app.completion_state.items.len().min(COMPLETION_VISIBLE_COUNT);
+        let popup_height = visible_count as u16 + 2; // +2 for borders
+
         let popup_area = Rect {
             x: area.x + 1,
             y: area.height.saturating_sub(bottom_height + popup_height + 1),
@@ -105,13 +109,14 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
             height: popup_height,
         };
 
-        let items: Vec<Line> = app
-            .completion_state
-            .items
+        let offset = app.completion_state.scroll_offset;
+        let end = (offset + COMPLETION_VISIBLE_COUNT).min(app.completion_state.items.len());
+        let items: Vec<Line> = app.completion_state.items[offset..end]
             .iter()
             .enumerate()
             .map(|(i, item)| {
-                let style = if i == app.completion_state.selected_index {
+                let actual_index = offset + i;
+                let style = if actual_index == app.completion_state.selected_index {
                     Style::default().fg(Color::Black).bg(Color::Cyan)
                 } else {
                     Style::default()
@@ -225,8 +230,9 @@ fn draw_messages(frame: &mut Frame, app: &mut App, area: Rect) {
         }
     }
 
-    let inner_height = area.height.saturating_sub(2);
-    let inner_width = area.width.saturating_sub(2);
+    // 2 for borders + 2 for padding on each axis
+    let inner_height = area.height.saturating_sub(4);
+    let inner_width = area.width.saturating_sub(4);
 
     // Use ratatui's own word-wrap line count so scroll range exactly matches
     // what the Paragraph widget actually renders.
@@ -255,7 +261,12 @@ fn draw_messages(frame: &mut Frame, app: &mut App, area: Rect) {
     };
 
     let messages = paragraph
-        .block(Block::default().borders(Borders::ALL).title(title))
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title(title)
+                .padding(Padding::uniform(1)),
+        )
         .scroll((scroll, 0));
     frame.render_widget(messages, area);
 }
@@ -268,7 +279,7 @@ fn draw_input(frame: &mut Frame, app: &App, area: Rect) {
 
         let query = detect_trigger(&app.input, app.cursor_pos).and_then(|t| match t {
             crate::completion::controller::CompletionTrigger::Command { query } => Some(query),
-            crate::completion::controller::CompletionTrigger::Agent { query } => Some(query),
+            crate::completion::controller::CompletionTrigger::Agent { query, .. } => Some(query),
             crate::completion::controller::CompletionTrigger::File { query } => Some(query),
             _ => None,
         });
@@ -305,18 +316,22 @@ fn draw_input(frame: &mut Frame, app: &App, area: Rect) {
                     "Waiting..."
                 } else {
                     "Input"
-                }),
+                })
+                .padding(Padding::horizontal(1)),
         )
         .wrap(Wrap { trim: false });
     frame.render_widget(input, area);
 
-    let inner_width = area.width.saturating_sub(2) as usize;
+    // 2 for borders + 2 for horizontal padding
+    let inner_width = area.width.saturating_sub(4) as usize;
     let (cursor_row, cursor_col) = compute_wrapped_cursor(&app.input, app.cursor_pos, inner_width);
+    // +2 for left border + left padding
     let cursor_x = area
         .x
-        .saturating_add(1)
+        .saturating_add(2)
         .saturating_add(cursor_col)
-        .min(area.x.saturating_add(area.width.saturating_sub(2)));
+        .min(area.x.saturating_add(area.width.saturating_sub(3)));
+    // +1 for top border (no vertical padding on input)
     let cursor_y = area
         .y
         .saturating_add(1)

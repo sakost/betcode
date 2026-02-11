@@ -32,8 +32,8 @@ pub fn builtin_commands() -> Vec<CommandEntry> {
             "built-in",
         ),
         CommandEntry::new(
-            "reload-commands",
-            "Reload the command registry",
+            "reload-remote",
+            "Reload commands, agents, and file index",
             CommandCategory::Service,
             ExecutionMode::Local,
             "built-in",

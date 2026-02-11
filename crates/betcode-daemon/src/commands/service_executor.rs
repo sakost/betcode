@@ -60,7 +60,7 @@ impl ServiceExecutor {
     ///
     /// Clears existing CC-sourced commands, re-runs discovery, and adds
     /// the fresh commands back into the registry.
-    pub fn execute_reload_commands(&self, registry: &mut CommandRegistry) -> Result<String> {
+    pub fn execute_reload_remote(&self, registry: &mut CommandRegistry) -> Result<String> {
         // Clear existing CC commands
         registry.clear_source("claude-code");
         registry.clear_source("user");
@@ -178,7 +178,7 @@ mod tests {
     }
 
     #[test]
-    fn test_execute_reload_commands() {
+    fn test_execute_reload_remote() {
         let dir = TempDir::new().unwrap();
         // Create a user command file to be discovered
         let commands_dir = dir.path().join(".claude").join("commands");
@@ -188,7 +188,7 @@ mod tests {
         let executor = ServiceExecutor::new(dir.path().to_path_buf());
         let mut registry = CommandRegistry::new();
 
-        let msg = executor.execute_reload_commands(&mut registry).unwrap();
+        let msg = executor.execute_reload_remote(&mut registry).unwrap();
         assert!(msg.contains("Reloaded"));
 
         // Should have CC commands + user commands + builtins

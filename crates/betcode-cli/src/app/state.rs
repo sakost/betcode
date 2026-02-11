@@ -78,6 +78,9 @@ pub struct QuestionOptionDisplay {
     pub description: String,
 }
 
+/// Maximum number of completion items visible in the popup at once.
+pub const COMPLETION_VISIBLE_COUNT: usize = 8;
+
 /// Completion state for the inline autocomplete system.
 #[derive(Debug, Clone, Default)]
 pub struct CompletionState {
@@ -87,8 +90,21 @@ pub struct CompletionState {
     pub items: Vec<String>,
     /// Currently selected item index.
     pub selected_index: usize,
+    /// Scroll offset for the visible window into `items`.
+    pub scroll_offset: usize,
     /// Ghost text suffix to display after the typed text.
     pub ghost_text: Option<String>,
+}
+
+impl CompletionState {
+    /// Adjust `scroll_offset` so that `selected_index` is within the visible window.
+    pub fn adjust_scroll(&mut self) {
+        if self.selected_index < self.scroll_offset {
+            self.scroll_offset = self.selected_index;
+        } else if self.selected_index >= self.scroll_offset + COMPLETION_VISIBLE_COUNT {
+            self.scroll_offset = self.selected_index + 1 - COMPLETION_VISIBLE_COUNT;
+        }
+    }
 }
 
 /// Token usage info for status bar.
@@ -146,6 +162,8 @@ pub struct CompletionRequest {
 pub enum CompletionFetchKind {
     Agents,
     Files,
+    /// Combined agents + files (used for `@text` without forced `@@`).
+    Mixed,
 }
 
 impl App {
@@ -187,17 +205,23 @@ impl App {
         match trigger {
             Some(CompletionTrigger::Command { ref query }) => {
                 // Search local cache instantly for `/` commands.
-                let results = self.command_cache.search(query, 8);
+                let results = self.command_cache.search(query, 50);
                 self.completion_state.items = results.iter().map(|c| c.name.clone()).collect();
                 self.completion_state.selected_index = 0;
+                self.completion_state.scroll_offset = 0;
                 self.completion_state.ghost_text = self.completion_state.items.first().cloned();
                 self.completion_state.popup_visible = !self.completion_state.items.is_empty();
             }
-            Some(CompletionTrigger::Agent { ref query }) => {
-                // Send async fetch request for agents.
+            Some(CompletionTrigger::Agent { ref query, forced }) => {
+                // `@@` → agents only; `@` → mixed (agents + files).
+                let kind = if forced {
+                    CompletionFetchKind::Agents
+                } else {
+                    CompletionFetchKind::Mixed
+                };
                 if let Some(tx) = &self.completion_request_tx {
                     let _ = tx.try_send(CompletionRequest {
-                        kind: CompletionFetchKind::Agents,
+                        kind,
                         query: query.clone(),
                     });
                 }
@@ -223,6 +247,7 @@ impl App {
                 self.completion_state.popup_visible = false;
                 self.completion_state.items.clear();
                 self.completion_state.selected_index = 0;
+                self.completion_state.scroll_offset = 0;
             }
         }
     }
@@ -1194,5 +1219,82 @@ mod tests {
         assert_eq!(app.messages[2].content, "And 3+3?");
         assert_eq!(app.messages[3].role, MessageRole::Assistant);
         assert_eq!(app.messages[3].content, "6");
+    }
+
+    // =========================================================================
+    // CompletionState scroll tests
+    // =========================================================================
+
+    #[test]
+    fn completion_scroll_stays_zero_within_visible() {
+        let mut cs = CompletionState {
+            items: (0..5).map(|i| format!("item-{i}")).collect(),
+            selected_index: 4,
+            scroll_offset: 0,
+            ..Default::default()
+        };
+        cs.adjust_scroll();
+        assert_eq!(cs.scroll_offset, 0, "5 items fit in 8-item window");
+    }
+
+    #[test]
+    fn completion_scroll_follows_selection_down() {
+        let mut cs = CompletionState {
+            items: (0..20).map(|i| format!("item-{i}")).collect(),
+            selected_index: 0,
+            scroll_offset: 0,
+            ..Default::default()
+        };
+        // Simulate pressing Down until past the visible window
+        for target in 1..=12 {
+            cs.selected_index = target;
+            cs.adjust_scroll();
+        }
+        // selected=12 means scroll_offset must be at least 12+1-8=5
+        assert_eq!(cs.scroll_offset, 5);
+        assert!(cs.selected_index >= cs.scroll_offset);
+        assert!(cs.selected_index < cs.scroll_offset + COMPLETION_VISIBLE_COUNT);
+    }
+
+    #[test]
+    fn completion_scroll_follows_selection_up() {
+        let mut cs = CompletionState {
+            items: (0..20).map(|i| format!("item-{i}")).collect(),
+            selected_index: 10,
+            scroll_offset: 5,
+            ..Default::default()
+        };
+        // Simulate pressing Up back to item 3 (below current scroll_offset)
+        cs.selected_index = 3;
+        cs.adjust_scroll();
+        assert_eq!(cs.scroll_offset, 3);
+    }
+
+    #[test]
+    fn completion_scroll_wraps_down_to_zero() {
+        let mut cs = CompletionState {
+            items: (0..20).map(|i| format!("item-{i}")).collect(),
+            selected_index: 19,
+            scroll_offset: 12,
+            ..Default::default()
+        };
+        // Wrap from last to first
+        cs.selected_index = 0;
+        cs.adjust_scroll();
+        assert_eq!(cs.scroll_offset, 0);
+    }
+
+    #[test]
+    fn completion_scroll_wraps_up_to_end() {
+        let mut cs = CompletionState {
+            items: (0..20).map(|i| format!("item-{i}")).collect(),
+            selected_index: 0,
+            scroll_offset: 0,
+            ..Default::default()
+        };
+        // Wrap from first to last
+        cs.selected_index = 19;
+        cs.adjust_scroll();
+        assert_eq!(cs.scroll_offset, 12); // 19+1-8=12
     }
 }

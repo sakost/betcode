@@ -38,6 +38,7 @@ pub fn handle_completion_key(app: &mut App, key: crossterm::event::KeyEvent) -> 
                 } else {
                     app.completion_state.selected_index -= 1;
                 }
+                app.completion_state.adjust_scroll();
                 app.completion_state.ghost_text = app
                     .completion_state
                     .items
@@ -50,6 +51,7 @@ pub fn handle_completion_key(app: &mut App, key: crossterm::event::KeyEvent) -> 
             if !app.completion_state.items.is_empty() {
                 app.completion_state.selected_index =
                     (app.completion_state.selected_index + 1) % app.completion_state.items.len();
+                app.completion_state.adjust_scroll();
                 app.completion_state.ghost_text = app
                     .completion_state
                     .items
@@ -245,6 +247,77 @@ mod tests {
         assert!(app.pending_fingerprint.is_some());
         assert!(!app.should_quit);
     }
+
+    fn make_completion_app(item_count: usize) -> App {
+        let mut app = App::new();
+        app.completion_state.items = (0..item_count).map(|i| format!("item-{i}")).collect();
+        app.completion_state.popup_visible = true;
+        app.completion_state.selected_index = 0;
+        app.completion_state.scroll_offset = 0;
+        app.completion_state.ghost_text = app.completion_state.items.first().cloned();
+        app
+    }
+
+    fn down_key() -> crossterm::event::KeyEvent {
+        crossterm::event::KeyEvent::new(KeyCode::Down, crossterm::event::KeyModifiers::NONE)
+    }
+
+    fn up_key() -> crossterm::event::KeyEvent {
+        crossterm::event::KeyEvent::new(KeyCode::Up, crossterm::event::KeyModifiers::NONE)
+    }
+
+    #[test]
+    fn completion_scroll_adjusts_on_down() {
+        let mut app = make_completion_app(20);
+        // Press Down 10 times — should scroll
+        for _ in 0..10 {
+            handle_completion_key(&mut app, down_key());
+        }
+        assert_eq!(app.completion_state.selected_index, 10);
+        // selected=10 should be visible: scroll_offset + 8 > 10
+        assert!(app.completion_state.scroll_offset + 8 > 10);
+        assert!(app.completion_state.selected_index >= app.completion_state.scroll_offset);
+    }
+
+    #[test]
+    fn completion_scroll_adjusts_on_up() {
+        let mut app = make_completion_app(20);
+        // Move to item 12
+        for _ in 0..12 {
+            handle_completion_key(&mut app, down_key());
+        }
+        assert_eq!(app.completion_state.selected_index, 12);
+        let scroll_at_12 = app.completion_state.scroll_offset;
+
+        // Now press Up back to 0
+        for _ in 0..12 {
+            handle_completion_key(&mut app, up_key());
+        }
+        assert_eq!(app.completion_state.selected_index, 0);
+        assert_eq!(app.completion_state.scroll_offset, 0);
+        assert!(scroll_at_12 > 0, "Should have scrolled down at item 12");
+    }
+
+    #[test]
+    fn completion_scroll_wraps_down_resets_offset() {
+        let mut app = make_completion_app(20);
+        // Move to last item then wrap
+        for _ in 0..20 {
+            handle_completion_key(&mut app, down_key());
+        }
+        // Should wrap to 0
+        assert_eq!(app.completion_state.selected_index, 0);
+        assert_eq!(app.completion_state.scroll_offset, 0);
+    }
+
+    #[test]
+    fn completion_scroll_wraps_up_jumps_to_end() {
+        let mut app = make_completion_app(20);
+        // At index 0, press Up → wraps to 19
+        handle_completion_key(&mut app, up_key());
+        assert_eq!(app.completion_state.selected_index, 19);
+        assert_eq!(app.completion_state.scroll_offset, 12); // 19+1-8=12
+    }
 }
 
 /// Replace the current token (at cursor) with `replacement`, updating cursor position.
@@ -391,25 +464,25 @@ async fn handle_input_key(
     match completion_action {
         CompletionAction::Accept(text) => {
             // Replace only the trigger token, preserving the prefix character(s).
+            // A trailing space is appended so the cursor moves past the token
+            // boundary, preventing the completion popup from reopening.
             use crate::completion::controller::{detect_trigger, CompletionTrigger};
             let trigger = detect_trigger(&app.input, app.cursor_pos);
             match trigger {
                 Some(CompletionTrigger::Command { .. }) => {
-                    replace_token(app, &format!("/{}", text));
+                    replace_token(app, &format!("/{} ", text));
                 }
-                Some(CompletionTrigger::Agent { ref query })
-                    if app.input[..app.cursor_pos].ends_with(&format!("@@{}", query)) =>
-                {
-                    replace_token(app, &format!("@@{}", text));
+                Some(CompletionTrigger::Agent { forced: true, .. }) => {
+                    replace_token(app, &format!("@@{} ", text));
                 }
-                Some(CompletionTrigger::Agent { .. }) => {
-                    replace_token(app, &format!("@{}", text));
+                Some(CompletionTrigger::Agent { forced: false, .. }) => {
+                    replace_token(app, &format!("@{} ", text));
                 }
                 Some(CompletionTrigger::File { .. }) => {
-                    replace_token(app, &format!("@{}", text));
+                    replace_token(app, &format!("@{} ", text));
                 }
                 _ => {
-                    replace_token(app, &text);
+                    replace_token(app, &format!("{} ", text));
                 }
             }
             app.update_completion_state();

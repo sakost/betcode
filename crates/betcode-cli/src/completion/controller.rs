@@ -6,10 +6,10 @@
 /// The type of completion trigger detected from user input.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CompletionTrigger {
-    /// Slash command: `/help`, `/reload-commands`
+    /// Slash command: `/help`, `/reload-remote`
     Command { query: String },
-    /// Agent mention: `@researcher`, `@@forced-agent`
-    Agent { query: String },
+    /// Agent mention: `@researcher` (forced=false), `@@forced-agent` (forced=true)
+    Agent { query: String, forced: bool },
     /// File reference: `@/src/main.rs`, `@./file`, `@README.md`
     File { query: String },
     /// Bash shortcut: `!ls -la`
@@ -67,6 +67,7 @@ pub fn detect_trigger(input: &str, cursor_pos: usize) -> Option<CompletionTrigge
         if let Some(rest) = after_at.strip_prefix('@') {
             return Some(CompletionTrigger::Agent {
                 query: rest.to_string(),
+                forced: true,
             });
         }
 
@@ -86,6 +87,7 @@ pub fn detect_trigger(input: &str, cursor_pos: usize) -> Option<CompletionTrigge
 
         return Some(CompletionTrigger::Agent {
             query: after_at.to_string(),
+            forced: false,
         });
     }
 
@@ -138,12 +140,13 @@ mod tests {
     }
 
     #[test]
-    fn test_detect_trigger_at_agent() {
+    fn test_detect_trigger_at_agent_not_forced() {
         let trigger = detect_trigger("@res", 4);
         assert_eq!(
             trigger,
             Some(CompletionTrigger::Agent {
-                query: "res".to_string()
+                query: "res".to_string(),
+                forced: false,
             })
         );
     }
@@ -171,12 +174,13 @@ mod tests {
     }
 
     #[test]
-    fn test_detect_trigger_at_force_agent() {
+    fn test_detect_trigger_at_force_agent_is_forced() {
         let trigger = detect_trigger("@@res", 5);
         assert_eq!(
             trigger,
             Some(CompletionTrigger::Agent {
-                query: "res".to_string()
+                query: "res".to_string(),
+                forced: true,
             })
         );
     }

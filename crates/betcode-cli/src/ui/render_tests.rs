@@ -100,7 +100,8 @@ mod tests {
         app.cursor_pos = 5;
         terminal.draw(|frame| draw(frame, &mut app)).unwrap();
         let pos = terminal.get_cursor_position().unwrap();
-        assert_eq!(pos.x, 6);
+        // x = 2 (border + padding) + 5 (cursor col) = 7
+        assert_eq!(pos.x, 7);
     }
 
     #[test]
@@ -108,17 +109,22 @@ mod tests {
         let backend = TestBackend::new(40, 24);
         let mut terminal = Terminal::new(backend).unwrap();
         let mut app = App::new();
-        app.input = "B".repeat(38);
-        app.cursor_pos = 38;
+        // inner_width = 40 - 4 (borders + padding) = 36
+        // Text exactly fills inner width: cursor clamped to right edge of content
+        app.input = "B".repeat(36);
+        app.cursor_pos = 36;
         terminal.draw(|frame| draw(frame, &mut app)).unwrap();
         let pos = terminal.get_cursor_position().unwrap();
-        assert_eq!(pos.x, 38);
+        // x = min(2 + 36, 40 - 3) = min(38, 37) = 37
+        assert_eq!(pos.x, 37);
 
-        app.input = "B".repeat(39);
-        app.cursor_pos = 39;
+        // One char past inner width wraps to next line
+        app.input = "B".repeat(37);
+        app.cursor_pos = 37;
         terminal.draw(|frame| draw(frame, &mut app)).unwrap();
         let pos = terminal.get_cursor_position().unwrap();
-        assert_eq!(pos.x, 2);
+        // row 1, col 1 → x = 2 + 1 = 3
+        assert_eq!(pos.x, 3);
     }
 
     #[test]
@@ -126,11 +132,14 @@ mod tests {
         let backend = TestBackend::new(40, 24);
         let mut terminal = Terminal::new(backend).unwrap();
         let mut app = App::new();
+        // inner_width = 36. 80 chars: line1=0-35, line2=36-71, line3=72-79
+        // cursor at 40: line 2, offset 40-36=4 → col 4
         app.input = "C".repeat(80);
         app.cursor_pos = 40;
         terminal.draw(|frame| draw(frame, &mut app)).unwrap();
         let pos = terminal.get_cursor_position().unwrap();
-        assert_eq!(pos.x, 3);
+        // x = 2 + 4 = 6
+        assert_eq!(pos.x, 6);
     }
 
     #[test]
@@ -140,7 +149,8 @@ mod tests {
         let mut app = App::new();
         terminal.draw(|frame| draw(frame, &mut app)).unwrap();
         let pos = terminal.get_cursor_position().unwrap();
-        assert_eq!(pos.x, 1);
+        // x = 2 (border + padding) + 0 = 2
+        assert_eq!(pos.x, 2);
     }
 
     #[test]
@@ -379,7 +389,7 @@ mod tests {
 
         // Build the same Paragraph that draw_messages builds and ask ratatui
         // for its authoritative line count.
-        let inner_width = width.saturating_sub(2); // borders
+        let inner_width = width.saturating_sub(4); // borders + padding
         use ratatui::text::{Line, Span};
         use ratatui::widgets::{Paragraph, Wrap};
         let prefix = "Claude: ";

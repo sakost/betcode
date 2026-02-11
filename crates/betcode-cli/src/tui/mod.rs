@@ -259,7 +259,7 @@ pub async fn run(
                         let mut request =
                             tonic::Request::new(betcode_proto::v1::ListAgentsRequest {
                                 query: latest.query,
-                                max_results: 8,
+                                max_results: 50,
                             });
                         crate::connection::attach_relay_metadata(
                             &mut request,
@@ -279,7 +279,7 @@ pub async fn run(
                     CompletionFetchKind::Files => {
                         let mut request = tonic::Request::new(betcode_proto::v1::ListPathRequest {
                             query: latest.query,
-                            max_results: 8,
+                            max_results: 50,
                         });
                         crate::connection::attach_relay_metadata(
                             &mut request,
@@ -295,6 +295,55 @@ pub async fn run(
                                 .collect(),
                             Err(_) => Vec::new(),
                         }
+                    }
+                    CompletionFetchKind::Mixed => {
+                        // Fetch both agents and files in parallel, combine results.
+                        let mut agent_req =
+                            tonic::Request::new(betcode_proto::v1::ListAgentsRequest {
+                                query: latest.query.clone(),
+                                max_results: 50,
+                            });
+                        crate::connection::attach_relay_metadata(
+                            &mut agent_req,
+                            comp_auth_token.as_deref(),
+                            comp_machine_id.as_deref(),
+                        );
+                        let mut file_req =
+                            tonic::Request::new(betcode_proto::v1::ListPathRequest {
+                                query: latest.query,
+                                max_results: 50,
+                            });
+                        crate::connection::attach_relay_metadata(
+                            &mut file_req,
+                            comp_auth_token.as_deref(),
+                            comp_machine_id.as_deref(),
+                        );
+
+                        // Cannot tokio::join! two calls on the same &mut client,
+                        // so call sequentially.
+                        let agents: Vec<String> = match cmd_client.list_agents(agent_req).await {
+                            Ok(resp) => resp
+                                .into_inner()
+                                .agents
+                                .into_iter()
+                                .map(|a| a.name)
+                                .collect(),
+                            Err(_) => Vec::new(),
+                        };
+                        let files: Vec<String> = match cmd_client.list_path(file_req).await {
+                            Ok(resp) => resp
+                                .into_inner()
+                                .entries
+                                .into_iter()
+                                .map(|p| p.path)
+                                .collect(),
+                            Err(_) => Vec::new(),
+                        };
+
+                        // Agents first, then files
+                        let mut combined = agents;
+                        combined.extend(files);
+                        combined
                     }
                 };
 
@@ -373,6 +422,7 @@ pub async fn run(
             Some(resp) = completion_resp_rx.recv() => {
                 app.completion_state.items = resp.items;
                 app.completion_state.selected_index = 0;
+                app.completion_state.scroll_offset = 0;
                 app.completion_state.ghost_text =
                     app.completion_state.items.first().cloned();
                 app.completion_state.popup_visible =

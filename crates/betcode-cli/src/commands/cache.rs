@@ -79,7 +79,7 @@ mod tests {
                 source: "builtin".to_string(),
             },
             CachedCommand {
-                name: "reload-commands".to_string(),
+                name: "reload-remote".to_string(),
                 description: "Re-discover all commands".to_string(),
                 category: "service".to_string(),
                 source: "builtin".to_string(),
@@ -119,9 +119,9 @@ mod tests {
         let mut cache = CommandCache::new();
         cache.load(sample_entries());
 
-        let results = cache.search("rc", 10);
+        let results = cache.search("rr", 10);
         assert!(!results.is_empty());
-        assert_eq!(results[0].name, "reload-commands");
+        assert_eq!(results[0].name, "reload-remote");
     }
 
     #[test]

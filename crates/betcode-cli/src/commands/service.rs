@@ -2,7 +2,7 @@
 //!
 //! Service commands are handled locally by betcode rather than being
 //! forwarded to Claude Code. They include /cd, /pwd, /exit, /exit-daemon,
-//! /reload-commands, and !bash shortcuts.
+//! /reload-remote, and !bash shortcuts.
 
 /// A parsed service command.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -11,12 +11,12 @@ pub enum ServiceCommand {
     Pwd,
     Exit,
     ExitDaemon,
-    ReloadCommands,
+    ReloadRemote,
     Bash { cmd: String },
 }
 
 /// Known service command names (without the leading `/`).
-const SERVICE_COMMANDS: &[&str] = &["cd", "pwd", "exit", "exit-daemon", "reload-commands"];
+const SERVICE_COMMANDS: &[&str] = &["cd", "pwd", "exit", "exit-daemon", "reload-remote"];
 
 /// Returns true if the input is a service command (handled locally by betcode).
 pub fn is_service_command(input: &str) -> bool {
@@ -68,7 +68,7 @@ pub fn parse_service_command(input: &str) -> Option<ServiceCommand> {
         "pwd" => Some(ServiceCommand::Pwd),
         "exit" => Some(ServiceCommand::Exit),
         "exit-daemon" => Some(ServiceCommand::ExitDaemon),
-        "reload-commands" => Some(ServiceCommand::ReloadCommands),
+        "reload-remote" => Some(ServiceCommand::ReloadRemote),
         _ => None,
     }
 }
@@ -120,9 +120,9 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_reload_commands() {
-        let cmd = parse_service_command("/reload-commands").unwrap();
-        assert_eq!(cmd, ServiceCommand::ReloadCommands);
+    fn test_parse_reload_remote() {
+        let cmd = parse_service_command("/reload-remote").unwrap();
+        assert_eq!(cmd, ServiceCommand::ReloadRemote);
     }
 
     #[test]

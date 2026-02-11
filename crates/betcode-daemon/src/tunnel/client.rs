@@ -35,7 +35,7 @@ pub struct TunnelClient {
     /// X25519 identity keypair for E2E encryption key exchange.
     identity: Arc<IdentityKeyPair>,
     /// Optional CommandServiceImpl for handling command RPCs through the tunnel.
-    command_service: Option<CommandServiceImpl>,
+    command_service: Option<Arc<CommandServiceImpl>>,
     /// Optional GitLabServiceImpl for handling GitLab RPCs through the tunnel.
     gitlab_service: Option<Arc<GitLabServiceImpl>>,
     /// Optional WorktreeServiceImpl for handling worktree RPCs through the tunnel.
@@ -67,7 +67,7 @@ impl TunnelClient {
     }
 
     /// Set the CommandService implementation for handling command RPCs through the tunnel.
-    pub fn set_command_service(&mut self, service: CommandServiceImpl) {
+    pub fn set_command_service(&mut self, service: Arc<CommandServiceImpl>) {
         self.command_service = Some(service);
     }
 
@@ -191,7 +191,7 @@ impl TunnelClient {
             Some(Arc::clone(&self.identity)),
         );
         if let Some(cmd_svc) = &self.command_service {
-            handler.set_command_service(cmd_svc.clone());
+            handler.set_command_service(Arc::clone(cmd_svc));
         }
         if let Some(gitlab_svc) = &self.gitlab_service {
             handler.set_gitlab_service(Arc::clone(gitlab_svc));
