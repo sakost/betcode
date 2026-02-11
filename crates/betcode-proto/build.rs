@@ -22,7 +22,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let proto_paths: Vec<_> = protos
         .iter()
-        .map(|p| format!("{}/{}", proto_root, p))
+        .map(|p| format!("{proto_root}/{p}"))
         .collect();
 
     tonic_prost_build::configure()

@@ -481,6 +481,47 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_exit_daemon_triggers_shutdown() {
+        let (shutdown_tx, mut shutdown_rx) = tokio::sync::watch::channel(false);
+        let registry = Arc::new(RwLock::new(CommandRegistry::new()));
+        let file_index = Arc::new(RwLock::new(FileIndex::empty()));
+        let agent_lister = Arc::new(RwLock::new(AgentLister::new()));
+        let service_executor = Arc::new(RwLock::new(ServiceExecutor::new(
+            std::env::temp_dir().to_path_buf(),
+        )));
+        let service = CommandServiceImpl::new(
+            registry,
+            file_index,
+            agent_lister,
+            service_executor,
+            shutdown_tx,
+        );
+        let request = tonic::Request::new(ExecuteServiceCommandRequest {
+            command: "exit-daemon".to_string(),
+            args: vec![],
+        });
+        let response = service.execute_service_command(request).await.unwrap();
+        let mut stream = response.into_inner();
+        use tokio_stream::StreamExt;
+
+        // First message should confirm shutdown
+        let first = stream.next().await.unwrap().unwrap();
+        match first.output {
+            Some(service_command_output::Output::StdoutLine(msg)) => {
+                assert!(msg.contains("shutting down"), "Expected shutdown message, got: {msg}");
+            }
+            other => panic!("Expected StdoutLine, got {other:?}"),
+        }
+
+        // Wait for the shutdown signal (the command sleeps 100ms before sending)
+        tokio::time::timeout(std::time::Duration::from_secs(2), shutdown_rx.changed())
+            .await
+            .expect("Timed out waiting for shutdown signal")
+            .expect("Shutdown channel closed unexpectedly");
+        assert!(*shutdown_rx.borrow(), "Shutdown signal should be true");
+    }
+
+    #[tokio::test]
     async fn test_plugin_rpcs_unimplemented() {
         let service = create_test_service().await;
         let err = service

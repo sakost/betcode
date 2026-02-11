@@ -21,7 +21,7 @@ use betcode_proto::v1::{
 };
 
 use crate::router::RequestRouter;
-use crate::server::agent_proxy::{decode_response, extract_machine_id, router_error_to_status};
+use crate::server::agent_proxy::{extract_machine_id, router_error_to_status};
 use crate::server::interceptor::extract_claims;
 
 type ServiceCommandStream =
@@ -36,24 +36,6 @@ impl CommandProxyService {
     pub fn new(router: Arc<RequestRouter>) -> Self {
         Self { router }
     }
-
-    async fn forward_unary<Req: Message, Resp: Message + Default>(
-        &self,
-        machine_id: &str,
-        method: &str,
-        req: &Req,
-    ) -> Result<Resp, Status> {
-        let request_id = uuid::Uuid::new_v4().to_string();
-        let mut buf = Vec::with_capacity(req.encoded_len());
-        req.encode(&mut buf)
-            .map_err(|e| Status::internal(format!("Encode error: {}", e)))?;
-        let frame = self
-            .router
-            .forward_request(machine_id, &request_id, method, buf, HashMap::new())
-            .await
-            .map_err(router_error_to_status)?;
-        decode_response(&frame)
-    }
 }
 
 #[tonic::async_trait]
@@ -67,8 +49,8 @@ impl CommandService for CommandProxyService {
     ) -> Result<Response<GetCommandRegistryResponse>, Status> {
         let _claims = extract_claims(&request)?;
         let machine_id = extract_machine_id(&request)?;
-        let resp = self
-            .forward_unary(
+        let resp = super::grpc_util::forward_unary(
+            &self.router,
                 &machine_id,
                 "CommandService/GetCommandRegistry",
                 &request.into_inner(),
@@ -84,8 +66,8 @@ impl CommandService for CommandProxyService {
     ) -> Result<Response<ListAgentsResponse>, Status> {
         let _claims = extract_claims(&request)?;
         let machine_id = extract_machine_id(&request)?;
-        let resp = self
-            .forward_unary(
+        let resp = super::grpc_util::forward_unary(
+            &self.router,
                 &machine_id,
                 "CommandService/ListAgents",
                 &request.into_inner(),
@@ -101,8 +83,8 @@ impl CommandService for CommandProxyService {
     ) -> Result<Response<ListPathResponse>, Status> {
         let _claims = extract_claims(&request)?;
         let machine_id = extract_machine_id(&request)?;
-        let resp = self
-            .forward_unary(
+        let resp = super::grpc_util::forward_unary(
+            &self.router,
                 &machine_id,
                 "CommandService/ListPath",
                 &request.into_inner(),
@@ -187,8 +169,8 @@ impl CommandService for CommandProxyService {
     ) -> Result<Response<ListPluginsResponse>, Status> {
         let _claims = extract_claims(&request)?;
         let machine_id = extract_machine_id(&request)?;
-        let resp = self
-            .forward_unary(
+        let resp = super::grpc_util::forward_unary(
+            &self.router,
                 &machine_id,
                 "CommandService/ListPlugins",
                 &request.into_inner(),
@@ -204,8 +186,8 @@ impl CommandService for CommandProxyService {
     ) -> Result<Response<GetPluginStatusResponse>, Status> {
         let _claims = extract_claims(&request)?;
         let machine_id = extract_machine_id(&request)?;
-        let resp = self
-            .forward_unary(
+        let resp = super::grpc_util::forward_unary(
+            &self.router,
                 &machine_id,
                 "CommandService/GetPluginStatus",
                 &request.into_inner(),
@@ -221,8 +203,8 @@ impl CommandService for CommandProxyService {
     ) -> Result<Response<AddPluginResponse>, Status> {
         let _claims = extract_claims(&request)?;
         let machine_id = extract_machine_id(&request)?;
-        let resp = self
-            .forward_unary(
+        let resp = super::grpc_util::forward_unary(
+            &self.router,
                 &machine_id,
                 "CommandService/AddPlugin",
                 &request.into_inner(),
@@ -238,8 +220,8 @@ impl CommandService for CommandProxyService {
     ) -> Result<Response<RemovePluginResponse>, Status> {
         let _claims = extract_claims(&request)?;
         let machine_id = extract_machine_id(&request)?;
-        let resp = self
-            .forward_unary(
+        let resp = super::grpc_util::forward_unary(
+            &self.router,
                 &machine_id,
                 "CommandService/RemovePlugin",
                 &request.into_inner(),
@@ -255,8 +237,8 @@ impl CommandService for CommandProxyService {
     ) -> Result<Response<EnablePluginResponse>, Status> {
         let _claims = extract_claims(&request)?;
         let machine_id = extract_machine_id(&request)?;
-        let resp = self
-            .forward_unary(
+        let resp = super::grpc_util::forward_unary(
+            &self.router,
                 &machine_id,
                 "CommandService/EnablePlugin",
                 &request.into_inner(),
@@ -272,8 +254,8 @@ impl CommandService for CommandProxyService {
     ) -> Result<Response<DisablePluginResponse>, Status> {
         let _claims = extract_claims(&request)?;
         let machine_id = extract_machine_id(&request)?;
-        let resp = self
-            .forward_unary(
+        let resp = super::grpc_util::forward_unary(
+            &self.router,
                 &machine_id,
                 "CommandService/DisablePlugin",
                 &request.into_inner(),
@@ -282,3 +264,7 @@ impl CommandService for CommandProxyService {
         Ok(Response::new(resp))
     }
 }
+
+#[cfg(test)]
+#[path = "command_proxy_tests.rs"]
+mod tests;

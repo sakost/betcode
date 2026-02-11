@@ -21,8 +21,10 @@ const HEIGHT: usize = 9;
 const CHARS: &[u8] = b" .o+=*BOX@%&#/^SE";
 
 /// Index of the 'S' (start) marker in CHARS.
+#[allow(clippy::cast_possible_truncation)] // CHARS.len() == 17, fits in u8
 const START_MARKER_IDX: u8 = CHARS.len() as u8 - 2;
 /// Index of the 'E' (end) marker in CHARS.
+#[allow(clippy::cast_possible_truncation)] // CHARS.len() == 17, fits in u8
 const END_MARKER_IDX: u8 = CHARS.len() as u8 - 1;
 /// Maximum visit count index before the reserved marker positions.
 const MAX_VISIT_IDX: u8 = START_MARKER_IDX - 1;
@@ -43,15 +45,22 @@ pub fn fingerprint_randomart(fingerprint: &str, title: &str) -> String {
     let mut y: usize = HEIGHT / 2;
 
     // Walk the bishop
-    for byte in hash.iter() {
+    for byte in &hash {
         for shift in (0..8).step_by(2) {
             let bits = (byte >> shift) & 0x03;
             // Decode 2 bits into dx, dy
             let dx: i32 = if bits & 1 == 0 { -1 } else { 1 };
             let dy: i32 = if bits & 2 == 0 { -1 } else { 1 };
 
-            x = (x as i32 + dx).clamp(0, (WIDTH - 1) as i32) as usize;
-            y = (y as i32 + dy).clamp(0, (HEIGHT - 1) as i32) as usize;
+            #[allow(
+                clippy::cast_possible_truncation,
+                clippy::cast_possible_wrap,
+                clippy::cast_sign_loss
+            )]
+            {
+                x = (x as i32 + dx).clamp(0, (WIDTH - 1) as i32) as usize;
+                y = (y as i32 + dy).clamp(0, (HEIGHT - 1) as i32) as usize;
+            }
 
             if field[y][x] < MAX_VISIT_IDX {
                 field[y][x] += 1;
@@ -83,7 +92,7 @@ pub fn fingerprint_randomart(fingerprint: &str, title: &str) -> String {
     for row in &field {
         let mut line = String::with_capacity(WIDTH + 2);
         line.push('|');
-        for &cell in row.iter() {
+        for &cell in row {
             let idx = (cell as usize).min(CHARS.len() - 1);
             line.push(CHARS[idx] as char);
         }
@@ -118,6 +127,8 @@ pub fn compare_fingerprints(
     remote_fp: &str,
     remote_label: &str,
 ) -> (String, bool) {
+    use std::fmt::Write;
+
     let matches = local_fp == remote_fp;
     let local_art = fingerprint_randomart(local_fp, local_label);
     let remote_art = fingerprint_randomart(remote_fp, remote_label);
@@ -130,7 +141,7 @@ pub fn compare_fingerprints(
     for i in 0..max_lines {
         let left = local_lines.get(i).copied().unwrap_or("");
         let right = remote_lines.get(i).copied().unwrap_or("");
-        output.push_str(&format!("{}  {}\n", left, right));
+        let _ = writeln!(output, "{left}  {right}");
     }
 
     if matches {

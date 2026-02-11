@@ -12,6 +12,8 @@ pub mod worktree_proxy;
 
 #[cfg(test)]
 mod auth_svc_tests;
+#[cfg(test)]
+pub(crate) mod test_helpers;
 
 pub use agent_proxy::AgentProxyService;
 pub use auth_svc::AuthServiceImpl;

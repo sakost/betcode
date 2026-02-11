@@ -40,6 +40,7 @@ use crate::commands::service_executor::ServiceExecutor;
 use crate::commands::CommandRegistry;
 use crate::completion::agent_lister::AgentLister;
 use crate::completion::file_index::FileIndex;
+use crate::gitlab::{GitLabClient, GitLabConfig};
 use crate::relay::SessionRelay;
 use crate::session::SessionMultiplexer;
 use crate::storage::Database;
@@ -66,12 +67,7 @@ pub struct GrpcServer {
     subprocess_manager: Arc<SubprocessManager>,
     multiplexer: Arc<SessionMultiplexer>,
     relay: Arc<SessionRelay>,
-    command_registry: Arc<RwLock<CommandRegistry>>,
-    file_index: Arc<RwLock<FileIndex>>,
-    agent_lister: Arc<RwLock<AgentLister>>,
-    service_executor: Arc<RwLock<ServiceExecutor>>,
-    /// Sender for daemon-level shutdown (triggered by `exit-daemon` command).
-    shutdown_tx: tokio::sync::watch::Sender<bool>,
+    command_service: CommandServiceImpl,
 }
 
 impl GrpcServer {
@@ -108,17 +104,21 @@ impl GrpcServer {
         let agent_lister = Arc::new(RwLock::new(AgentLister::new()));
         let service_executor = Arc::new(RwLock::new(ServiceExecutor::new(cwd)));
 
+        let command_service = CommandServiceImpl::new(
+            command_registry,
+            file_index,
+            agent_lister,
+            service_executor,
+            shutdown_tx,
+        );
+
         Self {
             config,
             db,
             subprocess_manager,
             multiplexer,
             relay,
-            command_registry,
-            file_index,
-            agent_lister,
-            service_executor,
-            shutdown_tx,
+            command_service,
         }
     }
 
@@ -131,14 +131,7 @@ impl GrpcServer {
         );
         let health_service =
             HealthServiceImpl::new(self.db.clone(), Arc::clone(&self.subprocess_manager));
-        let worktree_service = WorktreeServiceImpl::new(WorktreeManager::new(self.db));
-        let command_service = CommandServiceImpl::new(
-            Arc::clone(&self.command_registry),
-            Arc::clone(&self.file_index),
-            Arc::clone(&self.agent_lister),
-            Arc::clone(&self.service_executor),
-            self.shutdown_tx.clone(),
-        );
+        let worktree_service = self.worktree_service_impl();
 
         info!(%addr, "Starting gRPC server on TCP");
 
@@ -146,7 +139,7 @@ impl GrpcServer {
             .http2_keepalive_interval(Some(Duration::from_secs(30)))
             .http2_keepalive_timeout(Some(Duration::from_secs(10)))
             .add_service(AgentServiceServer::new(agent_service))
-            .add_service(CommandServiceServer::new(command_service))
+            .add_service(CommandServiceServer::new(self.command_service))
             .add_service(HealthServer::new(health_service.clone()))
             .add_service(BetCodeHealthServer::new(health_service))
             .add_service(WorktreeServiceServer::new(worktree_service))
@@ -179,14 +172,7 @@ impl GrpcServer {
         );
         let health_service =
             HealthServiceImpl::new(self.db.clone(), Arc::clone(&self.subprocess_manager));
-        let worktree_service = WorktreeServiceImpl::new(WorktreeManager::new(self.db));
-        let command_service = CommandServiceImpl::new(
-            Arc::clone(&self.command_registry),
-            Arc::clone(&self.file_index),
-            Arc::clone(&self.agent_lister),
-            Arc::clone(&self.service_executor),
-            self.shutdown_tx.clone(),
-        );
+        let worktree_service = self.worktree_service_impl();
 
         info!(path = %path.display(), "Starting gRPC server on Unix socket");
 
@@ -194,7 +180,7 @@ impl GrpcServer {
             .http2_keepalive_interval(Some(Duration::from_secs(30)))
             .http2_keepalive_timeout(Some(Duration::from_secs(10)))
             .add_service(AgentServiceServer::new(agent_service))
-            .add_service(CommandServiceServer::new(command_service))
+            .add_service(CommandServiceServer::new(self.command_service))
             .add_service(HealthServer::new(health_service.clone()))
             .add_service(BetCodeHealthServer::new(health_service))
             .add_service(WorktreeServiceServer::new(worktree_service))
@@ -224,14 +210,26 @@ impl GrpcServer {
         &self.db
     }
 
-    /// Build a CommandServiceImpl that shares state with the gRPC server.
+    /// Get a clone of the `CommandServiceImpl` that shares state with the gRPC server.
     pub fn command_service_impl(&self) -> CommandServiceImpl {
-        CommandServiceImpl::new(
-            Arc::clone(&self.command_registry),
-            Arc::clone(&self.file_index),
-            Arc::clone(&self.agent_lister),
-            Arc::clone(&self.service_executor),
-            self.shutdown_tx.clone(),
-        )
+        self.command_service.clone()
+    }
+
+    /// Build a `WorktreeServiceImpl` backed by the same database.
+    pub fn worktree_service_impl(&self) -> WorktreeServiceImpl {
+        WorktreeServiceImpl::new(WorktreeManager::new(self.db.clone()))
+    }
+
+    /// Try to build a `GitLabServiceImpl` from environment variables.
+    ///
+    /// Returns `Some` when both `BETCODE_GITLAB_URL` and `BETCODE_GITLAB_TOKEN`
+    /// are set (and valid); returns `None` otherwise, meaning GitLab RPCs through
+    /// the tunnel will respond with "not available".
+    pub fn gitlab_service_impl_from_env() -> Option<GitLabServiceImpl> {
+        let base_url = std::env::var("BETCODE_GITLAB_URL").ok().filter(|s| !s.is_empty())?;
+        let token = std::env::var("BETCODE_GITLAB_TOKEN").ok().filter(|s| !s.is_empty())?;
+        let config = GitLabConfig { base_url, token };
+        let client = GitLabClient::new(&config).ok()?;
+        Some(GitLabServiceImpl::new(Arc::new(client)))
     }
 }

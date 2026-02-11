@@ -2,10 +2,7 @@
 
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::time::Duration;
 
-use prost::Message;
-use tokio::sync::mpsc;
 use tokio_stream::StreamExt;
 use tonic::Request;
 
@@ -18,104 +15,25 @@ use betcode_proto::v1::{
 };
 
 use super::{extract_machine_id, AgentProxyService};
-use crate::auth::claims::Claims;
-use crate::buffer::BufferManager;
-use crate::registry::ConnectionRegistry;
-use crate::router::RequestRouter;
-use crate::storage::RelayDatabase;
-
-fn test_claims() -> Claims {
-    Claims {
-        jti: "test-jti".into(),
-        sub: "u1".into(),
-        username: "alice".into(),
-        iat: 0,
-        exp: i64::MAX,
-        token_type: "access".into(),
-    }
-}
-
-fn make_request<T>(inner: T, machine_id: &str) -> Request<T> {
-    let mut req = Request::new(inner);
-    req.metadata_mut()
-        .insert("x-machine-id", machine_id.parse().unwrap());
-    req.extensions_mut().insert(test_claims());
-    req
-}
-
-fn encode_msg<M: Message>(msg: &M) -> Vec<u8> {
-    let mut buf = Vec::new();
-    msg.encode(&mut buf).unwrap();
-    buf
-}
+use crate::server::test_helpers::{
+    encode_msg, make_request, setup_offline_router, setup_router_with_machine, spawn_responder,
+    test_claims,
+};
 
 async fn setup_with_machine(
     mid: &str,
 ) -> (
     AgentProxyService,
-    Arc<RequestRouter>,
-    mpsc::Receiver<TunnelFrame>,
+    Arc<crate::router::RequestRouter>,
+    tokio::sync::mpsc::Receiver<TunnelFrame>,
 ) {
-    let registry = Arc::new(ConnectionRegistry::new());
-    let (tx, rx) = mpsc::channel(128);
-    registry.register(mid.into(), "u1".into(), tx).await;
-    let db = RelayDatabase::open_in_memory().await.unwrap();
-    db.create_user("u1", "alice", "a@t.com", "hash")
-        .await
-        .unwrap();
-    db.create_machine(mid, mid, "u1", "{}").await.unwrap();
-    let buffer = Arc::new(BufferManager::new(db, Arc::clone(&registry)));
-    let router = Arc::new(RequestRouter::new(registry, buffer, Duration::from_secs(5)));
+    let (router, rx) = setup_router_with_machine(mid).await;
     (AgentProxyService::new(Arc::clone(&router)), router, rx)
 }
 
 async fn setup_offline() -> AgentProxyService {
-    let registry = Arc::new(ConnectionRegistry::new());
-    let db = RelayDatabase::open_in_memory().await.unwrap();
-    db.create_user("u1", "alice", "a@t.com", "hash")
-        .await
-        .unwrap();
-    db.create_machine("m-off", "m-off", "u1", "{}")
-        .await
-        .unwrap();
-    let buffer = Arc::new(BufferManager::new(db, Arc::clone(&registry)));
-    let router = Arc::new(RequestRouter::new(registry, buffer, Duration::from_secs(5)));
+    let router = setup_offline_router().await;
     AgentProxyService::new(router)
-}
-
-/// Spawn a mock daemon that replies with an encoded response to the first request.
-fn spawn_responder<M: Message + 'static>(
-    router: &Arc<RequestRouter>,
-    mid: &str,
-    mut tunnel_rx: mpsc::Receiver<TunnelFrame>,
-    response: M,
-) {
-    let router = Arc::clone(router);
-    let mid = mid.to_string();
-    tokio::spawn(async move {
-        if let Some(frame) = tunnel_rx.recv().await {
-            let rid = frame.request_id.clone();
-            let resp_frame = TunnelFrame {
-                request_id: rid.clone(),
-                frame_type: FrameType::Response as i32,
-                timestamp: None,
-                payload: Some(betcode_proto::v1::tunnel_frame::Payload::StreamData(
-                    StreamPayload {
-                        method: String::new(),
-                        encrypted: Some(EncryptedPayload {
-                            ciphertext: encode_msg(&response),
-                            nonce: Vec::new(),
-                            ephemeral_pubkey: Vec::new(),
-                        }),
-                        sequence: 0,
-                        metadata: HashMap::new(),
-                    },
-                )),
-            };
-            let conn = router.registry().get(&mid).await.unwrap();
-            conn.complete_pending(&rid, resp_frame).await;
-        }
-    });
 }
 
 // --- extract_machine_id ---

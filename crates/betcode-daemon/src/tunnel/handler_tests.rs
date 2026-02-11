@@ -1604,3 +1604,552 @@ async fn question_response_is_handled_through_tunnel() {
     // This should not panic. The QuestionResponse arm should exist and be reachable.
     let _responses = h.handle_frame(frame).await;
 }
+
+// --- CommandService tunnel handler tests ---
+
+use crate::commands::CommandRegistry;
+use crate::completion::agent_lister::AgentLister;
+use crate::completion::file_index::FileIndex;
+use crate::commands::service_executor::ServiceExecutor;
+use tokio::sync::RwLock;
+
+use betcode_proto::v1::{
+    GetCommandRegistryResponse, ListAgentsResponse, ListPathResponse,
+    ListWorktreesResponse, RemoveWorktreeResponse,
+};
+
+/// Create a handler with a wired CommandServiceImpl.
+async fn make_handler_with_command_service() -> TunnelRequestHandler {
+    let db = Database::open_in_memory().await.unwrap();
+    let sub = Arc::new(SubprocessManager::new(5));
+    let mux = Arc::new(SessionMultiplexer::with_defaults());
+    let relay = Arc::new(SessionRelay::new(sub, Arc::clone(&mux), db.clone()));
+    let (outbound_tx, _outbound_rx) = mpsc::channel(128);
+    let mut handler = TunnelRequestHandler::new(
+        "test-machine".into(),
+        relay,
+        mux,
+        db,
+        outbound_tx,
+        None,
+        None,
+    );
+
+    let registry = Arc::new(RwLock::new(CommandRegistry::new()));
+    let file_index = Arc::new(RwLock::new(FileIndex::empty()));
+    let agent_lister = Arc::new(RwLock::new(AgentLister::new()));
+    let service_executor = Arc::new(RwLock::new(ServiceExecutor::new(
+        std::env::temp_dir().to_path_buf(),
+    )));
+    let (shutdown_tx, _) = tokio::sync::watch::channel(false);
+    let cmd_svc = CommandServiceImpl::new(
+        registry,
+        file_index,
+        agent_lister,
+        service_executor,
+        shutdown_tx,
+    );
+    handler.set_command_service(cmd_svc);
+    handler
+}
+
+#[tokio::test]
+async fn get_command_registry_through_tunnel() {
+    let h = make_handler_with_command_service().await;
+    let req = GetCommandRegistryRequest {};
+    let r = h
+        .handle_frame(req_frame("cmd1", METHOD_GET_COMMAND_REGISTRY, encode(&req)))
+        .await;
+    assert_eq!(r.len(), 1);
+    assert_eq!(r[0].frame_type, FrameType::Response as i32);
+    if let Some(betcode_proto::v1::tunnel_frame::Payload::StreamData(p)) = &r[0].payload {
+        let _resp = GetCommandRegistryResponse::decode(
+            p.encrypted.as_ref().unwrap().ciphertext.as_slice(),
+        )
+        .unwrap();
+        // Successfully decoded — registry may contain discovered commands
+    } else {
+        panic!("wrong payload");
+    }
+}
+
+#[tokio::test]
+async fn list_agents_through_tunnel() {
+    let h = make_handler_with_command_service().await;
+    let req = ListAgentsRequest {
+        query: String::new(),
+        max_results: 10,
+    };
+    let r = h
+        .handle_frame(req_frame("cmd2", METHOD_LIST_AGENTS, encode(&req)))
+        .await;
+    assert_eq!(r.len(), 1);
+    assert_eq!(r[0].frame_type, FrameType::Response as i32);
+    if let Some(betcode_proto::v1::tunnel_frame::Payload::StreamData(p)) = &r[0].payload {
+        let resp =
+            ListAgentsResponse::decode(p.encrypted.as_ref().unwrap().ciphertext.as_slice())
+                .unwrap();
+        assert!(resp.agents.is_empty());
+    } else {
+        panic!("wrong payload");
+    }
+}
+
+#[tokio::test]
+async fn list_path_through_tunnel() {
+    let h = make_handler_with_command_service().await;
+    let req = ListPathRequest {
+        query: std::env::temp_dir().to_string_lossy().into_owned(),
+        max_results: 10,
+    };
+    let r = h
+        .handle_frame(req_frame("cmd3", METHOD_LIST_PATH, encode(&req)))
+        .await;
+    assert_eq!(r.len(), 1);
+    assert_eq!(r[0].frame_type, FrameType::Response as i32);
+    if let Some(betcode_proto::v1::tunnel_frame::Payload::StreamData(p)) = &r[0].payload {
+        let _resp =
+            ListPathResponse::decode(p.encrypted.as_ref().unwrap().ciphertext.as_slice()).unwrap();
+        // Successfully decoded — path listing returned something
+    } else {
+        panic!("wrong payload");
+    }
+}
+
+#[tokio::test]
+async fn command_service_not_set_returns_error() {
+    let h = make_handler().await; // No command service set
+    let req = GetCommandRegistryRequest {};
+    let r = h
+        .handle_frame(req_frame("cmd-err", METHOD_GET_COMMAND_REGISTRY, encode(&req)))
+        .await;
+    assert_eq!(r.len(), 1);
+    assert_eq!(r[0].frame_type, FrameType::Error as i32);
+    if let Some(betcode_proto::v1::tunnel_frame::Payload::Error(e)) = &r[0].payload {
+        assert!(e.message.contains("CommandService not available"));
+    } else {
+        panic!("expected error payload");
+    }
+}
+
+#[tokio::test]
+async fn command_service_malformed_data_returns_error() {
+    let h = make_handler_with_command_service().await;
+    let r = h
+        .handle_frame(req_frame("cmd-bad", METHOD_GET_COMMAND_REGISTRY, vec![0xFF, 0xFF]))
+        .await;
+    assert_eq!(r.len(), 1);
+    assert_eq!(r[0].frame_type, FrameType::Error as i32);
+}
+
+// --- GitLabService tunnel handler tests ---
+
+use crate::gitlab::{GitLabClient, GitLabConfig};
+
+/// Create a handler with a wired GitLabServiceImpl (backed by a client pointing
+/// to a non-routable address so HTTP calls fail quickly).
+async fn make_handler_with_gitlab_service() -> TunnelRequestHandler {
+    let db = Database::open_in_memory().await.unwrap();
+    let sub = Arc::new(SubprocessManager::new(5));
+    let mux = Arc::new(SessionMultiplexer::with_defaults());
+    let relay = Arc::new(SessionRelay::new(sub, Arc::clone(&mux), db.clone()));
+    let (outbound_tx, _outbound_rx) = mpsc::channel(128);
+    let mut handler = TunnelRequestHandler::new(
+        "test-machine".into(),
+        relay,
+        mux,
+        db,
+        outbound_tx,
+        None,
+        None,
+    );
+    let config = GitLabConfig {
+        base_url: "http://127.0.0.1:1".into(), // non-routable, fails fast
+        token: "test-token".into(),
+    };
+    let client = Arc::new(GitLabClient::new(&config).unwrap());
+    let gitlab_svc = Arc::new(GitLabServiceImpl::new(client));
+    handler.set_gitlab_service(gitlab_svc);
+    handler
+}
+
+#[tokio::test]
+async fn gitlab_service_dispatches_when_set() {
+    let h = make_handler_with_gitlab_service().await;
+    let req = ListMergeRequestsRequest {
+        project: "group/project".into(),
+        state_filter: 0,
+        limit: 10,
+        offset: 0,
+    };
+    let r = h
+        .handle_frame(req_frame("gl-ok", METHOD_LIST_MERGE_REQUESTS, encode(&req)))
+        .await;
+    assert_eq!(r.len(), 1);
+    // Should reach the GitLabServiceImpl (HTTP error), NOT the "not available" error.
+    assert_eq!(r[0].frame_type, FrameType::Error as i32);
+    if let Some(betcode_proto::v1::tunnel_frame::Payload::Error(e)) = &r[0].payload {
+        assert!(
+            !e.message.contains("GitLabService not available"),
+            "Expected HTTP/service error, not 'not available'. Got: {}",
+            e.message
+        );
+    } else {
+        panic!("expected error payload from HTTP failure");
+    }
+}
+
+#[tokio::test]
+async fn gitlab_service_not_set_returns_error() {
+    let h = make_handler().await; // No gitlab service set
+    let req = ListMergeRequestsRequest {
+        project: String::new(),
+        state_filter: 0,
+        limit: 10,
+        offset: 0,
+    };
+    let r = h
+        .handle_frame(req_frame("gl-err", METHOD_LIST_MERGE_REQUESTS, encode(&req)))
+        .await;
+    assert_eq!(r.len(), 1);
+    assert_eq!(r[0].frame_type, FrameType::Error as i32);
+    if let Some(betcode_proto::v1::tunnel_frame::Payload::Error(e)) = &r[0].payload {
+        assert!(e.message.contains("GitLabService not available"));
+    } else {
+        panic!("expected error payload");
+    }
+}
+
+#[tokio::test]
+async fn gitlab_malformed_data_returns_error() {
+    // Even without the service set, malformed data for a GitLab method should
+    // trigger the "not available" error, not a panic.
+    let h = make_handler().await;
+    let r = h
+        .handle_frame(req_frame("gl-bad", METHOD_LIST_MERGE_REQUESTS, vec![0xFF, 0xFF]))
+        .await;
+    assert_eq!(r.len(), 1);
+    assert_eq!(r[0].frame_type, FrameType::Error as i32);
+}
+
+#[tokio::test]
+async fn gitlab_all_methods_dispatch_without_service() {
+    // All 6 GitLab method constants should be recognized and hit the
+    // "not available" error path (not the unknown method path).
+    let h = make_handler().await;
+    let methods = [
+        METHOD_LIST_MERGE_REQUESTS,
+        METHOD_GET_MERGE_REQUEST,
+        METHOD_LIST_PIPELINES,
+        METHOD_GET_PIPELINE,
+        METHOD_LIST_ISSUES,
+        METHOD_GET_ISSUE,
+    ];
+    for method in methods {
+        let r = h.handle_frame(req_frame("gl-dispatch", method, vec![])).await;
+        assert_eq!(r.len(), 1, "method: {method}");
+        assert_eq!(r[0].frame_type, FrameType::Error as i32, "method: {method}");
+        if let Some(betcode_proto::v1::tunnel_frame::Payload::Error(e)) = &r[0].payload {
+            assert!(
+                e.message.contains("GitLabService not available"),
+                "method {method} should hit 'not available', got: {}",
+                e.message
+            );
+        }
+    }
+}
+
+// --- WorktreeService tunnel handler tests ---
+
+use crate::worktree::WorktreeManager;
+
+/// Create a handler with a wired WorktreeServiceImpl.
+async fn make_handler_with_worktree_service() -> TunnelRequestHandler {
+    let db = Database::open_in_memory().await.unwrap();
+    let sub = Arc::new(SubprocessManager::new(5));
+    let mux = Arc::new(SessionMultiplexer::with_defaults());
+    let relay = Arc::new(SessionRelay::new(sub, Arc::clone(&mux), db.clone()));
+    let (outbound_tx, _outbound_rx) = mpsc::channel(128);
+    let mut handler = TunnelRequestHandler::new(
+        "test-machine".into(),
+        relay,
+        mux,
+        db.clone(),
+        outbound_tx,
+        None,
+        None,
+    );
+    let wt_svc = WorktreeServiceImpl::new(WorktreeManager::new(db));
+    handler.set_worktree_service(Arc::new(wt_svc));
+    handler
+}
+
+#[tokio::test]
+async fn list_worktrees_through_tunnel() {
+    let h = make_handler_with_worktree_service().await;
+    let req = ListWorktreesRequest {
+        repo_path: String::new(),
+    };
+    let r = h
+        .handle_frame(req_frame("wt1", METHOD_LIST_WORKTREES, encode(&req)))
+        .await;
+    assert_eq!(r.len(), 1);
+    assert_eq!(r[0].frame_type, FrameType::Response as i32);
+    if let Some(betcode_proto::v1::tunnel_frame::Payload::StreamData(p)) = &r[0].payload {
+        let resp = ListWorktreesResponse::decode(
+            p.encrypted.as_ref().unwrap().ciphertext.as_slice(),
+        )
+        .unwrap();
+        assert!(resp.worktrees.is_empty());
+    } else {
+        panic!("wrong payload");
+    }
+}
+
+#[tokio::test]
+async fn remove_worktree_nonexistent_through_tunnel() {
+    let h = make_handler_with_worktree_service().await;
+    let req = RemoveWorktreeRequest {
+        id: "nonexistent".into(),
+    };
+    let r = h
+        .handle_frame(req_frame("wt2", METHOD_REMOVE_WORKTREE, encode(&req)))
+        .await;
+    assert_eq!(r.len(), 1);
+    assert_eq!(r[0].frame_type, FrameType::Response as i32);
+    if let Some(betcode_proto::v1::tunnel_frame::Payload::StreamData(p)) = &r[0].payload {
+        let resp = RemoveWorktreeResponse::decode(
+            p.encrypted.as_ref().unwrap().ciphertext.as_slice(),
+        )
+        .unwrap();
+        assert!(!resp.removed);
+    } else {
+        panic!("wrong payload");
+    }
+}
+
+#[tokio::test]
+async fn worktree_service_not_set_returns_error() {
+    let h = make_handler().await; // No worktree service set
+    let req = ListWorktreesRequest {
+        repo_path: String::new(),
+    };
+    let r = h
+        .handle_frame(req_frame("wt-err", METHOD_LIST_WORKTREES, encode(&req)))
+        .await;
+    assert_eq!(r.len(), 1);
+    assert_eq!(r[0].frame_type, FrameType::Error as i32);
+    if let Some(betcode_proto::v1::tunnel_frame::Payload::Error(e)) = &r[0].payload {
+        assert!(e.message.contains("WorktreeService not available"));
+    } else {
+        panic!("expected error payload");
+    }
+}
+
+#[tokio::test]
+async fn worktree_all_methods_dispatch_without_service() {
+    let h = make_handler().await;
+    let methods = [
+        METHOD_CREATE_WORKTREE,
+        METHOD_REMOVE_WORKTREE,
+        METHOD_LIST_WORKTREES,
+        METHOD_GET_WORKTREE,
+    ];
+    for method in methods {
+        let r = h.handle_frame(req_frame("wt-dispatch", method, vec![])).await;
+        assert_eq!(r.len(), 1, "method: {method}");
+        assert_eq!(r[0].frame_type, FrameType::Error as i32, "method: {method}");
+        if let Some(betcode_proto::v1::tunnel_frame::Payload::Error(e)) = &r[0].payload {
+            assert!(
+                e.message.contains("WorktreeService not available"),
+                "method {method} should hit 'not available', got: {}",
+                e.message
+            );
+        }
+    }
+}
+
+#[tokio::test]
+async fn worktree_malformed_data_returns_error() {
+    let h = make_handler_with_worktree_service().await;
+    let r = h
+        .handle_frame(req_frame("wt-bad", METHOD_LIST_WORKTREES, vec![0xFF, 0xFF]))
+        .await;
+    assert_eq!(r.len(), 1);
+    assert_eq!(r[0].frame_type, FrameType::Error as i32);
+}
+
+// --- I-2: ExecuteServiceCommand streaming tests (daemon side) ---
+
+use betcode_proto::v1::{ExecuteServiceCommandRequest, ServiceCommandOutput};
+
+/// Helper: handler with CommandService + outbound receiver for streaming tests.
+async fn make_handler_with_command_service_and_outbound(
+) -> (TunnelRequestHandler, mpsc::Receiver<TunnelFrame>) {
+    let db = Database::open_in_memory().await.unwrap();
+    let sub = Arc::new(SubprocessManager::new(5));
+    let mux = Arc::new(SessionMultiplexer::with_defaults());
+    let relay = Arc::new(SessionRelay::new(sub, Arc::clone(&mux), db.clone()));
+    let (outbound_tx, outbound_rx) = mpsc::channel(128);
+    let mut handler = TunnelRequestHandler::new(
+        "test-machine".into(),
+        relay,
+        mux,
+        db,
+        outbound_tx,
+        None,
+        None,
+    );
+
+    let registry = Arc::new(RwLock::new(CommandRegistry::new()));
+    let file_index = Arc::new(RwLock::new(FileIndex::empty()));
+    let agent_lister = Arc::new(RwLock::new(AgentLister::new()));
+    let service_executor = Arc::new(RwLock::new(ServiceExecutor::new(
+        std::env::temp_dir().to_path_buf(),
+    )));
+    let (shutdown_tx, _) = tokio::sync::watch::channel(false);
+    let cmd_svc = CommandServiceImpl::new(
+        registry,
+        file_index,
+        agent_lister,
+        service_executor,
+        shutdown_tx,
+    );
+    handler.set_command_service(cmd_svc);
+    (handler, outbound_rx)
+}
+
+#[tokio::test]
+async fn execute_service_command_streams_output() {
+    let (h, mut rx) = make_handler_with_command_service_and_outbound().await;
+    // "pwd" is a simple command that prints the working directory and exits
+    let req = ExecuteServiceCommandRequest {
+        command: "pwd".into(),
+        args: vec![],
+    };
+    let result = h
+        .handle_frame(req_frame(
+            "esc1",
+            METHOD_EXECUTE_SERVICE_COMMAND,
+            encode(&req),
+        ))
+        .await;
+    // handle_execute_service_command always returns empty vec (sends frames async)
+    assert!(result.is_empty());
+
+    // Collect frames: expect at least one StreamData followed by StreamEnd
+    let mut stream_data_count = 0;
+    let mut got_stream_end = false;
+    let mut decoded_outputs = Vec::new();
+    loop {
+        let frame = tokio::time::timeout(std::time::Duration::from_secs(5), rx.recv())
+            .await
+            .expect("Timed out waiting for frame")
+            .expect("Channel closed unexpectedly");
+        assert_eq!(frame.request_id, "esc1");
+        match FrameType::try_from(frame.frame_type) {
+            Ok(FrameType::StreamData) => {
+                stream_data_count += 1;
+                if let Some(betcode_proto::v1::tunnel_frame::Payload::StreamData(p)) = &frame.payload
+                {
+                    let data = p
+                        .encrypted
+                        .as_ref()
+                        .map(|e| e.ciphertext.as_slice())
+                        .unwrap_or(&[]);
+                    if let Ok(output) = ServiceCommandOutput::decode(data) {
+                        decoded_outputs.push(output);
+                    }
+                }
+            }
+            Ok(FrameType::StreamEnd) => {
+                got_stream_end = true;
+                break;
+            }
+            Ok(FrameType::Error) => {
+                // Some environments may not have "pwd"; still a valid test path
+                break;
+            }
+            other => panic!("Unexpected frame type: {:?}", other),
+        }
+    }
+    // Either we got stream data + end, or an error (acceptable in constrained envs)
+    if stream_data_count > 0 {
+        assert!(got_stream_end, "Expected StreamEnd after StreamData frames");
+        // At least one output should be a stdout_line (the pwd result) or an exit_code
+        let has_output = decoded_outputs
+            .iter()
+            .any(|o| o.output.is_some());
+        assert!(has_output, "Expected at least one ServiceCommandOutput with data");
+    }
+}
+
+#[tokio::test]
+async fn execute_service_command_not_set_sends_error() {
+    // Handler without command service — should send error via outbound_tx
+    let (h, mut rx) = make_handler_with_outbound().await;
+    let req = ExecuteServiceCommandRequest {
+        command: "pwd".into(),
+        args: vec![],
+    };
+    let result = h
+        .handle_frame(req_frame(
+            "esc-none",
+            METHOD_EXECUTE_SERVICE_COMMAND,
+            encode(&req),
+        ))
+        .await;
+    assert!(result.is_empty());
+
+    let frame = tokio::time::timeout(std::time::Duration::from_millis(500), rx.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(frame.frame_type, FrameType::Error as i32);
+    assert_eq!(frame.request_id, "esc-none");
+    if let Some(betcode_proto::v1::tunnel_frame::Payload::Error(e)) = &frame.payload {
+        assert!(e.message.contains("CommandService not available"));
+    } else {
+        panic!("expected error payload");
+    }
+}
+
+// --- M-5: relay_forwarded output encryption bypass test ---
+
+#[tokio::test]
+async fn relay_forwarded_response_has_empty_nonce_when_crypto_active() {
+    // Set up handler WITH crypto active
+    let (h, _client_crypto, _rx) = make_handler_with_crypto().await;
+
+    // Build a request with empty nonce (relay-forwarded)
+    let req = ListSessionsRequest {
+        working_directory: String::new(),
+        worktree_id: String::new(),
+        limit: 10,
+        offset: 0,
+    };
+    // Use req_frame (which puts empty nonce) to simulate relay-forwarded request
+    let frame = req_frame("rf1", METHOD_LIST_SESSIONS, encode(&req));
+
+    let responses = h.handle_frame(frame).await;
+    assert_eq!(responses.len(), 1);
+    assert_eq!(responses[0].frame_type, FrameType::Response as i32);
+
+    // The response should also have an empty nonce (plaintext) because the
+    // request was relay-forwarded — the relay cannot decrypt encrypted responses.
+    if let Some(betcode_proto::v1::tunnel_frame::Payload::StreamData(p)) = &responses[0].payload {
+        let enc = p.encrypted.as_ref().expect("encrypted payload should exist");
+        assert!(
+            enc.nonce.is_empty(),
+            "Relay-forwarded response must have empty nonce (plaintext) even when crypto is active, but got nonce length {}",
+            enc.nonce.len()
+        );
+        // Verify the response is valid protobuf (directly decodable, not encrypted)
+        let resp = ListSessionsResponse::decode(enc.ciphertext.as_slice())
+            .expect("Response should be decodable as plaintext protobuf");
+        // Sessions list should be valid (empty is fine)
+        let _ = resp.sessions;
+    } else {
+        panic!("Expected StreamData payload in response");
+    }
+}

@@ -227,24 +227,6 @@ impl AgentProxyService {
     pub fn new(router: Arc<RequestRouter>) -> Self {
         Self { router }
     }
-
-    async fn forward_unary<Req: Message, Resp: Message + Default>(
-        &self,
-        machine_id: &str,
-        method: &str,
-        req: &Req,
-    ) -> Result<Resp, Status> {
-        let request_id = uuid::Uuid::new_v4().to_string();
-        let mut buf = Vec::with_capacity(req.encoded_len());
-        req.encode(&mut buf)
-            .map_err(|e| Status::internal(format!("Encode error: {}", e)))?;
-        let frame = self
-            .router
-            .forward_request(machine_id, &request_id, method, buf, HashMap::new())
-            .await
-            .map_err(router_error_to_status)?;
-        decode_response(&frame)
-    }
 }
 
 #[tonic::async_trait]
@@ -285,8 +267,8 @@ impl AgentService for AgentProxyService {
     ) -> Result<Response<ListSessionsResponse>, Status> {
         let _claims = extract_claims(&request)?;
         let machine_id = extract_machine_id(&request)?;
-        let resp = self
-            .forward_unary(
+        let resp = super::grpc_util::forward_unary(
+            &self.router,
                 &machine_id,
                 "AgentService/ListSessions",
                 &request.into_inner(),
@@ -374,8 +356,8 @@ impl AgentService for AgentProxyService {
     ) -> Result<Response<CompactSessionResponse>, Status> {
         let _claims = extract_claims(&request)?;
         let machine_id = extract_machine_id(&request)?;
-        let resp = self
-            .forward_unary(
+        let resp = super::grpc_util::forward_unary(
+            &self.router,
                 &machine_id,
                 "AgentService/CompactSession",
                 &request.into_inner(),
@@ -391,8 +373,8 @@ impl AgentService for AgentProxyService {
     ) -> Result<Response<CancelTurnResponse>, Status> {
         let _claims = extract_claims(&request)?;
         let machine_id = extract_machine_id(&request)?;
-        let resp = self
-            .forward_unary(
+        let resp = super::grpc_util::forward_unary(
+            &self.router,
                 &machine_id,
                 "AgentService/CancelTurn",
                 &request.into_inner(),
@@ -408,8 +390,8 @@ impl AgentService for AgentProxyService {
     ) -> Result<Response<InputLockResponse>, Status> {
         let _claims = extract_claims(&request)?;
         let machine_id = extract_machine_id(&request)?;
-        let resp = self
-            .forward_unary(
+        let resp = super::grpc_util::forward_unary(
+            &self.router,
                 &machine_id,
                 "AgentService/RequestInputLock",
                 &request.into_inner(),
@@ -425,8 +407,8 @@ impl AgentService for AgentProxyService {
     ) -> Result<Response<KeyExchangeResponse>, Status> {
         let _claims = extract_claims(&request)?;
         let machine_id = extract_machine_id(&request)?;
-        let resp = self
-            .forward_unary(
+        let resp = super::grpc_util::forward_unary(
+            &self.router,
                 &machine_id,
                 "AgentService/ExchangeKeys",
                 &request.into_inner(),

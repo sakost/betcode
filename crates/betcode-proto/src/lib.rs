@@ -1,6 +1,6 @@
-//! BetCode Protocol Buffers
+//! `BetCode` Protocol Buffers
 //!
-//! Generated protobuf code for the BetCode gRPC API.
+//! Generated protobuf code for the `BetCode` gRPC API.
 //!
 //! This crate contains:
 //! - `AgentService` for conversation management
@@ -8,11 +8,14 @@
 //! - `ConfigService` for settings management
 //! - `Health` services for health checking
 
-#![allow(clippy::derive_partial_eq_without_eq)] // generated protobuf code
-
 /// BetCode v1 API definitions.
 ///
 /// All generated types and services are included here.
+#[allow(
+    clippy::derive_partial_eq_without_eq,
+    clippy::pedantic,
+    clippy::nursery
+)]
 pub mod v1 {
     tonic::include_proto!("betcode.v1");
 }

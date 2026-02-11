@@ -1,4 +1,4 @@
-//! BetCode E2E Encryption Library
+//! `BetCode` E2E Encryption Library
 //!
 //! Provides cryptographic primitives for end-to-end encryption between
 //! CLI/mobile clients and daemons, with the relay unable to see

@@ -111,6 +111,10 @@ async fn main() -> anyhow::Result<()> {
     // Daemon-level shutdown channel (triggered by exit-daemon command or Ctrl+C)
     let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
 
+    // Subscribe early, before passing shutdown_tx to any component, to avoid
+    // a race where a component could send the signal before we subscribe.
+    let mut daemon_shutdown_rx = shutdown_tx.subscribe();
+
     // Create and start gRPC server
     let config = ServerConfig::tcp(args.addr).with_max_sessions(args.max_sessions);
     let server = GrpcServer::new(config, db, subprocess_manager, shutdown_tx.clone());
@@ -146,6 +150,11 @@ async fn main() -> anyhow::Result<()> {
             server.db().clone(),
         )?;
         tunnel_client.set_command_service(server.command_service_impl());
+        tunnel_client.set_worktree_service(Arc::new(server.worktree_service_impl()));
+        if let Some(gitlab_svc) = GrpcServer::gitlab_service_impl_from_env() {
+            info!("GitLab service configured for tunnel");
+            tunnel_client.set_gitlab_service(Arc::new(gitlab_svc));
+        }
         Some(tokio::spawn(async move {
             tunnel_client.run(shutdown_rx).await;
         }))
@@ -155,9 +164,6 @@ async fn main() -> anyhow::Result<()> {
     };
 
     info!(addr = %args.addr, "gRPC server listening");
-
-    // Subscribe for daemon-level shutdown (triggered by exit-daemon command)
-    let mut daemon_shutdown_rx = shutdown_tx.subscribe();
 
     // Serve until shutdown signal
     tokio::select! {

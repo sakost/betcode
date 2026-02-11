@@ -22,7 +22,7 @@ use super::error::TunnelClientError;
 use super::handler::TunnelRequestHandler;
 
 use crate::relay::SessionRelay;
-use crate::server::CommandServiceImpl;
+use crate::server::{CommandServiceImpl, GitLabServiceImpl, WorktreeServiceImpl};
 use crate::session::SessionMultiplexer;
 use crate::storage::Database;
 
@@ -36,6 +36,10 @@ pub struct TunnelClient {
     identity: Arc<IdentityKeyPair>,
     /// Optional CommandServiceImpl for handling command RPCs through the tunnel.
     command_service: Option<CommandServiceImpl>,
+    /// Optional GitLabServiceImpl for handling GitLab RPCs through the tunnel.
+    gitlab_service: Option<Arc<GitLabServiceImpl>>,
+    /// Optional WorktreeServiceImpl for handling worktree RPCs through the tunnel.
+    worktree_service: Option<Arc<WorktreeServiceImpl>>,
 }
 
 impl TunnelClient {
@@ -57,12 +61,24 @@ impl TunnelClient {
             db,
             identity,
             command_service: None,
+            gitlab_service: None,
+            worktree_service: None,
         })
     }
 
     /// Set the CommandService implementation for handling command RPCs through the tunnel.
     pub fn set_command_service(&mut self, service: CommandServiceImpl) {
         self.command_service = Some(service);
+    }
+
+    /// Set the GitLabService implementation for handling GitLab RPCs through the tunnel.
+    pub fn set_gitlab_service(&mut self, service: Arc<GitLabServiceImpl>) {
+        self.gitlab_service = Some(service);
+    }
+
+    /// Set the WorktreeService implementation for handling worktree RPCs through the tunnel.
+    pub fn set_worktree_service(&mut self, service: Arc<WorktreeServiceImpl>) {
+        self.worktree_service = Some(service);
     }
 
     /// Load or generate the X25519 identity keypair.
@@ -176,6 +192,12 @@ impl TunnelClient {
         );
         if let Some(cmd_svc) = &self.command_service {
             handler.set_command_service(cmd_svc.clone());
+        }
+        if let Some(gitlab_svc) = &self.gitlab_service {
+            handler.set_gitlab_service(Arc::clone(gitlab_svc));
+        }
+        if let Some(worktree_svc) = &self.worktree_service {
+            handler.set_worktree_service(Arc::clone(worktree_svc));
         }
         let handler = Arc::new(handler);
 

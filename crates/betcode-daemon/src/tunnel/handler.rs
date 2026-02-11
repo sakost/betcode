@@ -11,19 +11,23 @@ use tokio_stream::StreamExt as _;
 use tonic::Request;
 
 use betcode_proto::v1::command_service_server::CommandService as CommandServiceTrait;
+use betcode_proto::v1::git_lab_service_server::GitLabService as GitLabServiceTrait;
+use betcode_proto::v1::worktree_service_server::WorktreeService as WorktreeServiceTrait;
 use betcode_proto::v1::{
     AgentRequest, CancelTurnRequest, CancelTurnResponse, CompactSessionRequest,
-    CompactSessionResponse, EncryptedPayload, ExecuteServiceCommandRequest, FrameType,
-    GetCommandRegistryRequest, InputLockRequest, InputLockResponse, KeyExchangeRequest,
-    KeyExchangeResponse, ListAgentsRequest, ListPathRequest, ListSessionsRequest,
-    ListSessionsResponse, ResumeSessionRequest, SessionSummary, StreamPayload, TunnelError,
-    TunnelErrorCode, TunnelFrame,
+    CompactSessionResponse, CreateWorktreeRequest, EncryptedPayload,
+    ExecuteServiceCommandRequest, FrameType, GetCommandRegistryRequest, GetIssueRequest,
+    GetMergeRequestRequest, GetPipelineRequest, GetWorktreeRequest, InputLockRequest,
+    InputLockResponse, KeyExchangeRequest, KeyExchangeResponse, ListAgentsRequest,
+    ListIssuesRequest, ListMergeRequestsRequest, ListPathRequest, ListPipelinesRequest,
+    ListSessionsRequest, ListSessionsResponse, ListWorktreesRequest, RemoveWorktreeRequest,
+    ResumeSessionRequest, SessionSummary, StreamPayload, TunnelError, TunnelErrorCode, TunnelFrame,
 };
 
 use betcode_crypto::{CryptoSession, IdentityKeyPair, KeyExchangeState};
 
 use crate::relay::SessionRelay;
-use crate::server::CommandServiceImpl;
+use crate::server::{CommandServiceImpl, GitLabServiceImpl, WorktreeServiceImpl};
 use crate::session::SessionMultiplexer;
 use crate::storage::Database;
 
@@ -41,6 +45,20 @@ pub const METHOD_GET_COMMAND_REGISTRY: &str = "CommandService/GetCommandRegistry
 pub const METHOD_LIST_AGENTS: &str = "CommandService/ListAgents";
 pub const METHOD_LIST_PATH: &str = "CommandService/ListPath";
 pub const METHOD_EXECUTE_SERVICE_COMMAND: &str = "CommandService/ExecuteServiceCommand";
+
+// GitLabService methods
+pub const METHOD_LIST_MERGE_REQUESTS: &str = "GitLabService/ListMergeRequests";
+pub const METHOD_GET_MERGE_REQUEST: &str = "GitLabService/GetMergeRequest";
+pub const METHOD_LIST_PIPELINES: &str = "GitLabService/ListPipelines";
+pub const METHOD_GET_PIPELINE: &str = "GitLabService/GetPipeline";
+pub const METHOD_LIST_ISSUES: &str = "GitLabService/ListIssues";
+pub const METHOD_GET_ISSUE: &str = "GitLabService/GetIssue";
+
+// WorktreeService methods
+pub const METHOD_CREATE_WORKTREE: &str = "WorktreeService/CreateWorktree";
+pub const METHOD_REMOVE_WORKTREE: &str = "WorktreeService/RemoveWorktree";
+pub const METHOD_LIST_WORKTREES: &str = "WorktreeService/ListWorktrees";
+pub const METHOD_GET_WORKTREE: &str = "WorktreeService/GetWorktree";
 
 /// Default maximum number of sessions returned by ListSessions.
 const DEFAULT_LIST_SESSIONS_LIMIT: u32 = 50;
@@ -85,6 +103,10 @@ pub struct TunnelRequestHandler {
     identity: Option<Arc<IdentityKeyPair>>,
     /// CommandService implementation for handling command-related RPCs through the tunnel.
     command_service: Option<CommandServiceImpl>,
+    /// GitLabService implementation for handling GitLab-related RPCs through the tunnel.
+    gitlab_service: Option<Arc<GitLabServiceImpl>>,
+    /// WorktreeService implementation for handling worktree-related RPCs through the tunnel.
+    worktree_service: Option<Arc<WorktreeServiceImpl>>,
 }
 
 impl TunnelRequestHandler {
@@ -107,12 +129,24 @@ impl TunnelRequestHandler {
             crypto: Arc::new(RwLock::new(crypto)),
             identity,
             command_service: None,
+            gitlab_service: None,
+            worktree_service: None,
         }
     }
 
     /// Set the CommandService implementation for handling command RPCs through the tunnel.
     pub fn set_command_service(&mut self, service: CommandServiceImpl) {
         self.command_service = Some(service);
+    }
+
+    /// Set the GitLabService implementation for handling GitLab RPCs through the tunnel.
+    pub fn set_gitlab_service(&mut self, service: Arc<GitLabServiceImpl>) {
+        self.gitlab_service = Some(service);
+    }
+
+    /// Set the WorktreeService implementation for handling worktree RPCs through the tunnel.
+    pub fn set_worktree_service(&mut self, service: Arc<WorktreeServiceImpl>) {
+        self.worktree_service = Some(service);
     }
 
     /// Process an incoming frame and produce zero or more response frames.
@@ -274,27 +308,43 @@ impl TunnelRequestHandler {
                     .await
             }
             METHOD_CONVERSE => {
-                self.handle_converse(&request_id, &data).await;
+                self.handle_converse(&request_id, &data, relay_forwarded)
+                    .await;
                 vec![] // Responses sent asynchronously via outbound_tx
             }
-            METHOD_RESUME_SESSION => self.handle_resume_session(&request_id, &data).await,
+            METHOD_RESUME_SESSION => {
+                self.handle_resume_session(&request_id, &data, relay_forwarded)
+                    .await
+            }
             // CommandService RPCs
-            METHOD_GET_COMMAND_REGISTRY => {
-                self.handle_get_command_registry(&request_id, &data, relay_forwarded)
-                    .await
-            }
-            METHOD_LIST_AGENTS => {
-                self.handle_list_agents(&request_id, &data, relay_forwarded)
-                    .await
-            }
-            METHOD_LIST_PATH => {
-                self.handle_list_path(&request_id, &data, relay_forwarded)
+            METHOD_GET_COMMAND_REGISTRY
+            | METHOD_LIST_AGENTS
+            | METHOD_LIST_PATH => {
+                self.dispatch_command_rpc(&request_id, payload.method.as_str(), &data, relay_forwarded)
                     .await
             }
             METHOD_EXECUTE_SERVICE_COMMAND => {
                 self.handle_execute_service_command(&request_id, &data, relay_forwarded)
                     .await;
                 vec![] // Responses sent asynchronously via outbound_tx
+            }
+            // GitLabService RPCs
+            METHOD_LIST_MERGE_REQUESTS
+            | METHOD_GET_MERGE_REQUEST
+            | METHOD_LIST_PIPELINES
+            | METHOD_GET_PIPELINE
+            | METHOD_LIST_ISSUES
+            | METHOD_GET_ISSUE => {
+                self.dispatch_gitlab_rpc(&request_id, payload.method.as_str(), &data, relay_forwarded)
+                    .await
+            }
+            // WorktreeService RPCs
+            METHOD_CREATE_WORKTREE
+            | METHOD_REMOVE_WORKTREE
+            | METHOD_LIST_WORKTREES
+            | METHOD_GET_WORKTREE => {
+                self.dispatch_worktree_rpc(&request_id, payload.method.as_str(), &data, relay_forwarded)
+                    .await
             }
             other => vec![Self::error_response(
                 &request_id,
@@ -709,7 +759,7 @@ impl TunnelRequestHandler {
         self.active_streams.read().await.contains_key(request_id)
     }
 
-    async fn handle_converse(&self, request_id: &str, data: &[u8]) {
+    async fn handle_converse(&self, request_id: &str, data: &[u8], relay_forwarded: bool) {
         let outer_req = match AgentRequest::decode(data) {
             Ok(r) => r,
             Err(e) => {
@@ -935,9 +985,9 @@ impl TunnelRequestHandler {
                         };
 
                         // Tunnel-layer wrapping: skip tunnel-layer encryption when
-                        // app-layer is active (same key, redundant work). Pass None
-                        // so the bytes go through as a passthrough EncryptedPayload.
-                        let tunnel_crypto = if crypto.is_some() {
+                        // app-layer is active (same key, redundant work) or when
+                        // the request was relay-forwarded (relay needs to decode).
+                        let tunnel_crypto = if relay_forwarded || crypto.is_some() {
                             None
                         } else {
                             crypto.as_deref()
@@ -1096,7 +1146,12 @@ impl TunnelRequestHandler {
         }
     }
 
-    async fn handle_resume_session(&self, request_id: &str, data: &[u8]) -> Vec<TunnelFrame> {
+    async fn handle_resume_session(
+        &self,
+        request_id: &str,
+        data: &[u8],
+        relay_forwarded: bool,
+    ) -> Vec<TunnelFrame> {
         let req = match ResumeSessionRequest::decode(data) {
             Ok(r) => r,
             Err(e) => {
@@ -1169,7 +1224,7 @@ impl TunnelRequestHandler {
                     raw_bytes
                 };
 
-                let tunnel_crypto = if crypto.is_some() {
+                let tunnel_crypto = if relay_forwarded || crypto.is_some() {
                     None
                 } else {
                     crypto.as_deref()
@@ -1212,15 +1267,16 @@ impl TunnelRequestHandler {
         vec![] // Frames sent async
     }
 
-    // --- CommandService handlers ---
+    // --- CommandService dispatch ---
 
-    async fn handle_get_command_registry(
+    async fn dispatch_command_rpc(
         &self,
         request_id: &str,
+        method: &str,
         data: &[u8],
         relay_forwarded: bool,
     ) -> Vec<TunnelFrame> {
-        let cmd_svc = match &self.command_service {
+        let svc = match &self.command_service {
             Some(s) => s,
             None => {
                 return vec![Self::error_response(
@@ -1230,109 +1286,39 @@ impl TunnelRequestHandler {
                 )]
             }
         };
-        let req = match GetCommandRegistryRequest::decode(data) {
-            Ok(r) => r,
-            Err(e) => {
-                return vec![Self::error_response(
-                    request_id,
-                    TunnelErrorCode::Internal,
-                    &format!("Decode error: {}", e),
-                )]
-            }
-        };
-        match cmd_svc.get_command_registry(Request::new(req)).await {
-            Ok(resp) => {
-                vec![
-                    self.unary_response_frame(request_id, &resp.into_inner(), relay_forwarded)
-                        .await,
-                ]
-            }
-            Err(status) => vec![Self::error_response(
-                request_id,
-                TunnelErrorCode::Internal,
-                &format!("GetCommandRegistry failed: {}", status.message()),
-            )],
+        macro_rules! rpc {
+            ($req_ty:ty, $method:ident) => {{
+                let req = match <$req_ty>::decode(data) {
+                    Ok(r) => r,
+                    Err(e) => {
+                        return vec![Self::error_response(
+                            request_id,
+                            TunnelErrorCode::Internal,
+                            &format!("Decode error: {e}"),
+                        )]
+                    }
+                };
+                match svc.$method(Request::new(req)).await {
+                    Ok(resp) => vec![
+                        self.unary_response_frame(request_id, &resp.into_inner(), relay_forwarded)
+                            .await,
+                    ],
+                    Err(status) => vec![Self::error_response(
+                        request_id,
+                        TunnelErrorCode::Internal,
+                        status.message(),
+                    )],
+                }
+            }};
         }
-    }
-
-    async fn handle_list_agents(
-        &self,
-        request_id: &str,
-        data: &[u8],
-        relay_forwarded: bool,
-    ) -> Vec<TunnelFrame> {
-        let cmd_svc = match &self.command_service {
-            Some(s) => s,
-            None => {
-                return vec![Self::error_response(
-                    request_id,
-                    TunnelErrorCode::Internal,
-                    "CommandService not available in tunnel handler",
-                )]
-            }
-        };
-        let req = match ListAgentsRequest::decode(data) {
-            Ok(r) => r,
-            Err(e) => {
-                return vec![Self::error_response(
-                    request_id,
-                    TunnelErrorCode::Internal,
-                    &format!("Decode error: {}", e),
-                )]
-            }
-        };
-        match cmd_svc.list_agents(Request::new(req)).await {
-            Ok(resp) => {
-                vec![
-                    self.unary_response_frame(request_id, &resp.into_inner(), relay_forwarded)
-                        .await,
-                ]
-            }
-            Err(status) => vec![Self::error_response(
+        match method {
+            METHOD_GET_COMMAND_REGISTRY => rpc!(GetCommandRegistryRequest, get_command_registry),
+            METHOD_LIST_AGENTS => rpc!(ListAgentsRequest, list_agents),
+            METHOD_LIST_PATH => rpc!(ListPathRequest, list_path),
+            _ => vec![Self::error_response(
                 request_id,
-                TunnelErrorCode::Internal,
-                &format!("ListAgents failed: {}", status.message()),
-            )],
-        }
-    }
-
-    async fn handle_list_path(
-        &self,
-        request_id: &str,
-        data: &[u8],
-        relay_forwarded: bool,
-    ) -> Vec<TunnelFrame> {
-        let cmd_svc = match &self.command_service {
-            Some(s) => s,
-            None => {
-                return vec![Self::error_response(
-                    request_id,
-                    TunnelErrorCode::Internal,
-                    "CommandService not available in tunnel handler",
-                )]
-            }
-        };
-        let req = match ListPathRequest::decode(data) {
-            Ok(r) => r,
-            Err(e) => {
-                return vec![Self::error_response(
-                    request_id,
-                    TunnelErrorCode::Internal,
-                    &format!("Decode error: {}", e),
-                )]
-            }
-        };
-        match cmd_svc.list_path(Request::new(req)).await {
-            Ok(resp) => {
-                vec![
-                    self.unary_response_frame(request_id, &resp.into_inner(), relay_forwarded)
-                        .await,
-                ]
-            }
-            Err(status) => vec![Self::error_response(
-                request_id,
-                TunnelErrorCode::Internal,
-                &format!("ListPath failed: {}", status.message()),
+                TunnelErrorCode::NotFound,
+                &format!("Unknown Command method: {method}"),
             )],
         }
     }
@@ -1396,6 +1382,7 @@ impl TunnelRequestHandler {
         };
         tokio::spawn(async move {
             let mut stream = stream_resp.into_inner();
+            let mut seq = 0u64;
             while let Some(item) = stream.next().await {
                 match item {
                     Ok(output) => {
@@ -1418,11 +1405,12 @@ impl TunnelRequestHandler {
                                 StreamPayload {
                                     method: String::new(),
                                     encrypted: Some(encrypted),
-                                    sequence: 0,
+                                    sequence: seq,
                                     metadata: HashMap::new(),
                                 },
                             )),
                         };
+                        seq += 1;
                         if outbound_tx.send(frame).await.is_err() {
                             break;
                         }
@@ -1451,6 +1439,121 @@ impl TunnelRequestHandler {
                 .await;
             info!(request_id = %rid, "ExecuteServiceCommand stream ended");
         });
+    }
+
+
+    // --- GitLabService / WorktreeService tunnel handlers ---
+
+    async fn dispatch_gitlab_rpc(
+        &self,
+        request_id: &str,
+        method: &str,
+        data: &[u8],
+        relay_forwarded: bool,
+    ) -> Vec<TunnelFrame> {
+        let svc = match &self.gitlab_service {
+            Some(s) => s,
+            None => {
+                return vec![Self::error_response(
+                    request_id,
+                    TunnelErrorCode::Internal,
+                    "GitLabService not available in tunnel handler",
+                )]
+            }
+        };
+        macro_rules! rpc {
+            ($req_ty:ty, $method:ident) => {{
+                let req = match <$req_ty>::decode(data) {
+                    Ok(r) => r,
+                    Err(e) => {
+                        return vec![Self::error_response(
+                            request_id,
+                            TunnelErrorCode::Internal,
+                            &format!("Decode error: {e}"),
+                        )]
+                    }
+                };
+                match svc.$method(Request::new(req)).await {
+                    Ok(resp) => vec![
+                        self.unary_response_frame(request_id, &resp.into_inner(), relay_forwarded)
+                            .await,
+                    ],
+                    Err(status) => vec![Self::error_response(
+                        request_id,
+                        TunnelErrorCode::Internal,
+                        status.message(),
+                    )],
+                }
+            }};
+        }
+        match method {
+            METHOD_LIST_MERGE_REQUESTS => rpc!(ListMergeRequestsRequest, list_merge_requests),
+            METHOD_GET_MERGE_REQUEST => rpc!(GetMergeRequestRequest, get_merge_request),
+            METHOD_LIST_PIPELINES => rpc!(ListPipelinesRequest, list_pipelines),
+            METHOD_GET_PIPELINE => rpc!(GetPipelineRequest, get_pipeline),
+            METHOD_LIST_ISSUES => rpc!(ListIssuesRequest, list_issues),
+            METHOD_GET_ISSUE => rpc!(GetIssueRequest, get_issue),
+            _ => vec![Self::error_response(
+                request_id,
+                TunnelErrorCode::NotFound,
+                &format!("Unknown GitLab method: {method}"),
+            )],
+        }
+    }
+
+    async fn dispatch_worktree_rpc(
+        &self,
+        request_id: &str,
+        method: &str,
+        data: &[u8],
+        relay_forwarded: bool,
+    ) -> Vec<TunnelFrame> {
+        let svc = match &self.worktree_service {
+            Some(s) => s,
+            None => {
+                return vec![Self::error_response(
+                    request_id,
+                    TunnelErrorCode::Internal,
+                    "WorktreeService not available in tunnel handler",
+                )]
+            }
+        };
+        macro_rules! rpc {
+            ($req_ty:ty, $method:ident) => {{
+                let req = match <$req_ty>::decode(data) {
+                    Ok(r) => r,
+                    Err(e) => {
+                        return vec![Self::error_response(
+                            request_id,
+                            TunnelErrorCode::Internal,
+                            &format!("Decode error: {e}"),
+                        )]
+                    }
+                };
+                match svc.$method(Request::new(req)).await {
+                    Ok(resp) => vec![
+                        self.unary_response_frame(request_id, &resp.into_inner(), relay_forwarded)
+                            .await,
+                    ],
+                    Err(status) => vec![Self::error_response(
+                        request_id,
+                        TunnelErrorCode::Internal,
+                        status.message(),
+                    )],
+                }
+            }};
+        }
+        match method {
+            METHOD_CREATE_WORKTREE => rpc!(CreateWorktreeRequest, create_worktree),
+            METHOD_REMOVE_WORKTREE => rpc!(RemoveWorktreeRequest, remove_worktree),
+            METHOD_LIST_WORKTREES => rpc!(ListWorktreesRequest, list_worktrees),
+            METHOD_GET_WORKTREE => rpc!(GetWorktreeRequest, get_worktree),
+            _ => vec![Self::error_response(
+                request_id,
+                TunnelErrorCode::NotFound,
+                &format!("Unknown Worktree method: {method}"),
+            )],
+        }
     }
 
     /// Build a unary response frame, skipping tunnel-layer encryption for

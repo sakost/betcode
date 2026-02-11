@@ -30,8 +30,8 @@ pub struct KnownDaemon {
 /// Persistent store of known daemon fingerprints.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct FingerprintStore {
-    /// Map from machine_id to known daemon entry.
-    /// Uses BTreeMap for deterministic JSON serialization order.
+    /// Map from `machine_id` to known daemon entry.
+    /// Uses `BTreeMap` for deterministic JSON serialization order.
     pub daemons: BTreeMap<String, KnownDaemon>,
 }
 
@@ -54,7 +54,7 @@ impl FingerprintStore {
         }
         let data = std::fs::read_to_string(path)?;
         serde_json::from_str(&data).map_err(|e| {
-            CryptoError::SerializationError(format!("Failed to parse fingerprint store: {}", e))
+            CryptoError::SerializationError(format!("Failed to parse fingerprint store: {e}"))
         })
     }
 
@@ -64,7 +64,7 @@ impl FingerprintStore {
             std::fs::create_dir_all(dir)?;
         }
         let json = serde_json::to_string_pretty(self).map_err(|e| {
-            CryptoError::SerializationError(format!("Failed to serialize fingerprint store: {}", e))
+            CryptoError::SerializationError(format!("Failed to serialize fingerprint store: {e}"))
         })?;
         std::fs::write(path, json)?;
         Ok(())
@@ -86,7 +86,7 @@ impl FingerprintStore {
         }
     }
 
-    /// Record a daemon fingerprint (TOFU or update last_seen).
+    /// Record a daemon fingerprint (TOFU or update `last_seen`).
     pub fn record(&mut self, machine_id: &str, fingerprint: &str, now: i64) {
         let entry = self
             .daemons

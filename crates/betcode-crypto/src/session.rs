@@ -144,19 +144,16 @@ impl CryptoSession {
             if current == u32::MAX {
                 return Err(CryptoError::NonceExhausted);
             }
-            match self.nonce_counter.compare_exchange_weak(
+            if let Ok(prev) = self.nonce_counter.compare_exchange_weak(
                 current,
                 current + 1,
                 Ordering::Relaxed,
                 Ordering::Relaxed,
             ) {
-                Ok(prev) => {
-                    let mut nonce = [0u8; NONCE_SIZE];
-                    nonce[..4].copy_from_slice(&prev.to_be_bytes());
-                    nonce[4..].copy_from_slice(&self.nonce_prefix);
-                    return Ok(nonce);
-                }
-                Err(_) => continue,
+                let mut nonce = [0u8; NONCE_SIZE];
+                nonce[..4].copy_from_slice(&prev.to_be_bytes());
+                nonce[4..].copy_from_slice(&self.nonce_prefix);
+                return Ok(nonce);
             }
         }
     }

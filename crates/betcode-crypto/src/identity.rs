@@ -51,7 +51,7 @@ impl IdentityKeyPair {
     }
 
     /// Get the public key.
-    pub fn public_key(&self) -> &PublicKey {
+    pub const fn public_key(&self) -> &PublicKey {
         &self.public
     }
 
@@ -66,7 +66,7 @@ impl IdentityKeyPair {
     }
 
     /// Get the secret key reference for ECDH.
-    pub fn secret(&self) -> &StaticSecret {
+    pub const fn secret(&self) -> &StaticSecret {
         &self.secret
     }
 
@@ -108,6 +108,8 @@ impl IdentityKeyPair {
     ///
     /// On Unix, verifies file permissions are 0600 (owner-only) before reading.
     pub fn load_from_file(path: &Path) -> Result<Self, CryptoError> {
+        use std::io::Read;
+
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
@@ -117,14 +119,12 @@ impl IdentityKeyPair {
                 return Err(CryptoError::IoError(std::io::Error::new(
                     std::io::ErrorKind::PermissionDenied,
                     format!(
-                        "Identity key file has insecure permissions: {:o} (expected 600)",
-                        mode
+                        "Identity key file has insecure permissions: {mode:o} (expected 600)"
                     ),
                 )));
             }
         }
 
-        use std::io::Read;
         let mut file = std::fs::File::open(path)?;
         let mut buf = [0u8; 32];
         file.read_exact(&mut buf)?;
@@ -150,7 +150,7 @@ pub fn fingerprint_of(pubkey_bytes: &[u8; 32]) -> String {
     use sha2::{Digest, Sha256};
     let hash = Sha256::digest(pubkey_bytes);
     hash.iter()
-        .map(|b| format!("{:02x}", b))
+        .map(|b| format!("{b:02x}"))
         .collect::<Vec<_>>()
         .join(":")
 }

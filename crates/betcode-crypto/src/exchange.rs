@@ -65,7 +65,7 @@ impl KeyExchangeState {
 
     /// Complete the key exchange with the peer's ephemeral public key.
     ///
-    /// Performs X25519 ECDH and derives a CryptoSession with HKDF.
+    /// Performs X25519 ECDH and derives a `CryptoSession` with HKDF.
     pub fn complete(self, peer_public_bytes: &[u8]) -> Result<CryptoSession, CryptoError> {
         let arr: [u8; 32] =
             peer_public_bytes
