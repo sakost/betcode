@@ -2040,6 +2040,7 @@ async fn execute_service_command_streams_output() {
     // Collect frames: expect at least one StreamData followed by StreamEnd
     let mut stream_data_count = 0;
     let mut got_stream_end = false;
+    let mut got_error = false;
     let mut decoded_outputs = Vec::new();
     loop {
         let frame = tokio::time::timeout(std::time::Duration::from_secs(5), rx.recv())
@@ -2068,12 +2069,17 @@ async fn execute_service_command_streams_output() {
             }
             Ok(FrameType::Error) => {
                 // Some environments may not have "pwd"; still a valid test path
+                got_error = true;
                 break;
             }
             other => panic!("Unexpected frame type: {:?}", other),
         }
     }
-    // Either we got stream data + end, or an error (acceptable in constrained envs)
+    // Ensure the test always validates something (guard against vacuous pass)
+    assert!(
+        stream_data_count > 0 || got_error,
+        "Expected either stream data or an explicit error frame"
+    );
     if stream_data_count > 0 {
         assert!(got_stream_end, "Expected StreamEnd after StreamData frames");
         // At least one output should be a stdout_line (the pwd result) or an exit_code

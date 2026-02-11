@@ -14,13 +14,14 @@ use betcode_proto::v1::command_service_server::CommandService as CommandServiceT
 use betcode_proto::v1::git_lab_service_server::GitLabService as GitLabServiceTrait;
 use betcode_proto::v1::worktree_service_server::WorktreeService as WorktreeServiceTrait;
 use betcode_proto::v1::{
-    AgentRequest, CancelTurnRequest, CancelTurnResponse, CompactSessionRequest,
-    CompactSessionResponse, CreateWorktreeRequest, EncryptedPayload,
-    ExecuteServiceCommandRequest, FrameType, GetCommandRegistryRequest, GetIssueRequest,
-    GetMergeRequestRequest, GetPipelineRequest, GetWorktreeRequest, InputLockRequest,
-    InputLockResponse, KeyExchangeRequest, KeyExchangeResponse, ListAgentsRequest,
-    ListIssuesRequest, ListMergeRequestsRequest, ListPathRequest, ListPipelinesRequest,
-    ListSessionsRequest, ListSessionsResponse, ListWorktreesRequest, RemoveWorktreeRequest,
+    AddPluginRequest, AgentRequest, CancelTurnRequest, CancelTurnResponse, CompactSessionRequest,
+    CompactSessionResponse, CreateWorktreeRequest, DisablePluginRequest, EnablePluginRequest,
+    EncryptedPayload, ExecuteServiceCommandRequest, FrameType, GetCommandRegistryRequest,
+    GetIssueRequest, GetMergeRequestRequest, GetPipelineRequest, GetPluginStatusRequest,
+    GetWorktreeRequest, InputLockRequest, InputLockResponse, KeyExchangeRequest,
+    KeyExchangeResponse, ListAgentsRequest, ListIssuesRequest, ListMergeRequestsRequest,
+    ListPathRequest, ListPipelinesRequest, ListPluginsRequest, ListSessionsRequest,
+    ListSessionsResponse, ListWorktreesRequest, RemovePluginRequest, RemoveWorktreeRequest,
     ResumeSessionRequest, SessionSummary, StreamPayload, TunnelError, TunnelErrorCode, TunnelFrame,
 };
 
@@ -45,6 +46,12 @@ pub const METHOD_GET_COMMAND_REGISTRY: &str = "CommandService/GetCommandRegistry
 pub const METHOD_LIST_AGENTS: &str = "CommandService/ListAgents";
 pub const METHOD_LIST_PATH: &str = "CommandService/ListPath";
 pub const METHOD_EXECUTE_SERVICE_COMMAND: &str = "CommandService/ExecuteServiceCommand";
+pub const METHOD_LIST_PLUGINS: &str = "CommandService/ListPlugins";
+pub const METHOD_GET_PLUGIN_STATUS: &str = "CommandService/GetPluginStatus";
+pub const METHOD_ADD_PLUGIN: &str = "CommandService/AddPlugin";
+pub const METHOD_REMOVE_PLUGIN: &str = "CommandService/RemovePlugin";
+pub const METHOD_ENABLE_PLUGIN: &str = "CommandService/EnablePlugin";
+pub const METHOD_DISABLE_PLUGIN: &str = "CommandService/DisablePlugin";
 
 // GitLabService methods
 pub const METHOD_LIST_MERGE_REQUESTS: &str = "GitLabService/ListMergeRequests";
@@ -319,7 +326,13 @@ impl TunnelRequestHandler {
             // CommandService RPCs
             METHOD_GET_COMMAND_REGISTRY
             | METHOD_LIST_AGENTS
-            | METHOD_LIST_PATH => {
+            | METHOD_LIST_PATH
+            | METHOD_LIST_PLUGINS
+            | METHOD_GET_PLUGIN_STATUS
+            | METHOD_ADD_PLUGIN
+            | METHOD_REMOVE_PLUGIN
+            | METHOD_ENABLE_PLUGIN
+            | METHOD_DISABLE_PLUGIN => {
                 self.dispatch_command_rpc(&request_id, payload.method.as_str(), &data, relay_forwarded)
                     .await
             }
@@ -1315,6 +1328,12 @@ impl TunnelRequestHandler {
             METHOD_GET_COMMAND_REGISTRY => rpc!(GetCommandRegistryRequest, get_command_registry),
             METHOD_LIST_AGENTS => rpc!(ListAgentsRequest, list_agents),
             METHOD_LIST_PATH => rpc!(ListPathRequest, list_path),
+            METHOD_LIST_PLUGINS => rpc!(ListPluginsRequest, list_plugins),
+            METHOD_GET_PLUGIN_STATUS => rpc!(GetPluginStatusRequest, get_plugin_status),
+            METHOD_ADD_PLUGIN => rpc!(AddPluginRequest, add_plugin),
+            METHOD_REMOVE_PLUGIN => rpc!(RemovePluginRequest, remove_plugin),
+            METHOD_ENABLE_PLUGIN => rpc!(EnablePluginRequest, enable_plugin),
+            METHOD_DISABLE_PLUGIN => rpc!(DisablePluginRequest, disable_plugin),
             _ => vec![Self::error_response(
                 request_id,
                 TunnelErrorCode::NotFound,
