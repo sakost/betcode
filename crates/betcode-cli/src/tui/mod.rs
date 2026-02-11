@@ -153,6 +153,9 @@ pub async fn run(
 
     // 5. Load conversation history if resuming an existing session
     let mut app = App::new();
+    if conn.is_relay() {
+        app.connection_type = "relay".to_string();
+    }
     if session_id.is_some() {
         app.status = "Loading history...".to_string();
         // Draw once to show the loading status

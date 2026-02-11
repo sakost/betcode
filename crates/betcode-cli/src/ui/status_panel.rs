@@ -1,4 +1,4 @@
-//! Session status panel overlay (Ctrl+I).
+//! Session status panel overlay (Ctrl+T).
 //!
 //! Renders a centered bordered panel showing session diagnostics:
 //! working directory, session ID, connection type, model, agents, etc.

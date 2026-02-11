@@ -139,7 +139,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
                 .map(|p| p.display().to_string())
                 .unwrap_or_else(|_| "unknown".to_string()),
             session_id: app.session_id.clone().unwrap_or_else(|| "none".to_string()),
-            connection: "local".to_string(),
+            connection: app.connection_type.clone(),
             model: app.model.clone(),
             active_agents: 0,
             pending_permissions: if app.pending_permission.is_some() {

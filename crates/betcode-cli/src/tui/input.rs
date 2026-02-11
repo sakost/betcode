@@ -82,11 +82,11 @@ pub fn handle_completion_key(app: &mut App, key: crossterm::event::KeyEvent) -> 
 pub async fn handle_term_event(app: &mut App, tx: &mpsc::Sender<AgentRequest>, event: TermEvent) {
     match event {
         TermEvent::Key(key) => {
-            // Ctrl+I toggles the status panel overlay.
+            // Ctrl+T toggles the status panel overlay.
             if key
                 .modifiers
                 .contains(crossterm::event::KeyModifiers::CONTROL)
-                && key.code == KeyCode::Char('i')
+                && key.code == KeyCode::Char('t')
             {
                 app.show_status_panel = !app.show_status_panel;
                 return;
@@ -469,7 +469,7 @@ fn show_help(app: &mut App) {
     lines.push(String::new());
     lines.push("Keyboard shortcuts:".to_string());
     lines.push("  Ctrl+C               Quit".to_string());
-    lines.push("  Ctrl+I               Toggle status panel".to_string());
+    lines.push("  Ctrl+T               Toggle status panel".to_string());
     lines.push("  Tab                  Toggle completion popup".to_string());
     lines.push("  Shift+Up/Down        Scroll messages".to_string());
     lines.push("  PageUp/PageDown      Scroll messages (page)".to_string());

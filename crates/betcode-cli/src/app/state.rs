@@ -142,6 +142,8 @@ pub struct App {
     pub agent_busy: bool,
     pub completion_state: CompletionState,
     pub show_status_panel: bool,
+    /// Connection type displayed in the status panel ("local" or "relay").
+    pub connection_type: String,
     /// Local cache of commands fetched from daemon for `/` completion.
     pub command_cache: CommandCache,
     /// Sender to request async completion fetches (agents, files).
@@ -190,6 +192,7 @@ impl App {
             agent_busy: false,
             completion_state: CompletionState::default(),
             show_status_panel: false,
+            connection_type: "local".to_string(),
             command_cache: CommandCache::new(),
             completion_request_tx: None,
             service_command_tx: None,
