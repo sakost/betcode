@@ -28,7 +28,7 @@ pub struct CompletionItem {
 }
 
 impl CompletionItem {
-    /// Convenience constructor with empty source_badge and match_positions.
+    /// Convenience constructor with empty `source_badge` and `match_positions`.
     pub fn simple(text: &str, description: &str, category: CompletionCategory) -> Self {
         Self {
             text: text.to_string(),
@@ -51,7 +51,7 @@ pub struct PopupState {
 
 impl PopupState {
     /// Create a new popup state with the given items and visible window size.
-    pub fn new(items: Vec<CompletionItem>, visible_count: usize) -> Self {
+    pub const fn new(items: Vec<CompletionItem>, visible_count: usize) -> Self {
         Self {
             items,
             selected: 0,
@@ -61,12 +61,12 @@ impl PopupState {
     }
 
     /// The index of the currently selected item.
-    pub fn selected_index(&self) -> usize {
+    pub const fn selected_index(&self) -> usize {
         self.selected
     }
 
     /// Move the selection up by one, wrapping to the end.
-    pub fn move_up(&mut self) {
+    pub const fn move_up(&mut self) {
         if self.items.is_empty() {
             return;
         }
@@ -79,7 +79,7 @@ impl PopupState {
     }
 
     /// Move the selection down by one, wrapping to the start.
-    pub fn move_down(&mut self) {
+    pub const fn move_down(&mut self) {
         if self.items.is_empty() {
             return;
         }
@@ -99,7 +99,7 @@ impl PopupState {
     }
 
     /// Adjust the scroll offset so the selected item is visible.
-    fn adjust_scroll(&mut self) {
+    const fn adjust_scroll(&mut self) {
         if self.selected < self.scroll_offset {
             self.scroll_offset = self.selected;
         } else if self.selected >= self.scroll_offset + self.visible_count {
@@ -147,7 +147,7 @@ mod tests {
     fn test_popup_visible_window() {
         let items: Vec<CompletionItem> = (0..20)
             .map(|i| {
-                CompletionItem::simple(&format!("item-{}", i), "", CompletionCategory::Command)
+                CompletionItem::simple(&format!("item-{i}"), "", CompletionCategory::Command)
             })
             .collect();
         let state = PopupState::new(items, 5);

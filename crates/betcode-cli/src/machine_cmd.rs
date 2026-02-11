@@ -80,12 +80,12 @@ async fn connect_relay(config: &CliConfig) -> anyhow::Result<Channel> {
         let tls_config = ClientTlsConfig::new().ca_certificate(Certificate::from_pem(ca_pem));
         endpoint = endpoint
             .tls_config(tls_config)
-            .map_err(|e| anyhow::anyhow!("TLS config error: {}", e))?;
+            .map_err(|e| anyhow::anyhow!("TLS config error: {e}"))?;
     }
     endpoint
         .connect()
         .await
-        .map_err(|e| anyhow::anyhow!("Failed to connect to relay: {}", e))
+        .map_err(|e| anyhow::anyhow!("Failed to connect to relay: {e}"))
 }
 
 async fn register(config: &CliConfig, id: Option<String>, name: &str) -> anyhow::Result<()> {
@@ -96,7 +96,7 @@ async fn register(config: &CliConfig, id: Option<String>, name: &str) -> anyhow:
         RegisterMachineRequest {
             machine_id: machine_id.clone(),
             name: name.to_string(),
-            metadata: Default::default(),
+            metadata: std::collections::HashMap::default(),
         },
         config,
     )?;
@@ -151,7 +151,7 @@ fn switch(config: &mut CliConfig, machine_id: &str) -> anyhow::Result<()> {
     config.active_machine = Some(machine_id.into());
     config.save()?;
     let mut out = io::stdout();
-    writeln!(out, "Active machine: {}", machine_id)?;
+    writeln!(out, "Active machine: {machine_id}")?;
     Ok(())
 }
 
@@ -159,7 +159,7 @@ async fn status(config: &CliConfig) -> anyhow::Result<()> {
     let mut out = io::stdout();
     match &config.active_machine {
         Some(mid) => {
-            writeln!(out, "Active machine: {}", mid)?;
+            writeln!(out, "Active machine: {mid}")?;
             if config.relay_url.is_some() && config.auth.is_some() {
                 let channel = connect_relay(config).await?;
                 let mut client = MachineServiceClient::new(channel);
@@ -178,7 +178,7 @@ async fn status(config: &CliConfig) -> anyhow::Result<()> {
                                 _ => "unknown",
                             };
                             writeln!(out, "Name: {}", m.name)?;
-                            writeln!(out, "Status: {}", status)?;
+                            writeln!(out, "Status: {status}")?;
                         }
                     }
                     Err(e) => writeln!(out, "Could not query machine: {}", e.message())?,
@@ -191,6 +191,7 @@ async fn status(config: &CliConfig) -> anyhow::Result<()> {
 }
 
 #[cfg(test)]
+#[allow(clippy::panic, clippy::expect_used, clippy::unwrap_used)]
 mod tests {
     use super::*;
 
@@ -199,8 +200,10 @@ mod tests {
         // switch() is a pure local config operation — no relay contact needed.
         // Test only the in-memory state change, NOT the save() side effect,
         // because save() writes to the real ~/.betcode/config.json.
-        let mut config = CliConfig::default();
-        config.active_machine = Some("m-unit-test".into());
+        let config = CliConfig {
+            active_machine: Some("m-unit-test".into()),
+            ..CliConfig::default()
+        };
         assert_eq!(config.active_machine.as_deref(), Some("m-unit-test"));
     }
 
@@ -227,8 +230,7 @@ mod tests {
         let err = result.unwrap_err().to_string();
         assert!(
             err.contains("Failed to read CA cert"),
-            "Expected CA read error, got: {}",
-            err,
+            "Expected CA read error, got: {err}",
         );
     }
 
@@ -244,8 +246,7 @@ mod tests {
         let err = result.unwrap_err().to_string();
         assert!(
             err.contains("Failed to connect"),
-            "Expected connection error, got: {}",
-            err,
+            "Expected connection error, got: {err}",
         );
     }
 }

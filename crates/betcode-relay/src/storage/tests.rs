@@ -1,4 +1,4 @@
-//! Storage layer tests for BetCode relay.
+//! Storage layer tests for `BetCode` relay.
 
 use super::db::RelayDatabase;
 use super::queries_buffer::{BufferMessageParams, CertificateParams};

@@ -1,4 +1,4 @@
-//! Configuration resolution for BetCode.
+//! Configuration resolution for `BetCode`.
 //!
 //! Implements hierarchical config resolution:
 //! 1. Built-in defaults
@@ -12,7 +12,7 @@ use std::path::{Path, PathBuf};
 
 use crate::error::{Error, Result};
 
-/// Complete BetCode configuration.
+/// Complete `BetCode` configuration.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct Config {
     #[serde(default)]

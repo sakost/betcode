@@ -64,7 +64,7 @@ fn generate_server_cert(
     let mut params = CertificateParams::new(
         server_names
             .iter()
-            .map(|s| s.to_string())
+            .map(ToString::to_string)
             .collect::<Vec<_>>(),
     )
     .map_err(|e| CertError::Generation(e.to_string()))?;
@@ -99,18 +99,18 @@ pub fn generate_dev_bundle(server_names: &[&str]) -> Result<CertBundle, CertErro
 /// Write a dev certificate bundle to disk.
 pub fn write_dev_certs(dir: &Path, bundle: &CertBundle) -> Result<(), CertError> {
     std::fs::create_dir_all(dir)
-        .map_err(|e| CertError::Io(format!("Failed to create cert dir: {}", e)))?;
+        .map_err(|e| CertError::Io(format!("Failed to create cert dir: {e}")))?;
 
     let ca_path = dir.join("ca.pem");
     let cert_path = dir.join("server.pem");
     let key_path = dir.join("server-key.pem");
 
     std::fs::write(&ca_path, &bundle.ca_cert_pem)
-        .map_err(|e| CertError::Io(format!("Failed to write CA cert: {}", e)))?;
+        .map_err(|e| CertError::Io(format!("Failed to write CA cert: {e}")))?;
     std::fs::write(&cert_path, &bundle.server_cert_pem)
-        .map_err(|e| CertError::Io(format!("Failed to write server cert: {}", e)))?;
+        .map_err(|e| CertError::Io(format!("Failed to write server cert: {e}")))?;
     std::fs::write(&key_path, &bundle.server_key_pem)
-        .map_err(|e| CertError::Io(format!("Failed to write server key: {}", e)))?;
+        .map_err(|e| CertError::Io(format!("Failed to write server key: {e}")))?;
 
     info!(
         ca = %ca_path.display(),
@@ -133,6 +133,7 @@ pub enum CertError {
 }
 
 #[cfg(test)]
+#[allow(clippy::panic, clippy::expect_used, clippy::unwrap_used)]
 mod tests {
     use super::*;
 

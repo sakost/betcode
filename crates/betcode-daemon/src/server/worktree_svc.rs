@@ -1,4 +1,4 @@
-//! WorktreeService gRPC implementation.
+//! `WorktreeService` gRPC implementation.
 
 use std::path::Path;
 
@@ -13,20 +13,20 @@ use betcode_proto::v1::{
 
 use crate::worktree::{WorktreeInfo, WorktreeManager};
 
-/// WorktreeService implementation backed by WorktreeManager.
+/// `WorktreeService` implementation backed by `WorktreeManager`.
 #[derive(Clone)]
 pub struct WorktreeServiceImpl {
     manager: WorktreeManager,
 }
 
 impl WorktreeServiceImpl {
-    /// Create a new WorktreeService.
-    pub fn new(manager: WorktreeManager) -> Self {
+    /// Create a new `WorktreeService`.
+    pub const fn new(manager: WorktreeManager) -> Self {
         Self { manager }
     }
 }
 
-/// Convert a WorktreeInfo into a proto WorktreeDetail.
+/// Convert a `WorktreeInfo` into a proto `WorktreeDetail`.
 fn to_detail(info: WorktreeInfo) -> WorktreeDetail {
     WorktreeDetail {
         id: info.worktree.id,
@@ -36,6 +36,7 @@ fn to_detail(info: WorktreeInfo) -> WorktreeDetail {
         repo_path: info.worktree.repo_path,
         setup_script: info.worktree.setup_script.unwrap_or_default(),
         exists_on_disk: info.exists_on_disk,
+        #[allow(clippy::cast_possible_truncation)]
         session_count: info.session_count as u32,
         created_at: Some(prost_types::Timestamp {
             seconds: info.worktree.created_at,
@@ -153,6 +154,7 @@ impl WorktreeService for WorktreeServiceImpl {
 }
 
 #[cfg(test)]
+#[allow(clippy::panic, clippy::expect_used, clippy::unwrap_used)]
 mod tests {
     use super::*;
     use crate::storage::Database;

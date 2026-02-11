@@ -92,7 +92,7 @@ pub struct PendingRequestParams {
 
 /// Manager for pending permission requests.
 pub struct PendingManager {
-    /// Pending requests keyed by request_id.
+    /// Pending requests keyed by `request_id`.
     requests: Arc<RwLock<HashMap<String, PendingRequest>>>,
     /// Configuration.
     config: PendingConfig,
@@ -177,6 +177,7 @@ impl PendingManager {
     }
 
     /// Update client connection status for all requests targeting a client.
+    #[allow(clippy::significant_drop_tightening)]
     pub async fn update_client_status(&self, client_id: &str, connected: bool) {
         let mut requests = self.requests.write().await;
         for request in requests.values_mut() {
@@ -184,10 +185,12 @@ impl PendingManager {
                 request.refresh_expiry(connected, &self.config);
             }
         }
+        drop(requests);
         info!(client_id, connected, "Updated pending request timeouts");
     }
 
     /// Clean up expired requests.
+    #[allow(clippy::significant_drop_tightening)]
     pub async fn cleanup_expired(&self) -> Vec<String> {
         let mut requests = self.requests.write().await;
         let expired: Vec<String> = requests
@@ -210,7 +213,7 @@ impl PendingManager {
     }
 
     /// Get the configuration.
-    pub fn config(&self) -> &PendingConfig {
+    pub const fn config(&self) -> &PendingConfig {
         &self.config
     }
 }

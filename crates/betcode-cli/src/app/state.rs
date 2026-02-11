@@ -48,17 +48,17 @@ pub struct PendingPermission {
     pub request_id: String,
     pub tool_name: String,
     pub description: String,
-    /// Original tool input from the PermissionRequest (Struct serialized to JSON).
+    /// Original tool input from the `PermissionRequest` (Struct serialized to JSON).
     pub original_input: Option<serde_json::Value>,
     /// Text buffer for editing (tool input JSON / comment / deny message).
     pub edit_buffer: String,
-    /// Cursor position in edit_buffer.
+    /// Cursor position in `edit_buffer`.
     pub edit_cursor: usize,
     /// Whether deny should interrupt the current turn (N=false, X=true).
     pub deny_interrupt: bool,
 }
 
-/// Pending question from Claude (AskUserQuestion tool).
+/// Pending question from Claude (`AskUserQuestion` tool).
 #[derive(Debug, Clone)]
 pub struct PendingUserQuestion {
     pub question_id: String,
@@ -98,7 +98,7 @@ pub struct CompletionState {
 
 impl CompletionState {
     /// Adjust `scroll_offset` so that `selected_index` is within the visible window.
-    pub fn adjust_scroll(&mut self) {
+    pub const fn adjust_scroll(&mut self) {
         if self.selected_index < self.scroll_offset {
             self.scroll_offset = self.selected_index;
         } else if self.selected_index >= self.scroll_offset + COMPLETION_VISIBLE_COUNT {
@@ -116,6 +116,7 @@ pub struct TokenUsage {
 }
 
 /// TUI application state.
+#[allow(clippy::struct_excessive_bools)]
 pub struct App {
     pub mode: AppMode,
     pub session_id: Option<String>,
@@ -265,7 +266,7 @@ impl App {
     }
 
     /// Scroll down by `n` lines.
-    pub fn scroll_down(&mut self, n: u16) {
+    pub const fn scroll_down(&mut self, n: u16) {
         self.scroll_offset = self.scroll_offset.saturating_sub(n);
         if self.scroll_offset == 0 {
             self.scroll_pinned = true;
@@ -273,7 +274,7 @@ impl App {
     }
 
     /// Snap scroll to the bottom (most recent messages).
-    pub fn scroll_to_bottom(&mut self) {
+    pub const fn scroll_to_bottom(&mut self) {
         self.scroll_offset = 0;
         self.scroll_pinned = true;
     }
@@ -317,6 +318,7 @@ impl App {
     }
 
     /// Process an incoming agent event.
+    #[allow(clippy::too_many_lines)]
     pub fn handle_event(&mut self, event: AgentEvent) {
         use betcode_proto::v1::agent_event::Event;
 
@@ -351,9 +353,9 @@ impl App {
                 let preview = if result.output.len() > 200 {
                     format!("{}...", &result.output[..200])
                 } else {
-                    result.output.clone()
+                    result.output
                 };
-                let msg = format!("[Tool Result ({}): {}]", status, preview);
+                let msg = format!("[Tool Result ({status}): {preview}]");
                 self.add_system_message(MessageRole::Tool, msg);
             }
             Some(Event::PermissionRequest(perm)) => {
@@ -389,7 +391,7 @@ impl App {
             }
             Some(Event::SessionInfo(info)) => {
                 self.session_id = Some(info.session_id.clone());
-                self.model = info.model.clone();
+                self.model.clone_from(&info.model);
                 self.status = format!("Session: {} | Model: {}", info.session_id, info.model);
             }
             Some(Event::StatusChange(sc)) => {
@@ -424,9 +426,9 @@ impl App {
 
     /// Replay a historical event into the message list (non-interactive).
     ///
-    /// Used when loading conversation history via ResumeSession.
-    /// All messages are added as non-streaming. PermissionRequest events are
-    /// skipped (historical, not actionable). StatusChange and Usage are skipped
+    /// Used when loading conversation history via `ResumeSession`.
+    /// All messages are added as non-streaming. `PermissionRequest` events are
+    /// skipped (historical, not actionable). `StatusChange` and Usage are skipped
     /// per user preference (system-internal events).
     pub fn load_history_event(&mut self, event: AgentEvent) {
         use betcode_proto::v1::agent_event::Event;
@@ -474,16 +476,16 @@ impl App {
                 let preview = if result.output.len() > 200 {
                     format!("{}...", &result.output[..200])
                 } else {
-                    result.output.clone()
+                    result.output
                 };
                 self.add_system_message(
                     MessageRole::Tool,
-                    format!("[Tool Result ({}): {}]", status, preview),
+                    format!("[Tool Result ({status}): {preview}]"),
                 );
             }
             Some(Event::SessionInfo(info)) => {
                 self.session_id = Some(info.session_id.clone());
-                self.model = info.model.clone();
+                self.model = info.model;
             }
             Some(Event::Error(err)) => {
                 let msg = format!("[Error: {} - {}]", err.code, err.message);
@@ -593,8 +595,12 @@ impl App {
                 return;
             }
             let max = q.options.len() - 1;
+            #[allow(clippy::cast_possible_wrap)]
             let current = q.highlight as isize;
-            q.highlight = (current + delta).clamp(0, max as isize) as usize;
+            #[allow(clippy::cast_possible_wrap, clippy::cast_sign_loss)]
+            {
+                q.highlight = (current + delta).clamp(0, max as isize) as usize;
+            }
         }
     }
 
@@ -624,12 +630,12 @@ impl Default for App {
     }
 }
 
-/// Convert a prost_types::Struct to serde_json::Value.
+/// Convert a `prost_types::Struct` to `serde_json::Value`.
 fn struct_to_json(s: betcode_proto::prost_types::Struct) -> serde_json::Value {
     use betcode_proto::prost_types::value::Kind;
     fn value_to_json(v: betcode_proto::prost_types::Value) -> serde_json::Value {
         match v.kind {
-            Some(Kind::NullValue(_)) => serde_json::Value::Null,
+            Some(Kind::NullValue(_)) | None => serde_json::Value::Null,
             Some(Kind::NumberValue(n)) => serde_json::json!(n),
             Some(Kind::StringValue(s)) => serde_json::Value::String(s),
             Some(Kind::BoolValue(b)) => serde_json::Value::Bool(b),
@@ -637,7 +643,6 @@ fn struct_to_json(s: betcode_proto::prost_types::Struct) -> serde_json::Value {
             Some(Kind::ListValue(l)) => {
                 serde_json::Value::Array(l.values.into_iter().map(value_to_json).collect())
             }
-            None => serde_json::Value::Null,
         }
     }
     let map: serde_json::Map<String, serde_json::Value> = s
@@ -648,7 +653,7 @@ fn struct_to_json(s: betcode_proto::prost_types::Struct) -> serde_json::Value {
     serde_json::Value::Object(map)
 }
 
-/// Convert a serde_json::Value back to prost_types::Struct.
+/// Convert a `serde_json::Value` back to `prost_types::Struct`.
 pub fn json_to_struct(v: &serde_json::Value) -> betcode_proto::prost_types::Struct {
     use betcode_proto::prost_types::{value::Kind, ListValue, Struct, Value};
     fn json_to_value(v: &serde_json::Value) -> Value {
@@ -677,6 +682,12 @@ pub fn json_to_struct(v: &serde_json::Value) -> betcode_proto::prost_types::Stru
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::panic,
+    clippy::expect_used,
+    clippy::unwrap_used,
+    clippy::default_trait_access
+)]
 mod tests {
     use super::*;
 

@@ -38,7 +38,7 @@ struct CompletionResponse {
     items: Vec<String>,
 }
 
-/// A slash-command to execute via the CommandService.
+/// A slash-command to execute via the `CommandService`.
 pub struct ServiceCommandExec {
     pub command: String,
     pub args: Vec<String>,
@@ -54,6 +54,11 @@ pub enum TermEvent {
 ///
 /// Establishes the gRPC stream, enters raw mode, spawns a dedicated terminal
 /// reader thread, and runs the main `select!` loop until the user quits.
+///
+/// # Panics
+///
+/// Panics if the current working directory cannot be accessed.
+#[allow(clippy::too_many_lines, clippy::expect_used, clippy::option_if_let_else)]
 pub async fn run(
     conn: &mut DaemonConnection,
     session_id: &Option<String>,
@@ -71,10 +76,8 @@ pub async fn run(
             }
             FingerprintCheck::Mismatch { expected, actual } => {
                 return Err(anyhow::anyhow!(
-                    "Daemon fingerprint mismatch!\n  Expected: {}\n  Actual:   {}\n\
-                     This could indicate a MITM attack. Connection aborted.",
-                    expected,
-                    actual
+                    "Daemon fingerprint mismatch!\n  Expected: {expected}\n  Actual:   {actual}\n\
+                     This could indicate a MITM attack. Connection aborted."
                 ));
             }
         }
@@ -104,7 +107,7 @@ pub async fn run(
                     allowed_tools: Vec::new(),
                     plan_mode: false,
                     worktree_id: String::new(),
-                    metadata: Default::default(),
+                    metadata: std::collections::HashMap::default(),
                 },
             )),
         })
@@ -185,7 +188,7 @@ pub async fn run(
         tokio::sync::mpsc::channel::<Vec<CachedCommand>>(1);
     if let Some(mut cmd_client) = conn.command_service_client() {
         let auth_token = conn.auth_token().cloned();
-        let machine_id = conn.machine_id().map(|s| s.to_string());
+        let machine_id = conn.machine_id().map(std::string::ToString::to_string);
         tokio::spawn(async move {
             let mut request = tonic::Request::new(betcode_proto::v1::GetCommandRegistryRequest {});
             crate::connection::attach_relay_metadata(
@@ -202,7 +205,7 @@ pub async fn run(
                         .map(|c| {
                             let category =
                                 match betcode_proto::v1::CommandCategory::try_from(c.category) {
-                                    Ok(cat) => format!("{:?}", cat),
+                                    Ok(cat) => format!("{cat:?}"),
                                     Err(_) => "Unknown".to_string(),
                                 };
                             CachedCommand {
@@ -234,10 +237,12 @@ pub async fn run(
 
     let completion_handle = conn.command_service_client().map(|mut cmd_client| {
         let comp_auth_token = conn.auth_token().cloned();
-        let comp_machine_id = conn.machine_id().map(|s| s.to_string());
+        let comp_machine_id = conn.machine_id().map(std::string::ToString::to_string);
         tokio::spawn(async move {
             let debounce = Duration::from_millis(100);
-            let mut last_request_time = Instant::now() - debounce;
+            let mut last_request_time = Instant::now()
+                .checked_sub(debounce)
+                .unwrap_or_else(Instant::now);
 
             while let Some(req) = completion_req_rx.recv().await {
                 // Debounce: drain any newer requests that arrived
@@ -249,7 +254,10 @@ pub async fn run(
                 // Wait for debounce period since last request
                 let elapsed = last_request_time.elapsed();
                 if elapsed < debounce {
-                    tokio::time::sleep(debounce - elapsed).await;
+                    tokio::time::sleep(
+                        debounce.checked_sub(elapsed).unwrap_or(Duration::ZERO),
+                    )
+                    .await;
                     // Drain again after sleep
                     while let Ok(newer) = completion_req_rx.try_recv() {
                         latest = newer;
@@ -368,7 +376,7 @@ pub async fn run(
 
     let svc_cmd_handle = conn.command_service_client().map(|mut cmd_client| {
         let svc_auth_token = conn.auth_token().cloned();
-        let svc_machine_id = conn.machine_id().map(|s| s.to_string());
+        let svc_machine_id = conn.machine_id().map(std::string::ToString::to_string);
         tokio::spawn(async move {
             while let Some(exec) = svc_cmd_rx.recv().await {
                 let mut request =
@@ -383,15 +391,15 @@ pub async fn run(
                 );
                 match cmd_client.execute_service_command(request).await {
                     Ok(resp) => {
-                        let mut stream = resp.into_inner();
+                        use betcode_proto::v1::service_command_output::Output;
                         use tokio_stream::StreamExt;
+                        let mut stream = resp.into_inner();
                         while let Some(Ok(output)) = stream.next().await {
-                            use betcode_proto::v1::service_command_output::Output;
                             let line = match output.output {
                                 Some(Output::StdoutLine(s)) => s,
-                                Some(Output::StderrLine(s)) => format!("[stderr] {}", s),
-                                Some(Output::ExitCode(c)) => format!("[exit code: {}]", c),
-                                Some(Output::Error(e)) => format!("[error] {}", e),
+                                Some(Output::StderrLine(s)) => format!("[stderr] {s}"),
+                                Some(Output::ExitCode(c)) => format!("[exit code: {c}]"),
+                                Some(Output::Error(e)) => format!("[error] {e}"),
                                 None => continue,
                             };
                             if svc_cmd_result_tx.send(line).await.is_err() {
@@ -447,7 +455,7 @@ pub async fn run(
                         {
                             "Disconnected: daemon connection lost".to_string()
                         } else {
-                            format!("Error: {}", msg)
+                            format!("Error: {msg}")
                         };
                         app.agent_busy = false;
                     }
@@ -465,7 +473,7 @@ pub async fn run(
     let _ = terminal.show_cursor();
 
     if let Err(ref e) = result {
-        eprintln!("Error: {e}");
+        tracing::error!(%e, "TUI error");
     }
 
     // 10. Shutdown: signal UI thread to stop, clean up gRPC resources

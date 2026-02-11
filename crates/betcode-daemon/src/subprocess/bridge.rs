@@ -1,6 +1,6 @@
 //! NDJSON to gRPC event bridge.
 //!
-//! Converts NDJSON messages from Claude's stdout into gRPC AgentEvent messages.
+//! Converts NDJSON messages from Claude's stdout into gRPC `AgentEvent` messages.
 
 use betcode_core::ndjson::{
     AssistantMessage, ContentBlock, ControlRequest as NdjsonControlRequest,
@@ -24,12 +24,12 @@ pub struct EventBridge {
     pending_tools: HashMap<String, String>,
     /// Current session info.
     session_info: Option<SessionInfo>,
-    /// Pending AskUserQuestion inputs keyed by request_id.
-    /// Stored when converting control_request → UserQuestion so the relay
+    /// Pending `AskUserQuestion` inputs keyed by `request_id`.
+    /// Stored when converting `control_request` → `UserQuestion` so the relay
     /// can reconstruct the `updatedInput` in the response.
     pending_question_inputs: HashMap<String, serde_json::Value>,
-    /// Pending permission (CanUseTool) inputs keyed by request_id.
-    /// Stored when converting control_request → PermissionRequest so the relay
+    /// Pending permission (`CanUseTool`) inputs keyed by `request_id`.
+    /// Stored when converting `control_request` → `PermissionRequest` so the relay
     /// can pass back the original `updatedInput` in the response.
     pending_permission_inputs: HashMap<String, serde_json::Value>,
 }
@@ -88,6 +88,7 @@ impl EventBridge {
         }
     }
 
+    #[allow(clippy::needless_pass_by_value)]
     fn handle_system_init(&mut self, init: SystemInit) -> Vec<AgentEvent> {
         let info = SessionInfo {
             session_id: init.session_id.clone(),
@@ -108,6 +109,7 @@ impl EventBridge {
         vec![event]
     }
 
+    #[allow(clippy::needless_pass_by_value)]
     fn handle_assistant(&mut self, msg: AssistantMessage) -> Vec<AgentEvent> {
         let mut events = Vec::new();
 
@@ -150,9 +152,7 @@ impl EventBridge {
                     }));
                     vec![event]
                 }
-                Delta::Text(_) => vec![],      // Skip empty text deltas
-                Delta::InputJson(_) => vec![], // Buffered internally
-                Delta::Unknown(_) => vec![],
+                Delta::Text(_) | Delta::InputJson(_) | Delta::Unknown(_) => vec![],
             },
             StreamEventType::ContentBlockStop { .. } => {
                 // No event emitted — the assistant message already triggers
@@ -209,18 +209,19 @@ impl EventBridge {
         }
     }
 
-    /// Take the original input for a pending AskUserQuestion.
-    /// Returns `None` if the request_id is not found or was already taken.
+    /// Take the original input for a pending `AskUserQuestion`.
+    /// Returns `None` if the `request_id` is not found or was already taken.
     pub fn take_question_input(&mut self, request_id: &str) -> Option<serde_json::Value> {
         self.pending_question_inputs.remove(request_id)
     }
 
-    /// Take the original input for a pending permission request (CanUseTool).
-    /// Returns `None` if the request_id is not found or was already taken.
+    /// Take the original input for a pending permission request (`CanUseTool`).
+    /// Returns `None` if the `request_id` is not found or was already taken.
     pub fn take_permission_input(&mut self, request_id: &str) -> Option<serde_json::Value> {
         self.pending_permission_inputs.remove(request_id)
     }
 
+    #[allow(clippy::needless_pass_by_value)]
     fn handle_ask_user_question(
         &mut self,
         request_id: String,
@@ -250,7 +251,7 @@ impl EventBridge {
         let multi_select = first
             .get("multi_select")
             .or_else(|| first.get("multiSelect"))
-            .and_then(|v| v.as_bool())
+            .and_then(serde_json::Value::as_bool)
             .unwrap_or(false);
 
         let options = first
@@ -308,6 +309,7 @@ impl EventBridge {
             .collect()
     }
 
+    #[allow(clippy::needless_pass_by_value)]
     fn handle_result(&mut self, result: SessionResult) -> Vec<AgentEvent> {
         let mut events = Vec::new();
 
@@ -320,6 +322,7 @@ impl EventBridge {
             cache_creation_tokens: result.usage.cache_creation_input_tokens,
             model: String::new(),
             cost_usd: result.cost_usd.unwrap_or(0.0),
+            #[allow(clippy::cast_possible_truncation)]
             duration_ms: result.duration_ms as u32,
         }));
         events.push(usage_event);
@@ -336,12 +339,12 @@ impl EventBridge {
     }
 
     /// Get the current session info.
-    pub fn session_info(&self) -> Option<&SessionInfo> {
+    pub const fn session_info(&self) -> Option<&SessionInfo> {
         self.session_info.as_ref()
     }
 
     /// Get the current sequence number.
-    pub fn sequence(&self) -> u64 {
+    pub const fn sequence(&self) -> u64 {
         self.sequence
     }
 }
@@ -351,16 +354,17 @@ fn now_timestamp() -> Timestamp {
         .duration_since(SystemTime::UNIX_EPOCH)
         .unwrap_or_default();
     Timestamp {
+        #[allow(clippy::cast_possible_wrap)]
         seconds: now.as_secs() as i64,
+        #[allow(clippy::cast_possible_wrap)]
         nanos: now.subsec_nanos() as i32,
     }
 }
 
 /// Generate a human-readable description from tool name and input.
 fn tool_description(name: &str, input: &serde_json::Value) -> String {
-    let obj = match input.as_object() {
-        Some(o) => o,
-        None => return String::new(),
+    let Some(obj) = input.as_object() else {
+        return String::new();
     };
 
     match name {
@@ -455,6 +459,14 @@ fn json_value_to_prost(value: &serde_json::Value) -> prost_types::Value {
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::panic,
+    clippy::expect_used,
+    clippy::unwrap_used,
+    clippy::uninlined_format_args,
+    clippy::default_trait_access,
+    clippy::needless_pass_by_value
+)]
 mod tests {
     use super::*;
 

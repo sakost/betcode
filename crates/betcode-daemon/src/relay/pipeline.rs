@@ -21,14 +21,14 @@ use crate::session::SessionMultiplexer;
 use crate::storage::Database;
 use crate::subprocess::{EventBridge, SpawnConfig, SubprocessManager};
 
-use super::types::*;
+use super::types::{RelayHandle, RelaySessionConfig, RelayError};
 
 /// Session relay manages the lifecycle of subprocess ↔ gRPC bridging.
 pub struct SessionRelay {
     subprocess_manager: Arc<SubprocessManager>,
     multiplexer: Arc<SessionMultiplexer>,
     db: Database,
-    /// Maps session_id → RelayHandle for active sessions.
+    /// Maps `session_id` → `RelayHandle` for active sessions.
     sessions: Arc<RwLock<HashMap<String, RelayHandle>>>,
 }
 
@@ -48,7 +48,7 @@ impl SessionRelay {
     }
 
     /// Start a new relay session, spawning a subprocess and wiring up the
-    /// NDJSON → EventBridge → Multiplexer pipeline.
+    /// NDJSON → `EventBridge` → Multiplexer pipeline.
     pub async fn start_session(
         &self,
         config: RelaySessionConfig,
@@ -86,6 +86,7 @@ impl SessionRelay {
 
         // Shared sequence counter between stdout pipeline and user message storage.
         // Initialized from DB max so resumed sessions don't collide.
+        #[allow(clippy::cast_sign_loss)]
         let start_seq = self.db.max_message_sequence(&session_id).await.unwrap_or(0) as u64;
         let sequence_counter = Arc::new(AtomicU64::new(start_seq));
 
@@ -178,7 +179,7 @@ impl SessionRelay {
         Ok(())
     }
 
-    /// Send a permission response (control_response) to the subprocess.
+    /// Send a permission response (`control_response`) to the subprocess.
     ///
     /// Format must match the Claude Agent SDK control protocol:
     /// allow → `{ behavior: "allow", updatedInput: <original_tool_input> }`
@@ -206,9 +207,9 @@ impl SessionRelay {
         Ok(())
     }
 
-    /// Send an AskUserQuestion response to the subprocess.
+    /// Send an `AskUserQuestion` response to the subprocess.
     ///
-    /// Format matches the Claude Agent SDK control protocol for AskUserQuestion:
+    /// Format matches the Claude Agent SDK control protocol for `AskUserQuestion`:
     /// ```json
     /// {"type":"control_response","response":{"subtype":"success","request_id":"req_002",
     ///   "response":{"behavior":"allow","updatedInput":{...original_input..., "answers":{...}}}}}
@@ -315,7 +316,8 @@ struct StdoutPipelineContext {
     pending_permission_inputs: Arc<tokio::sync::RwLock<HashMap<String, serde_json::Value>>>,
 }
 
-/// Spawn the stdout → NDJSON parser → EventBridge → forwarder pipeline.
+/// Spawn the stdout → NDJSON parser → `EventBridge` → forwarder pipeline.
+#[allow(clippy::too_many_lines)]
 fn spawn_stdout_pipeline(ctx: StdoutPipelineContext) {
     let StdoutPipelineContext {
         session_id,
@@ -387,8 +389,8 @@ fn spawn_stdout_pipeline(ctx: StdoutPipelineContext) {
                     if let Err(e) = db
                         .update_session_usage(
                             &sid,
-                            usage.input_tokens as i64,
-                            usage.output_tokens as i64,
+                            i64::from(usage.input_tokens),
+                            i64::from(usage.output_tokens),
                             usage.cost_usd,
                         )
                         .await
@@ -441,7 +443,7 @@ fn spawn_stdout_pipeline(ctx: StdoutPipelineContext) {
                         code: "subprocess_failed".to_string(),
                         message: "Claude subprocess exited without producing output. Check daemon logs for stderr details.".to_string(),
                         is_fatal: true,
-                        details: Default::default(),
+                        details: HashMap::default(),
                     },
                 )),
             };
@@ -462,25 +464,24 @@ fn spawn_stdout_pipeline(ctx: StdoutPipelineContext) {
     });
 }
 
-/// Determine the message_type string from an AgentEvent for DB storage.
-fn event_message_type(event: &AgentEvent) -> &'static str {
+/// Determine the `message_type` string from an `AgentEvent` for DB storage.
+const fn event_message_type(event: &AgentEvent) -> &'static str {
     use betcode_proto::v1::agent_event::Event;
     match &event.event {
-        Some(Event::TextDelta(_)) => "stream_event",
-        Some(Event::ToolCallStart(_)) => "stream_event",
-        Some(Event::ToolCallResult(_)) => "result",
-        Some(Event::PermissionRequest(_)) => "control_request",
-        Some(Event::StatusChange(_)) => "stream_event",
+        Some(Event::ToolCallResult(_) | Event::Usage(_) | Event::TurnComplete(_)) => "result",
+        Some(Event::PermissionRequest(_) | Event::UserQuestion(_)) => "control_request",
         Some(Event::SessionInfo(_)) => "system",
-        Some(Event::Error(_)) => "stream_event",
-        Some(Event::Usage(_)) => "result",
-        Some(Event::TurnComplete(_)) => "result",
-        Some(Event::UserQuestion(_)) => "control_request",
-        Some(Event::TodoUpdate(_)) => "stream_event",
-        Some(Event::PlanMode(_)) => "stream_event",
         Some(Event::UserInput(_)) => "user",
-        Some(Event::Encrypted(_)) => "stream_event",
-        None => "stream_event",
+        Some(
+            Event::TextDelta(_)
+            | Event::ToolCallStart(_)
+            | Event::StatusChange(_)
+            | Event::Error(_)
+            | Event::TodoUpdate(_)
+            | Event::PlanMode(_)
+            | Event::Encrypted(_),
+        )
+        | None => "stream_event",
     }
 }
 
@@ -495,17 +496,19 @@ async fn store_event(db: &Database, session_id: &str, event: &AgentEvent) -> Res
     let payload = betcode_core::db::base64_encode(&buf);
     let msg_type = event_message_type(event);
 
-    db.insert_message(session_id, event.sequence as i64, msg_type, &payload)
+    #[allow(clippy::cast_possible_wrap)]
+    let sequence = event.sequence as i64;
+    db.insert_message(session_id, sequence, msg_type, &payload)
         .await
         .map_err(|e| e.to_string())
         .map(|_| ())
 }
 
-/// Build the JSON line for a permission control_response.
+/// Build the JSON line for a permission `control_response`.
 ///
 /// For allow: include `updatedInput` with the original tool arguments.
 /// Claude Code's Zod schema REQUIRES `updatedInput` to be a record (object).
-/// Omitting it causes a ZodError; sending `{}` replaces all args with empty.
+/// Omitting it causes a `ZodError`; sending `{}` replaces all args with empty.
 /// The correct behavior is to pass back the original tool input unchanged.
 fn build_permission_response_json(
     request_id: &str,
@@ -533,10 +536,11 @@ fn build_permission_response_json(
             "response": response
         }
     });
+    #[allow(clippy::expect_used)]
     serde_json::to_string(&msg).expect("permission response serialization should not fail")
 }
 
-/// Build the JSON line for an AskUserQuestion control_response.
+/// Build the JSON line for an `AskUserQuestion` `control_response`.
 ///
 /// The response includes `updatedInput` with both the original questions and the user's answers,
 /// matching the Claude Agent SDK protocol spec.
@@ -564,10 +568,12 @@ fn build_question_response_json(
             }
         }
     });
+    #[allow(clippy::expect_used)]
     serde_json::to_string(&msg).expect("question response serialization should not fail")
 }
 
 #[cfg(test)]
+#[allow(clippy::panic, clippy::expect_used, clippy::unwrap_used, clippy::iter_on_single_items)]
 mod tests {
     use super::*;
 
@@ -662,7 +668,7 @@ mod tests {
         assert_eq!(response["updatedInput"]["timeout"], 30000);
     }
 
-    /// Verify that permission allow with empty original_input still sends empty object.
+    /// Verify that permission allow with empty `original_input` still sends empty object.
     #[test]
     fn permission_allow_json_with_empty_input() {
         let original_input = serde_json::json!({});

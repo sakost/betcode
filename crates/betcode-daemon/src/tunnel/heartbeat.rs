@@ -33,7 +33,7 @@ pub fn spawn_heartbeat_task(
                         cpu_usage_percent: 0.0,
                         memory_usage_percent: 0.0,
                     });
-                    if let Ok(val) = format!("Bearer {}", token).parse() {
+                    if let Ok(val) = format!("Bearer {token}").parse() {
                         request.metadata_mut().insert("authorization", val);
                     }
                     if let Err(e) = client.heartbeat(request).await {

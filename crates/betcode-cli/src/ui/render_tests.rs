@@ -1,10 +1,18 @@
 //! Tests for TUI rendering.
 
 #[cfg(test)]
+#[allow(
+    clippy::panic,
+    clippy::expect_used,
+    clippy::unwrap_used,
+    clippy::cast_possible_truncation
+)]
 mod tests {
     use crate::app::{App, AppMode, PendingPermission, PendingUserQuestion, QuestionOptionDisplay};
     use crate::ui::draw;
     use ratatui::backend::TestBackend;
+    use ratatui::text::{Line, Span};
+    use ratatui::widgets::{Paragraph, Wrap};
     use ratatui::Terminal;
 
     #[test]
@@ -33,7 +41,7 @@ mod tests {
         let mut terminal = Terminal::new(backend).unwrap();
         let mut app = App::new();
         for i in 0..30 {
-            app.add_user_message(format!("Message {}", i));
+            app.add_user_message(format!("Message {i}"));
         }
         terminal.draw(|frame| draw(frame, &mut app)).unwrap();
         assert!(app.scroll_pinned);
@@ -46,7 +54,7 @@ mod tests {
         let mut terminal = Terminal::new(backend).unwrap();
         let mut app = App::new();
         for i in 0..30 {
-            app.add_user_message(format!("Message {}", i));
+            app.add_user_message(format!("Message {i}"));
         }
         terminal.draw(|frame| draw(frame, &mut app)).unwrap();
         app.scroll_up(5);
@@ -379,7 +387,7 @@ mod tests {
         // Build a message with many short words — word wrapping will produce
         // MORE lines than simple ceil(char_count / width) because words can't
         // be split across line boundaries.
-        let words: Vec<String> = (0..40).map(|i| format!("word{}", i)).collect();
+        let words: Vec<String> = (0..40).map(|i| format!("word{i}")).collect();
         let long_text = words.join(" ");
         app.start_assistant_message();
         app.append_text(&long_text);
@@ -390,11 +398,9 @@ mod tests {
         // Build the same Paragraph that draw_messages builds and ask ratatui
         // for its authoritative line count.
         let inner_width = width.saturating_sub(4); // borders + padding
-        use ratatui::text::{Line, Span};
-        use ratatui::widgets::{Paragraph, Wrap};
         let prefix = "Claude: ";
         let content_lines: Vec<&str> = long_text.split('\n').collect();
-        let mut lines: Vec<Line> = Vec::new();
+        let mut lines: Vec<Line<'_>> = Vec::new();
         lines.push(Line::from(vec![
             Span::raw(prefix),
             Span::raw(content_lines[0]),

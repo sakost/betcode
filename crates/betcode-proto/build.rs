@@ -20,10 +20,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         "betcode/v1/plugin.proto",
     ];
 
-    let proto_paths: Vec<_> = protos
-        .iter()
-        .map(|p| format!("{proto_root}/{p}"))
-        .collect();
+    let proto_paths: Vec<_> = protos.iter().map(|p| format!("{proto_root}/{p}")).collect();
 
     tonic_prost_build::configure()
         .build_server(true)

@@ -11,7 +11,7 @@ use betcode_proto::v1::AgentEvent;
 use super::types::ClientState;
 
 /// Session state with connected clients.
-pub(crate) struct SessionState {
+pub struct SessionState {
     /// Session identifier.
     pub session_id: String,
     /// Broadcast sender for events.
@@ -36,7 +36,7 @@ impl SessionState {
         }
     }
 
-    pub fn next_sequence(&mut self) -> u64 {
+    pub const fn next_sequence(&mut self) -> u64 {
         self.sequence += 1;
         self.sequence
     }

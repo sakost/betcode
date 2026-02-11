@@ -1,4 +1,4 @@
-//! MachineService gRPC implementation.
+//! `MachineService` gRPC implementation.
 
 use tonic::{Request, Response, Status};
 use tracing::{info, instrument};
@@ -18,7 +18,7 @@ pub struct MachineServiceImpl {
 }
 
 impl MachineServiceImpl {
-    pub fn new(db: RelayDatabase) -> Self {
+    pub const fn new(db: RelayDatabase) -> Self {
         Self { db }
     }
 }
@@ -65,7 +65,7 @@ impl MachineService for MachineServiceImpl {
             .db
             .create_machine(&req.machine_id, &req.name, &user_id, &metadata_json)
             .await
-            .map_err(|e| Status::internal(format!("Failed to register machine: {}", e)))?;
+            .map_err(|e| Status::internal(format!("Failed to register machine: {e}")))?;
 
         info!(machine_id = %req.machine_id, name = %req.name, "Machine registered");
 
@@ -97,17 +97,17 @@ impl MachineService for MachineServiceImpl {
             .db
             .list_machines(&user_id, status_filter, limit, req.offset)
             .await
-            .map_err(|e| Status::internal(format!("Failed to list machines: {}", e)))?;
+            .map_err(|e| Status::internal(format!("Failed to list machines: {e}")))?;
 
         let total = self
             .db
             .count_machines(&user_id, status_filter)
             .await
-            .map_err(|e| Status::internal(format!("Failed to count machines: {}", e)))?;
+            .map_err(|e| Status::internal(format!("Failed to count machines: {e}")))?;
 
         Ok(Response::new(ListMachinesResponse {
             machines: machines.iter().map(machine_to_proto).collect(),
-            total: total as u32,
+            total: u32::try_from(total).unwrap_or(u32::MAX),
         }))
     }
 
@@ -137,7 +137,7 @@ impl MachineService for MachineServiceImpl {
             .db
             .remove_machine(&req.machine_id)
             .await
-            .map_err(|e| Status::internal(format!("Failed to remove machine: {}", e)))?;
+            .map_err(|e| Status::internal(format!("Failed to remove machine: {e}")))?;
 
         info!(machine_id = %req.machine_id, "Machine removed");
 

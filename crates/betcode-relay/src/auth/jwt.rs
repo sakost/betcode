@@ -15,7 +15,7 @@ pub struct JwtManager {
 }
 
 impl JwtManager {
-    /// Create a new JwtManager with the given secret.
+    /// Create a new `JwtManager` with the given secret.
     pub fn new(secret: &[u8], access_ttl_secs: i64, refresh_ttl_secs: i64) -> Self {
         Self {
             encoding_key: EncodingKey::from_secret(secret),
@@ -85,13 +85,16 @@ impl JwtManager {
 }
 
 fn now_secs() -> i64 {
-    std::time::SystemTime::now()
+    #[allow(clippy::cast_possible_wrap)]
+    let secs = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
-        .as_secs() as i64
+        .as_secs() as i64;
+    secs
 }
 
 #[cfg(test)]
+#[allow(clippy::panic, clippy::expect_used, clippy::unwrap_used)]
 mod tests {
     use super::*;
 

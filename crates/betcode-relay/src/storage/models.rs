@@ -1,4 +1,4 @@
-//! Data models for BetCode relay storage.
+//! Data models for `BetCode` relay storage.
 
 use serde::{Deserialize, Serialize};
 

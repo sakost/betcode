@@ -97,8 +97,8 @@ impl HandlerTestBuilder {
         );
 
         if self.with_command_service {
-            use crate::commands::CommandRegistry;
             use crate::commands::service_executor::ServiceExecutor;
+            use crate::commands::CommandRegistry;
             use crate::completion::agent_lister::AgentLister;
             use crate::completion::file_index::FileIndex;
             use tokio::sync::RwLock;
@@ -389,7 +389,9 @@ async fn incoming_stream_data_unknown_request_is_noop() {
 
 #[tokio::test]
 async fn converse_bad_data_sends_error_on_outbound() {
-    let HandlerTestOutput { handler: h, mut rx, .. } = HandlerTestBuilder::new().build().await;
+    let HandlerTestOutput {
+        handler: h, mut rx, ..
+    } = HandlerTestBuilder::new().build().await;
     let result = h
         .handle_frame(req_frame("conv1", METHOD_CONVERSE, vec![0xFF, 0xFF]))
         .await;
@@ -406,7 +408,9 @@ async fn converse_bad_data_sends_error_on_outbound() {
 
 #[tokio::test]
 async fn converse_non_start_sends_error_on_outbound() {
-    let HandlerTestOutput { handler: h, mut rx, .. } = HandlerTestBuilder::new().build().await;
+    let HandlerTestOutput {
+        handler: h, mut rx, ..
+    } = HandlerTestBuilder::new().build().await;
     // Send a UserMessage instead of StartConversation
     use betcode_proto::v1::{agent_request::Request, UserMessage};
     let req = AgentRequest {
@@ -431,8 +435,9 @@ async fn converse_non_start_sends_error_on_outbound() {
 #[tokio::test]
 async fn converse_start_session_failure_sends_error_cleans_active() {
     // Use max_processes=0 so spawn always fails with PoolExhausted
-    let HandlerTestOutput { handler: h, mut rx, .. } =
-        HandlerTestBuilder::new().max_processes(0).build().await;
+    let HandlerTestOutput {
+        handler: h, mut rx, ..
+    } = HandlerTestBuilder::new().max_processes(0).build().await;
 
     // Send StartConversation — this defers the subprocess spawn
     let data = make_start_request("sess-fail");
@@ -498,7 +503,9 @@ async fn resume_session_returns_empty_vec_async() {
 
 #[tokio::test]
 async fn resume_session_replays_stored_messages() {
-    let HandlerTestOutput { handler: h, mut rx, .. } = HandlerTestBuilder::new().build().await;
+    let HandlerTestOutput {
+        handler: h, mut rx, ..
+    } = HandlerTestBuilder::new().build().await;
     h.db().create_session("rs2", "model", "/tmp").await.unwrap();
 
     // Store some base64-encoded messages (raw bytes encoded as base64)
@@ -543,7 +550,9 @@ async fn resume_session_replays_stored_messages() {
 
 #[tokio::test]
 async fn resume_session_empty_sends_stream_end_only() {
-    let HandlerTestOutput { handler: h, mut rx, .. } = HandlerTestBuilder::new().build().await;
+    let HandlerTestOutput {
+        handler: h, mut rx, ..
+    } = HandlerTestBuilder::new().build().await;
     h.db().create_session("rs3", "model", "/tmp").await.unwrap();
 
     let req = ResumeSessionRequest {
@@ -595,8 +604,11 @@ fn encrypted_req_frame(
 
 #[tokio::test]
 async fn handler_decrypts_incoming_encrypted_request() {
-    let HandlerTestOutput { handler: h, client_crypto, .. } =
-        HandlerTestBuilder::new().with_crypto().build().await;
+    let HandlerTestOutput {
+        handler: h,
+        client_crypto,
+        ..
+    } = HandlerTestBuilder::new().with_crypto().build().await;
     let client_crypto = client_crypto.unwrap();
     let req = ListSessionsRequest {
         working_directory: String::new(),
@@ -631,8 +643,11 @@ async fn handler_decrypts_incoming_encrypted_request() {
 
 #[tokio::test]
 async fn handler_encrypts_outgoing_response() {
-    let HandlerTestOutput { handler: h, client_crypto, .. } =
-        HandlerTestBuilder::new().with_crypto().build().await;
+    let HandlerTestOutput {
+        handler: h,
+        client_crypto,
+        ..
+    } = HandlerTestBuilder::new().with_crypto().build().await;
     let client_crypto = client_crypto.unwrap();
     let req = CancelTurnRequest {
         session_id: "none".into(),
@@ -687,8 +702,11 @@ async fn handler_rejects_encrypted_with_bad_key() {
 
 #[tokio::test]
 async fn handler_rejects_tampered_ciphertext() {
-    let HandlerTestOutput { handler: h, client_crypto, .. } =
-        HandlerTestBuilder::new().with_crypto().build().await;
+    let HandlerTestOutput {
+        handler: h,
+        client_crypto,
+        ..
+    } = HandlerTestBuilder::new().with_crypto().build().await;
     let client_crypto = client_crypto.unwrap();
     let req = ListSessionsRequest {
         working_directory: String::new(),
@@ -1005,8 +1023,11 @@ fn make_app_encrypted_agent_request(inner: &AgentRequest, session: &CryptoSessio
 
 #[tokio::test]
 async fn encrypted_agent_request_is_decrypted() {
-    let HandlerTestOutput { handler: h, client_crypto, .. } =
-        HandlerTestBuilder::new().with_crypto().build().await;
+    let HandlerTestOutput {
+        handler: h,
+        client_crypto,
+        ..
+    } = HandlerTestBuilder::new().with_crypto().build().await;
     let client_crypto = client_crypto.unwrap();
 
     // Start a converse session (app-layer + tunnel-layer encrypted, as the CLI does)
@@ -1080,8 +1101,11 @@ async fn encrypted_agent_request_is_decrypted() {
 
 #[tokio::test]
 async fn encrypted_agent_request_with_wrong_key_rejected() {
-    let HandlerTestOutput { handler: h, client_crypto, .. } =
-        HandlerTestBuilder::new().with_crypto().build().await;
+    let HandlerTestOutput {
+        handler: h,
+        client_crypto,
+        ..
+    } = HandlerTestBuilder::new().with_crypto().build().await;
     let client_crypto = client_crypto.unwrap();
 
     // Start a converse session (app-layer + tunnel-layer encrypted)
@@ -1138,8 +1162,11 @@ async fn encrypted_agent_request_with_wrong_key_rejected() {
 
 #[tokio::test]
 async fn encrypted_agent_request_with_corrupted_data_rejected() {
-    let HandlerTestOutput { handler: h, client_crypto, .. } =
-        HandlerTestBuilder::new().with_crypto().build().await;
+    let HandlerTestOutput {
+        handler: h,
+        client_crypto,
+        ..
+    } = HandlerTestBuilder::new().with_crypto().build().await;
     let client_crypto = client_crypto.unwrap();
 
     // Start a converse session (app-layer + tunnel-layer encrypted)
@@ -1205,8 +1232,11 @@ async fn encrypted_agent_request_with_corrupted_data_rejected() {
 
 #[tokio::test]
 async fn plaintext_agent_request_rejected_when_crypto_active() {
-    let HandlerTestOutput { handler: h, client_crypto, .. } =
-        HandlerTestBuilder::new().with_crypto().build().await;
+    let HandlerTestOutput {
+        handler: h,
+        client_crypto,
+        ..
+    } = HandlerTestBuilder::new().with_crypto().build().await;
     let client_crypto = client_crypto.unwrap();
 
     // Start a valid converse session (properly encrypted)
@@ -1248,8 +1278,11 @@ async fn plaintext_agent_request_rejected_when_crypto_active() {
 
 #[tokio::test]
 async fn plaintext_start_conversation_rejected_when_crypto_active() {
-    let HandlerTestOutput { handler: h, client_crypto, .. } =
-        HandlerTestBuilder::new().with_crypto().build().await;
+    let HandlerTestOutput {
+        handler: h,
+        client_crypto,
+        ..
+    } = HandlerTestBuilder::new().with_crypto().build().await;
     let client_crypto = client_crypto.unwrap();
 
     // Send a plaintext StartConversation that is tunnel-layer encrypted but NOT
@@ -1277,8 +1310,11 @@ async fn plaintext_start_conversation_rejected_when_crypto_active() {
 
 #[tokio::test]
 async fn event_forwarder_encrypts_when_crypto_active() {
-    let HandlerTestOutput { handler: h, client_crypto, mut rx } =
-        HandlerTestBuilder::new().with_crypto().build().await;
+    let HandlerTestOutput {
+        handler: h,
+        client_crypto,
+        mut rx,
+    } = HandlerTestBuilder::new().with_crypto().build().await;
     let client_crypto = client_crypto.unwrap();
 
     // Create a session in DB + start converse (app-layer + tunnel-layer encrypted)
@@ -1352,7 +1388,9 @@ async fn event_forwarder_encrypts_when_crypto_active() {
 
 #[tokio::test]
 async fn event_forwarder_no_encryption_when_no_crypto() {
-    let HandlerTestOutput { handler: h, mut rx, .. } = HandlerTestBuilder::new().build().await;
+    let HandlerTestOutput {
+        handler: h, mut rx, ..
+    } = HandlerTestBuilder::new().build().await;
 
     // Create a session in DB + start converse
     h.db()
@@ -1411,8 +1449,11 @@ async fn event_forwarder_no_encryption_when_no_crypto() {
 /// handles the actual E2E protection.
 #[tokio::test]
 async fn decrypt_payload_passthrough_on_empty_nonce_with_crypto_active() {
-    let HandlerTestOutput { handler: h, client_crypto, .. } =
-        HandlerTestBuilder::new().with_crypto().build().await;
+    let HandlerTestOutput {
+        handler: h,
+        client_crypto,
+        ..
+    } = HandlerTestBuilder::new().with_crypto().build().await;
     let client_crypto = client_crypto.unwrap();
 
     // Build an app-layer encrypted AgentRequest (as the CLI would send)
@@ -1484,8 +1525,11 @@ async fn relay_forwarded_plaintext_request_rejected_when_crypto_active() {
 /// the relay sees valid protobuf, not raw encrypted bytes.
 #[tokio::test]
 async fn resume_session_with_crypto_produces_decodable_frames() {
-    let HandlerTestOutput { handler: h, client_crypto, mut rx } =
-        HandlerTestBuilder::new().with_crypto().build().await;
+    let HandlerTestOutput {
+        handler: h,
+        client_crypto,
+        mut rx,
+    } = HandlerTestBuilder::new().with_crypto().build().await;
     let client_crypto = client_crypto.unwrap();
 
     // Store an event in the DB the same way pipeline.rs does (base64-encoded protobuf)
@@ -1571,7 +1615,9 @@ async fn resume_session_with_crypto_produces_decodable_frames() {
 /// Verify that resume_session WITHOUT crypto sends plain events (no encryption wrapper).
 #[tokio::test]
 async fn resume_session_without_crypto_sends_plain_events() {
-    let HandlerTestOutput { handler: h, mut rx, .. } = HandlerTestBuilder::new().build().await;
+    let HandlerTestOutput {
+        handler: h, mut rx, ..
+    } = HandlerTestBuilder::new().build().await;
     let db = h.db().clone();
 
     // Store an event
@@ -1673,14 +1719,16 @@ async fn question_response_is_handled_through_tunnel() {
 // --- CommandService tunnel handler tests ---
 
 use betcode_proto::v1::{
-    GetCommandRegistryResponse, ListAgentsResponse, ListPathResponse,
-    ListWorktreesResponse, RemoveWorktreeResponse,
+    GetCommandRegistryResponse, ListAgentsResponse, ListPathResponse, ListWorktreesResponse,
+    RemoveWorktreeResponse,
 };
 
 #[tokio::test]
 async fn get_command_registry_through_tunnel() {
-    let HandlerTestOutput { handler: h, .. } =
-        HandlerTestBuilder::new().with_command_service().build().await;
+    let HandlerTestOutput { handler: h, .. } = HandlerTestBuilder::new()
+        .with_command_service()
+        .build()
+        .await;
     let req = GetCommandRegistryRequest {};
     let r = h
         .handle_frame(req_frame("cmd1", METHOD_GET_COMMAND_REGISTRY, encode(&req)))
@@ -1688,10 +1736,9 @@ async fn get_command_registry_through_tunnel() {
     assert_eq!(r.len(), 1);
     assert_eq!(r[0].frame_type, FrameType::Response as i32);
     if let Some(betcode_proto::v1::tunnel_frame::Payload::StreamData(p)) = &r[0].payload {
-        let _resp = GetCommandRegistryResponse::decode(
-            p.encrypted.as_ref().unwrap().ciphertext.as_slice(),
-        )
-        .unwrap();
+        let _resp =
+            GetCommandRegistryResponse::decode(p.encrypted.as_ref().unwrap().ciphertext.as_slice())
+                .unwrap();
         // Successfully decoded — registry may contain discovered commands
     } else {
         panic!("wrong payload");
@@ -1700,8 +1747,10 @@ async fn get_command_registry_through_tunnel() {
 
 #[tokio::test]
 async fn list_agents_through_tunnel() {
-    let HandlerTestOutput { handler: h, .. } =
-        HandlerTestBuilder::new().with_command_service().build().await;
+    let HandlerTestOutput { handler: h, .. } = HandlerTestBuilder::new()
+        .with_command_service()
+        .build()
+        .await;
     let req = ListAgentsRequest {
         query: String::new(),
         max_results: 10,
@@ -1712,9 +1761,8 @@ async fn list_agents_through_tunnel() {
     assert_eq!(r.len(), 1);
     assert_eq!(r[0].frame_type, FrameType::Response as i32);
     if let Some(betcode_proto::v1::tunnel_frame::Payload::StreamData(p)) = &r[0].payload {
-        let resp =
-            ListAgentsResponse::decode(p.encrypted.as_ref().unwrap().ciphertext.as_slice())
-                .unwrap();
+        let resp = ListAgentsResponse::decode(p.encrypted.as_ref().unwrap().ciphertext.as_slice())
+            .unwrap();
         assert!(resp.agents.is_empty());
     } else {
         panic!("wrong payload");
@@ -1723,8 +1771,10 @@ async fn list_agents_through_tunnel() {
 
 #[tokio::test]
 async fn list_path_through_tunnel() {
-    let HandlerTestOutput { handler: h, .. } =
-        HandlerTestBuilder::new().with_command_service().build().await;
+    let HandlerTestOutput { handler: h, .. } = HandlerTestBuilder::new()
+        .with_command_service()
+        .build()
+        .await;
     let req = ListPathRequest {
         query: std::env::temp_dir().to_string_lossy().into_owned(),
         max_results: 10,
@@ -1748,7 +1798,11 @@ async fn command_service_not_set_returns_error() {
     let HandlerTestOutput { handler: h, .. } = HandlerTestBuilder::new().build().await; // No command service set
     let req = GetCommandRegistryRequest {};
     let r = h
-        .handle_frame(req_frame("cmd-err", METHOD_GET_COMMAND_REGISTRY, encode(&req)))
+        .handle_frame(req_frame(
+            "cmd-err",
+            METHOD_GET_COMMAND_REGISTRY,
+            encode(&req),
+        ))
         .await;
     assert_eq!(r.len(), 1);
     assert_eq!(r[0].frame_type, FrameType::Error as i32);
@@ -1761,10 +1815,16 @@ async fn command_service_not_set_returns_error() {
 
 #[tokio::test]
 async fn command_service_malformed_data_returns_error() {
-    let HandlerTestOutput { handler: h, .. } =
-        HandlerTestBuilder::new().with_command_service().build().await;
+    let HandlerTestOutput { handler: h, .. } = HandlerTestBuilder::new()
+        .with_command_service()
+        .build()
+        .await;
     let r = h
-        .handle_frame(req_frame("cmd-bad", METHOD_GET_COMMAND_REGISTRY, vec![0xFF, 0xFF]))
+        .handle_frame(req_frame(
+            "cmd-bad",
+            METHOD_GET_COMMAND_REGISTRY,
+            vec![0xFF, 0xFF],
+        ))
         .await;
     assert_eq!(r.len(), 1);
     assert_eq!(r[0].frame_type, FrameType::Error as i32);
@@ -1774,8 +1834,10 @@ async fn command_service_malformed_data_returns_error() {
 
 #[tokio::test]
 async fn gitlab_service_dispatches_when_set() {
-    let HandlerTestOutput { handler: h, .. } =
-        HandlerTestBuilder::new().with_gitlab_service().build().await;
+    let HandlerTestOutput { handler: h, .. } = HandlerTestBuilder::new()
+        .with_gitlab_service()
+        .build()
+        .await;
     let req = ListMergeRequestsRequest {
         project: "group/project".into(),
         state_filter: 0,
@@ -1809,7 +1871,11 @@ async fn gitlab_service_not_set_returns_error() {
         offset: 0,
     };
     let r = h
-        .handle_frame(req_frame("gl-err", METHOD_LIST_MERGE_REQUESTS, encode(&req)))
+        .handle_frame(req_frame(
+            "gl-err",
+            METHOD_LIST_MERGE_REQUESTS,
+            encode(&req),
+        ))
         .await;
     assert_eq!(r.len(), 1);
     assert_eq!(r[0].frame_type, FrameType::Error as i32);
@@ -1826,7 +1892,11 @@ async fn gitlab_malformed_data_returns_error() {
     // trigger the "not available" error, not a panic.
     let HandlerTestOutput { handler: h, .. } = HandlerTestBuilder::new().build().await;
     let r = h
-        .handle_frame(req_frame("gl-bad", METHOD_LIST_MERGE_REQUESTS, vec![0xFF, 0xFF]))
+        .handle_frame(req_frame(
+            "gl-bad",
+            METHOD_LIST_MERGE_REQUESTS,
+            vec![0xFF, 0xFF],
+        ))
         .await;
     assert_eq!(r.len(), 1);
     assert_eq!(r[0].frame_type, FrameType::Error as i32);
@@ -1846,7 +1916,9 @@ async fn gitlab_all_methods_dispatch_without_service() {
         METHOD_GET_ISSUE,
     ];
     for method in methods {
-        let r = h.handle_frame(req_frame("gl-dispatch", method, vec![])).await;
+        let r = h
+            .handle_frame(req_frame("gl-dispatch", method, vec![]))
+            .await;
         assert_eq!(r.len(), 1, "method: {method}");
         assert_eq!(r[0].frame_type, FrameType::Error as i32, "method: {method}");
         if let Some(betcode_proto::v1::tunnel_frame::Payload::Error(e)) = &r[0].payload {
@@ -1863,8 +1935,10 @@ async fn gitlab_all_methods_dispatch_without_service() {
 
 #[tokio::test]
 async fn list_worktrees_through_tunnel() {
-    let HandlerTestOutput { handler: h, .. } =
-        HandlerTestBuilder::new().with_worktree_service().build().await;
+    let HandlerTestOutput { handler: h, .. } = HandlerTestBuilder::new()
+        .with_worktree_service()
+        .build()
+        .await;
     let req = ListWorktreesRequest {
         repo_path: String::new(),
     };
@@ -1874,10 +1948,9 @@ async fn list_worktrees_through_tunnel() {
     assert_eq!(r.len(), 1);
     assert_eq!(r[0].frame_type, FrameType::Response as i32);
     if let Some(betcode_proto::v1::tunnel_frame::Payload::StreamData(p)) = &r[0].payload {
-        let resp = ListWorktreesResponse::decode(
-            p.encrypted.as_ref().unwrap().ciphertext.as_slice(),
-        )
-        .unwrap();
+        let resp =
+            ListWorktreesResponse::decode(p.encrypted.as_ref().unwrap().ciphertext.as_slice())
+                .unwrap();
         assert!(resp.worktrees.is_empty());
     } else {
         panic!("wrong payload");
@@ -1886,8 +1959,10 @@ async fn list_worktrees_through_tunnel() {
 
 #[tokio::test]
 async fn remove_worktree_nonexistent_through_tunnel() {
-    let HandlerTestOutput { handler: h, .. } =
-        HandlerTestBuilder::new().with_worktree_service().build().await;
+    let HandlerTestOutput { handler: h, .. } = HandlerTestBuilder::new()
+        .with_worktree_service()
+        .build()
+        .await;
     let req = RemoveWorktreeRequest {
         id: "nonexistent".into(),
     };
@@ -1897,10 +1972,9 @@ async fn remove_worktree_nonexistent_through_tunnel() {
     assert_eq!(r.len(), 1);
     assert_eq!(r[0].frame_type, FrameType::Response as i32);
     if let Some(betcode_proto::v1::tunnel_frame::Payload::StreamData(p)) = &r[0].payload {
-        let resp = RemoveWorktreeResponse::decode(
-            p.encrypted.as_ref().unwrap().ciphertext.as_slice(),
-        )
-        .unwrap();
+        let resp =
+            RemoveWorktreeResponse::decode(p.encrypted.as_ref().unwrap().ciphertext.as_slice())
+                .unwrap();
         assert!(!resp.removed);
     } else {
         panic!("wrong payload");
@@ -1935,7 +2009,9 @@ async fn worktree_all_methods_dispatch_without_service() {
         METHOD_GET_WORKTREE,
     ];
     for method in methods {
-        let r = h.handle_frame(req_frame("wt-dispatch", method, vec![])).await;
+        let r = h
+            .handle_frame(req_frame("wt-dispatch", method, vec![]))
+            .await;
         assert_eq!(r.len(), 1, "method: {method}");
         assert_eq!(r[0].frame_type, FrameType::Error as i32, "method: {method}");
         if let Some(betcode_proto::v1::tunnel_frame::Payload::Error(e)) = &r[0].payload {
@@ -1950,8 +2026,10 @@ async fn worktree_all_methods_dispatch_without_service() {
 
 #[tokio::test]
 async fn worktree_malformed_data_returns_error() {
-    let HandlerTestOutput { handler: h, .. } =
-        HandlerTestBuilder::new().with_worktree_service().build().await;
+    let HandlerTestOutput { handler: h, .. } = HandlerTestBuilder::new()
+        .with_worktree_service()
+        .build()
+        .await;
     let r = h
         .handle_frame(req_frame("wt-bad", METHOD_LIST_WORKTREES, vec![0xFF, 0xFF]))
         .await;
@@ -1965,8 +2043,12 @@ use betcode_proto::v1::{ExecuteServiceCommandRequest, ServiceCommandOutput};
 
 #[tokio::test]
 async fn execute_service_command_streams_output() {
-    let HandlerTestOutput { handler: h, mut rx, .. } =
-        HandlerTestBuilder::new().with_command_service().build().await;
+    let HandlerTestOutput {
+        handler: h, mut rx, ..
+    } = HandlerTestBuilder::new()
+        .with_command_service()
+        .build()
+        .await;
     // "pwd" is a simple command that prints the working directory and exits
     let req = ExecuteServiceCommandRequest {
         command: "pwd".into(),
@@ -1996,7 +2078,8 @@ async fn execute_service_command_streams_output() {
         match FrameType::try_from(frame.frame_type) {
             Ok(FrameType::StreamData) => {
                 stream_data_count += 1;
-                if let Some(betcode_proto::v1::tunnel_frame::Payload::StreamData(p)) = &frame.payload
+                if let Some(betcode_proto::v1::tunnel_frame::Payload::StreamData(p)) =
+                    &frame.payload
                 {
                     let data = p
                         .encrypted
@@ -2028,17 +2111,20 @@ async fn execute_service_command_streams_output() {
     if stream_data_count > 0 {
         assert!(got_stream_end, "Expected StreamEnd after StreamData frames");
         // At least one output should be a stdout_line (the pwd result) or an exit_code
-        let has_output = decoded_outputs
-            .iter()
-            .any(|o| o.output.is_some());
-        assert!(has_output, "Expected at least one ServiceCommandOutput with data");
+        let has_output = decoded_outputs.iter().any(|o| o.output.is_some());
+        assert!(
+            has_output,
+            "Expected at least one ServiceCommandOutput with data"
+        );
     }
 }
 
 #[tokio::test]
 async fn execute_service_command_not_set_sends_error() {
     // Handler without command service — should send error via outbound_tx
-    let HandlerTestOutput { handler: h, mut rx, .. } = HandlerTestBuilder::new().build().await;
+    let HandlerTestOutput {
+        handler: h, mut rx, ..
+    } = HandlerTestBuilder::new().build().await;
     let req = ExecuteServiceCommandRequest {
         command: "pwd".into(),
         args: vec![],
@@ -2102,8 +2188,10 @@ async fn command_plugin_methods_dispatch_with_service() {
     // (not "Unknown method" or "CommandService not available"). The current implementation
     // stubs return Status::unimplemented, which the dispatch_rpc! macro converts to an
     // error frame with the service's status message.
-    let HandlerTestOutput { handler: h, .. } =
-        HandlerTestBuilder::new().with_command_service().build().await;
+    let HandlerTestOutput { handler: h, .. } = HandlerTestBuilder::new()
+        .with_command_service()
+        .build()
+        .await;
     let methods = [
         METHOD_LIST_PLUGINS,
         METHOD_GET_PLUGIN_STATUS,
@@ -2139,8 +2227,10 @@ async fn list_plugins_with_valid_request_dispatches_through_service() {
     // decode → service call → response frame. The service currently returns
     // Status::unimplemented, but the key assertion is that it reaches the service
     // (not "CommandService not available" or "Unknown method").
-    let HandlerTestOutput { handler: h, .. } =
-        HandlerTestBuilder::new().with_command_service().build().await;
+    let HandlerTestOutput { handler: h, .. } = HandlerTestBuilder::new()
+        .with_command_service()
+        .build()
+        .await;
     let req = ListPluginsRequest {};
     let r = h
         .handle_frame(req_frame("plugin-list", METHOD_LIST_PLUGINS, encode(&req)))
@@ -2184,7 +2274,10 @@ async fn relay_forwarded_response_has_empty_nonce_when_crypto_active() {
     // The response should also have an empty nonce (plaintext) because the
     // request was relay-forwarded — the relay cannot decrypt encrypted responses.
     if let Some(betcode_proto::v1::tunnel_frame::Payload::StreamData(p)) = &responses[0].payload {
-        let enc = p.encrypted.as_ref().expect("encrypted payload should exist");
+        let enc = p
+            .encrypted
+            .as_ref()
+            .expect("encrypted payload should exist");
         assert!(
             enc.nonce.is_empty(),
             "Relay-forwarded response must have empty nonce (plaintext) even when crypto is active, but got nonce length {}",

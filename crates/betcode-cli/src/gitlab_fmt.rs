@@ -18,7 +18,7 @@ pub fn write_mr_detail(w: &mut impl Write, mr: &MergeRequestInfo) -> io::Result<
     }
     let ms = MergeStatus::try_from(mr.merge_status).unwrap_or(MergeStatus::Unspecified);
     if ms != MergeStatus::Unspecified {
-        writeln!(w, "  Merge:    {:?}", ms)?;
+        writeln!(w, "  Merge:    {ms:?}")?;
     }
     if !mr.assignee.is_empty() {
         writeln!(w, "  Assignee: {}", mr.assignee)?;

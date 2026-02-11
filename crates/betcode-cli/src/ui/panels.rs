@@ -11,7 +11,8 @@ use crate::app::{App, AppMode};
 use crate::tui::fingerprint_panel::FingerprintPrompt;
 
 /// Draw the permission action panel (Y/A/Tab/N/X) replacing the input area.
-pub fn draw_permission_panel(frame: &mut Frame, app: &App, area: Rect) {
+#[allow(clippy::too_many_lines)]
+pub fn draw_permission_panel(frame: &mut Frame<'_>, app: &App, area: Rect) {
     let Some(ref perm) = app.pending_permission else {
         return;
     };
@@ -104,7 +105,7 @@ pub fn draw_permission_panel(frame: &mut Frame, app: &App, area: Rect) {
 }
 
 /// Draw the permission edit/comment/deny text input panel.
-pub fn draw_permission_edit_panel(frame: &mut Frame, app: &App, area: Rect) {
+pub fn draw_permission_edit_panel(frame: &mut Frame<'_>, app: &App, area: Rect) {
     let Some(ref perm) = app.pending_permission else {
         return;
     };
@@ -145,7 +146,7 @@ pub fn draw_permission_edit_panel(frame: &mut Frame, app: &App, area: Rect) {
 }
 
 /// Draw the user question panel with selectable options.
-pub fn draw_question_panel(frame: &mut Frame, app: &App, area: Rect) {
+pub fn draw_question_panel(frame: &mut Frame<'_>, app: &App, area: Rect) {
     let Some(ref q) = app.pending_question else {
         return;
     };
@@ -232,7 +233,8 @@ pub fn draw_question_panel(frame: &mut Frame, app: &App, area: Rect) {
 ///
 /// Shows the daemon's fingerprint with randomart visualization.
 /// For TOFU, this is informational. For mismatches, requires user action.
-pub fn draw_fingerprint_panel(frame: &mut Frame, prompt: &FingerprintPrompt, area: Rect) {
+#[allow(clippy::too_many_lines)]
+pub fn draw_fingerprint_panel(frame: &mut Frame<'_>, prompt: &FingerprintPrompt, area: Rect) {
     let header_color = if prompt.needs_action() {
         Color::Red
     } else {
@@ -273,7 +275,7 @@ pub fn draw_fingerprint_panel(frame: &mut Frame, prompt: &FingerprintPrompt, are
     )));
     for line in prompt.fingerprint_display.lines() {
         lines.push(Line::from(Span::styled(
-            format!("  {}", line),
+            format!("  {line}"),
             Style::default().fg(Color::White),
         )));
     }

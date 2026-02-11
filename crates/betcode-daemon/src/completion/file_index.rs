@@ -29,13 +29,13 @@ pub struct FileIndex {
     root: PathBuf,
     /// Shared entries for watching; populated by `start_watching`.
     shared_entries: Option<Arc<RwLock<Vec<IndexedPath>>>>,
-    /// Kept alive to maintain the watcher; dropped when FileIndex is dropped.
+    /// Kept alive to maintain the watcher; dropped when `FileIndex` is dropped.
     _watcher: Option<RecommendedWatcher>,
 }
 
 impl FileIndex {
     /// Create an empty file index.
-    pub fn empty() -> Self {
+    pub const fn empty() -> Self {
         Self {
             entries: Vec::new(),
             root: PathBuf::new(),
@@ -73,7 +73,7 @@ impl FileIndex {
     }
 
     /// Returns the number of indexed entries.
-    pub fn entry_count(&self) -> usize {
+    pub const fn entry_count(&self) -> usize {
         self.entries.len()
     }
 
@@ -149,7 +149,7 @@ impl FileIndex {
                                 debug!(from = %old_str, to = %new_str, "File index: renamed");
                                 if let Some(entry) = entries.iter_mut().find(|e| e.path == old_str)
                                 {
-                                    entry.path = new_str.clone();
+                                    entry.path.clone_from(&new_str);
                                     entry.kind = Self::classify_path(&root, &new_str);
                                 }
                             }
@@ -161,7 +161,10 @@ impl FileIndex {
 
         watcher.watch(&self.root, RecursiveMode::Recursive)?;
         self.shared_entries = Some(shared);
-        self._watcher = Some(watcher);
+        #[allow(clippy::used_underscore_binding)]
+        {
+            self._watcher = Some(watcher);
+        }
         Ok(())
     }
 
@@ -281,7 +284,7 @@ impl FileIndex {
 
     fn classify_path(root: &Path, relative: &str) -> PathKind {
         let full = root.join(relative);
-        if let Ok(metadata) = std::fs::symlink_metadata(&full) {
+        std::fs::symlink_metadata(&full).map_or(PathKind::File, |metadata| {
             if metadata.is_symlink() {
                 PathKind::Symlink
             } else if metadata.is_dir() {
@@ -289,13 +292,12 @@ impl FileIndex {
             } else {
                 PathKind::File
             }
-        } else {
-            PathKind::File
-        }
+        })
     }
 }
 
 #[cfg(test)]
+#[allow(clippy::panic, clippy::expect_used, clippy::unwrap_used, clippy::used_underscore_binding)]
 mod tests {
     use super::*;
     use tempfile::TempDir;
@@ -321,7 +323,7 @@ mod tests {
     async fn test_file_index_respects_max_entries() {
         let dir = TempDir::new().unwrap();
         for i in 0..20 {
-            std::fs::write(dir.path().join(format!("file{}.txt", i)), "").unwrap();
+            std::fs::write(dir.path().join(format!("file{i}.txt")), "").unwrap();
         }
         let index = FileIndex::build(dir.path(), 10).await.unwrap();
         assert!(index.entry_count() <= 10);

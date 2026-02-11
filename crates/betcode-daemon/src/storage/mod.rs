@@ -1,4 +1,4 @@
-//! SQLite storage for BetCode daemon.
+//! `SQLite` storage for `BetCode` daemon.
 //!
 //! Provides persistence for sessions, messages, worktrees, and permissions.
 

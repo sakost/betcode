@@ -1,4 +1,4 @@
-//! Git worktree management for BetCode daemon.
+//! Git worktree management for `BetCode` daemon.
 //!
 //! Manages git worktrees and their association with Claude sessions.
 //! Each worktree gets its own working directory and can have sessions bound to it.

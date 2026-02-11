@@ -23,7 +23,7 @@ pub struct SessionStatusInfo {
 }
 
 /// Render the session status panel as a centered overlay.
-pub fn render_status_panel(frame: &mut Frame, area: Rect, info: &SessionStatusInfo) {
+pub fn render_status_panel(frame: &mut Frame<'_>, area: Rect, info: &SessionStatusInfo) {
     let panel_width = 50u16.min(area.width.saturating_sub(4));
     let panel_height = 14u16.min(area.height.saturating_sub(2));
 
@@ -88,7 +88,7 @@ fn format_uptime(secs: u64) -> String {
     let hours = secs / 3600;
     let minutes = (secs % 3600) / 60;
     let seconds = secs % 60;
-    format!("{}h {}m {}s", hours, minutes, seconds)
+    format!("{hours}h {minutes}m {seconds}s")
 }
 
 /// Compute a centered rectangle within the given area.

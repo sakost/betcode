@@ -1,4 +1,4 @@
-//! BetCode CLI Library
+//! `BetCode` CLI Library
 //!
 //! Terminal interface for interacting with Claude Code through the daemon.
 //! Provides both TUI (ratatui) and headless modes.

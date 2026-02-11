@@ -1,4 +1,4 @@
-//! CommandService gRPC implementation.
+//! `CommandService` gRPC implementation.
 
 use std::pin::Pin;
 use std::sync::Arc;
@@ -23,7 +23,7 @@ use crate::commands::CommandRegistry;
 use crate::completion::agent_lister::AgentLister;
 use crate::completion::file_index::FileIndex;
 
-/// CommandService gRPC handler.
+/// `CommandService` gRPC handler.
 #[derive(Clone)]
 pub struct CommandServiceImpl {
     registry: Arc<RwLock<CommandRegistry>>,
@@ -35,7 +35,7 @@ pub struct CommandServiceImpl {
 }
 
 impl CommandServiceImpl {
-    pub fn new(
+    pub const fn new(
         registry: Arc<RwLock<CommandRegistry>>,
         file_index: Arc<RwLock<FileIndex>>,
         agent_lister: Arc<RwLock<AgentLister>>,
@@ -55,10 +55,12 @@ impl CommandServiceImpl {
 type ServiceCommandStream =
     Pin<Box<dyn Stream<Item = Result<ServiceCommandOutput, Status>> + Send>>;
 
+#[allow(clippy::too_many_lines)]
 #[tonic::async_trait]
 impl CommandService for CommandServiceImpl {
     type ExecuteServiceCommandStream = ServiceCommandStream;
 
+    #[allow(clippy::significant_drop_tightening)]
     async fn get_command_registry(
         &self,
         _request: Request<GetCommandRegistryRequest>,
@@ -72,6 +74,7 @@ impl CommandService for CommandServiceImpl {
         Ok(Response::new(GetCommandRegistryResponse { commands }))
     }
 
+    #[allow(clippy::significant_drop_tightening)]
     async fn list_agents(
         &self,
         request: Request<ListAgentsRequest>,
@@ -91,6 +94,7 @@ impl CommandService for CommandServiceImpl {
         Ok(Response::new(ListAgentsResponse { agents }))
     }
 
+    #[allow(clippy::significant_drop_tightening)]
     async fn list_path(
         &self,
         request: Request<ListPathRequest>,
@@ -139,11 +143,12 @@ impl CommandService for CommandServiceImpl {
                     }
                 }
                 "cd" => {
-                    let path = args.first().map(|s| s.as_str()).unwrap_or("~");
+                    let path = args.first().map_or("~", std::string::String::as_str);
                     let mut exec = executor.write().await;
                     match exec.execute_cd(path) {
                         Ok(()) => {
                             let cwd = exec.cwd().display().to_string();
+                            drop(exec);
                             let _ = tx.send(Ok(stdout_output(&cwd))).await;
                         }
                         Err(e) => {
@@ -152,14 +157,17 @@ impl CommandService for CommandServiceImpl {
                     }
                 }
                 "bash" => {
-                    let cmd = args.first().map(|s| s.as_str()).unwrap_or("");
+                    let cmd = args.first().map_or("", std::string::String::as_str);
                     if cmd.is_empty() {
                         let _ = tx.send(Ok(error_output("No command provided"))).await;
                         return;
                     }
                     let (output_tx, mut output_rx) = mpsc::channel::<ServiceOutput>(64);
-                    let exec = executor.read().await;
-                    let exec_result = exec.execute_bash(cmd, output_tx).await;
+                    #[allow(clippy::significant_drop_tightening)]
+                    let exec_result = {
+                        let exec = executor.read().await;
+                        exec.execute_bash(cmd, output_tx).await
+                    };
 
                     // Forward output
                     while let Some(output) = output_rx.recv().await {
@@ -189,8 +197,6 @@ impl CommandService for CommandServiceImpl {
 
                     let exec = executor.read().await;
                     let cwd = exec.cwd().to_path_buf();
-
-                    // Reload commands
                     let mut reg = registry.write().await;
                     let cmd_msg = match exec.execute_reload_remote(&mut reg) {
                         Ok(msg) => msg,
@@ -199,6 +205,7 @@ impl CommandService for CommandServiceImpl {
                             return;
                         }
                     };
+                    drop(exec);
                     drop(reg);
 
                     // Reload agents
@@ -227,9 +234,7 @@ impl CommandService for CommandServiceImpl {
                         Err(_) => 0,
                     };
 
-                    let msg = format!(
-                        "{cmd_msg}, {agent_count} agents, {file_count} files"
-                    );
+                    let msg = format!("{cmd_msg}, {agent_count} agents, {file_count} files");
                     let _ = tx.send(Ok(stdout_output(&msg))).await;
                 }
                 other => {
@@ -306,7 +311,7 @@ fn core_entry_to_proto(
     }
 }
 
-fn core_category_to_proto(
+const fn core_category_to_proto(
     cat: &betcode_core::commands::CommandCategory,
 ) -> betcode_proto::v1::CommandCategory {
     match cat {
@@ -322,7 +327,7 @@ fn core_category_to_proto(
     }
 }
 
-fn core_exec_mode_to_proto(
+const fn core_exec_mode_to_proto(
     mode: &betcode_core::commands::ExecutionMode,
 ) -> betcode_proto::v1::ExecutionMode {
     match mode {
@@ -400,7 +405,7 @@ fn stderr_output(line: &str) -> ServiceCommandOutput {
     }
 }
 
-fn exit_code_output(code: i32) -> ServiceCommandOutput {
+const fn exit_code_output(code: i32) -> ServiceCommandOutput {
     ServiceCommandOutput {
         output: Some(betcode_proto::v1::service_command_output::Output::ExitCode(
             code,
@@ -446,6 +451,15 @@ async fn create_test_service_with_dir(path: &std::path::Path) -> CommandServiceI
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::panic,
+    clippy::expect_used,
+    clippy::unwrap_used,
+    clippy::items_after_statements,
+    clippy::uninlined_format_args,
+    clippy::redundant_clone,
+    clippy::implicit_clone
+)]
 mod tests {
     use super::*;
     use betcode_proto::v1::*;
@@ -546,7 +560,10 @@ mod tests {
         let first = stream.next().await.unwrap().unwrap();
         match first.output {
             Some(service_command_output::Output::StdoutLine(msg)) => {
-                assert!(msg.contains("shutting down"), "Expected shutdown message, got: {msg}");
+                assert!(
+                    msg.contains("shutting down"),
+                    "Expected shutdown message, got: {msg}"
+                );
             }
             other => panic!("Expected StdoutLine, got {other:?}"),
         }

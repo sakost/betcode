@@ -94,6 +94,7 @@ impl SubprocessManager {
     }
 
     /// Spawn a new Claude subprocess.
+    #[allow(clippy::too_many_lines)]
     pub async fn spawn(
         &self,
         config: SpawnConfig,
@@ -163,7 +164,7 @@ impl SubprocessManager {
         let process_id = uuid::Uuid::new_v4().to_string();
 
         // Set up stdin channel
-        let stdin = child.stdin.take().ok_or(SubprocessError::SpawnFailed {
+        let stdin = child.stdin.take().ok_or_else(|| SubprocessError::SpawnFailed {
             reason: "Failed to capture stdin".to_string(),
         })?;
 
@@ -189,7 +190,7 @@ impl SubprocessManager {
         });
 
         // Set up stdout reader
-        let stdout = child.stdout.take().ok_or(SubprocessError::SpawnFailed {
+        let stdout = child.stdout.take().ok_or_else(|| SubprocessError::SpawnFailed {
             reason: "Failed to capture stdout".to_string(),
         })?;
 
@@ -243,6 +244,7 @@ impl SubprocessManager {
     }
 
     /// Send a command to a process's stdin.
+    #[allow(clippy::significant_drop_tightening)]
     pub async fn send(&self, process_id: &str, message: &str) -> Result<(), SubprocessError> {
         let processes = self.processes.read().await;
         let state = processes
@@ -261,6 +263,7 @@ impl SubprocessManager {
     }
 
     /// Terminate a process gracefully.
+    #[allow(clippy::significant_drop_tightening)]
     pub async fn terminate(&self, process_id: &str) -> Result<(), SubprocessError> {
         let mut processes = self.processes.write().await;
         let mut state =
@@ -283,6 +286,7 @@ impl SubprocessManager {
                 // SAFETY: pid is a valid process ID obtained from our own Child handle.
                 // kill(2) with SIGINT is safe to call on any owned subprocess.
                 #[allow(unsafe_code)]
+                #[allow(clippy::cast_possible_wrap)]
                 let ret = unsafe { libc::kill(pid as i32, libc::SIGINT) };
                 if ret != 0 {
                     let err = std::io::Error::last_os_error();
@@ -316,11 +320,12 @@ impl SubprocessManager {
     }
 
     /// Get the maximum process pool capacity.
-    pub fn capacity(&self) -> usize {
+    pub const fn capacity(&self) -> usize {
         self.max_processes
     }
 
     /// Update session ID for a process.
+    #[allow(clippy::significant_drop_tightening)]
     pub async fn set_session_id(
         &self,
         process_id: &str,
@@ -355,6 +360,7 @@ pub enum SubprocessError {
 }
 
 #[cfg(test)]
+#[allow(clippy::panic, clippy::expect_used, clippy::unwrap_used)]
 mod tests {
     use super::*;
 

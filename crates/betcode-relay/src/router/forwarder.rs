@@ -1,5 +1,6 @@
 //! Request router that forwards requests through tunnels to daemons.
 
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -23,7 +24,7 @@ pub struct RequestRouter {
 }
 
 impl RequestRouter {
-    pub fn new(
+    pub const fn new(
         registry: Arc<ConnectionRegistry>,
         buffer: Arc<BufferManager>,
         request_timeout: Duration,
@@ -47,34 +48,31 @@ impl RequestRouter {
         data: Vec<u8>,
         metadata: std::collections::HashMap<String, String>,
     ) -> Result<TunnelFrame, RouterError> {
-        let conn = match self.registry.get(machine_id).await {
-            Some(c) => c,
-            None => {
-                // Buffer the request for when the machine reconnects
-                let metadata_json =
-                    serde_json::to_string(&metadata).unwrap_or_else(|_| "{}".to_string());
-                match self
-                    .buffer
-                    .buffer_request(machine_id, request_id, method, &data, &metadata_json)
-                    .await
-                {
-                    Ok(buf_id) => {
-                        info!(
-                            machine_id = %machine_id,
-                            request_id = %request_id,
-                            buffer_id = buf_id,
-                            "Request buffered for offline machine"
-                        );
-                        return Err(RouterError::Buffered(machine_id.to_string()));
-                    }
-                    Err(e) => {
-                        warn!(
-                            machine_id = %machine_id,
-                            error = %e,
-                            "Failed to buffer request for offline machine"
-                        );
-                        return Err(RouterError::MachineOffline(machine_id.to_string()));
-                    }
+        let Some(conn) = self.registry.get(machine_id).await else {
+            // Buffer the request for when the machine reconnects
+            let metadata_json =
+                serde_json::to_string(&metadata).unwrap_or_else(|_| "{}".to_string());
+            match self
+                .buffer
+                .buffer_request(machine_id, request_id, method, &data, &metadata_json)
+                .await
+            {
+                Ok(buf_id) => {
+                    info!(
+                        machine_id = %machine_id,
+                        request_id = %request_id,
+                        buffer_id = buf_id,
+                        "Request buffered for offline machine"
+                    );
+                    return Err(RouterError::Buffered(machine_id.to_string()));
+                }
+                Err(e) => {
+                    warn!(
+                        machine_id = %machine_id,
+                        error = %e,
+                        "Failed to buffer request for offline machine"
+                    );
+                    return Err(RouterError::MachineOffline(machine_id.to_string()));
                 }
             }
         };
@@ -129,7 +127,7 @@ impl RequestRouter {
     ///
     /// Unlike `forward_request` which waits for a single response, this registers a stream
     /// channel and returns immediately. The caller reads frames from the receiver until it
-    /// closes (StreamEnd received).
+    /// closes (`StreamEnd` received).
     pub async fn forward_stream(
         &self,
         machine_id: &str,
@@ -221,11 +219,11 @@ impl RequestRouter {
     }
 
     /// Get a reference to the connection registry.
-    pub fn registry(&self) -> &Arc<ConnectionRegistry> {
+    pub const fn registry(&self) -> &Arc<ConnectionRegistry> {
         &self.registry
     }
 
-    /// Create an error TunnelFrame for returning to callers.
+    /// Create an error `TunnelFrame` for returning to callers.
     pub fn error_frame(request_id: &str, code: TunnelErrorCode, message: &str) -> TunnelFrame {
         TunnelFrame {
             request_id: request_id.to_string(),
@@ -235,7 +233,7 @@ impl RequestRouter {
                 TunnelError {
                     code: code as i32,
                     message: message.to_string(),
-                    details: Default::default(),
+                    details: HashMap::default(),
                 },
             )),
         }
@@ -266,6 +264,12 @@ pub enum RouterError {
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::panic,
+    clippy::expect_used,
+    clippy::unwrap_used,
+    clippy::cast_possible_truncation
+)]
 mod tests {
     use super::*;
     use crate::storage::RelayDatabase;
@@ -311,7 +315,7 @@ mod tests {
         });
 
         let result = router
-            .forward_request("m1", "req-1", "TestMethod", vec![], Default::default())
+            .forward_request("m1", "req-1", "TestMethod", vec![], HashMap::default())
             .await;
 
         assert!(result.is_ok());
@@ -327,7 +331,7 @@ mod tests {
         let router = RequestRouter::new(Arc::clone(&registry), buffer, Duration::from_secs(1));
 
         let result = router
-            .forward_request("m-missing", "req-1", "Test", vec![], Default::default())
+            .forward_request("m-missing", "req-1", "Test", vec![], HashMap::default())
             .await;
 
         // Should be buffered, not a hard offline error
@@ -346,7 +350,7 @@ mod tests {
         let router = RequestRouter::new(Arc::clone(&registry), buffer, Duration::from_millis(50));
 
         let result = router
-            .forward_request("m1", "req-1", "Test", vec![], Default::default())
+            .forward_request("m1", "req-1", "Test", vec![], HashMap::default())
             .await;
 
         assert!(matches!(result, Err(RouterError::Timeout(_))));
@@ -383,8 +387,8 @@ mod tests {
                                     nonce: Vec::new(),
                                     ephemeral_pubkey: Vec::new(),
                                 }),
-                                sequence: i as u64,
-                                metadata: Default::default(),
+                                sequence: u64::from(i),
+                                metadata: HashMap::default(),
                             },
                         )),
                         ..Default::default()
@@ -396,7 +400,7 @@ mod tests {
         });
 
         let mut rx = router
-            .forward_stream("m1", "req-s1", "Test/Stream", vec![], Default::default())
+            .forward_stream("m1", "req-s1", "Test/Stream", vec![], HashMap::default())
             .await
             .unwrap();
 
@@ -421,7 +425,7 @@ mod tests {
         let router = RequestRouter::new(Arc::clone(&registry), buffer, Duration::from_secs(1));
 
         let result = router
-            .forward_stream("m1", "req-1", "Test", vec![], Default::default())
+            .forward_stream("m1", "req-1", "Test", vec![], HashMap::default())
             .await;
         assert!(matches!(result, Err(RouterError::MachineOffline(_))));
     }
@@ -465,7 +469,7 @@ mod tests {
         });
 
         let (client_tx, mut rx) = router
-            .forward_bidi_stream("m1", "req-b1", "Test/Bidi", vec![], Default::default())
+            .forward_bidi_stream("m1", "req-b1", "Test/Bidi", vec![], HashMap::default())
             .await
             .unwrap();
 

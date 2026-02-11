@@ -1,4 +1,4 @@
-//! UserQuestion prompt input handling.
+//! `UserQuestion` prompt input handling.
 
 use std::collections::HashMap;
 
@@ -8,7 +8,7 @@ use tokio::sync::mpsc;
 use crate::app::{App, AppMode};
 use betcode_proto::v1::{AgentRequest, UserQuestionResponse};
 
-/// Handle a key press during a UserQuestion prompt.
+/// Handle a key press during a `UserQuestion` prompt.
 pub async fn handle_question_key(app: &mut App, tx: &mpsc::Sender<AgentRequest>, code: KeyCode) {
     match code {
         KeyCode::Up => {

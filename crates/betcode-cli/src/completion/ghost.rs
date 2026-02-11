@@ -32,17 +32,19 @@ pub fn ghost_suffix<'a>(typed: &str, completion: &'a str) -> Option<&'a str> {
 ///
 /// Returns:
 /// - If no completion or exact match: a single span with the typed text
-/// - Otherwise: the typed text span (normal style) followed by the suffix span (DarkGray)
+/// - Otherwise: the typed text span (normal style) followed by the suffix span (`DarkGray`)
 pub fn ghost_text_spans<'a>(typed: &'a str, completion: Option<&str>) -> Vec<Span<'a>> {
     let suffix = completion.and_then(|c| ghost_suffix(typed, c));
 
-    match suffix {
-        Some(s) => vec![
-            Span::raw(typed),
-            Span::styled(s.to_string(), Style::default().fg(Color::DarkGray)),
-        ],
-        None => vec![Span::raw(typed)],
-    }
+    suffix.map_or_else(
+        || vec![Span::raw(typed)],
+        |s| {
+            vec![
+                Span::raw(typed),
+                Span::styled(s.to_string(), Style::default().fg(Color::DarkGray)),
+            ]
+        },
+    )
 }
 
 #[cfg(test)]
@@ -74,9 +76,6 @@ mod tests {
     fn test_ghost_completion_extraction() {
         assert_eq!(ghost_suffix("hel", "help"), Some("p"));
         assert_eq!(ghost_suffix("/cd", "/cd"), None);
-        assert_eq!(
-            ghost_suffix("/re", "/reload-remote"),
-            Some("load-remote")
-        );
+        assert_eq!(ghost_suffix("/re", "/reload-remote"), Some("load-remote"));
     }
 }

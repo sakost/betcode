@@ -40,7 +40,7 @@ pub struct ClientHandle {
 }
 
 /// Client state tracked by the multiplexer.
-pub(crate) struct ClientState {
+pub struct ClientState {
     pub client_id: String,
     pub client_type: String,
     pub last_heartbeat: Instant,

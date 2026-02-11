@@ -1,4 +1,4 @@
-//! Tests for GitLabProxyService.
+//! Tests for `GitLabProxyService`.
 
 use std::sync::Arc;
 

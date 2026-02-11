@@ -1,4 +1,4 @@
-//! JWT claims structure for BetCode relay auth.
+//! JWT claims structure for `BetCode` relay auth.
 
 use serde::{Deserialize, Serialize};
 

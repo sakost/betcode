@@ -1,4 +1,4 @@
-//! TunnelService gRPC implementation.
+//! `TunnelService` gRPC implementation.
 
 use std::pin::Pin;
 use std::sync::Arc;
@@ -27,7 +27,7 @@ pub struct TunnelServiceImpl {
 }
 
 impl TunnelServiceImpl {
-    pub fn new(
+    pub const fn new(
         registry: Arc<ConnectionRegistry>,
         db: RelayDatabase,
         buffer: Arc<BufferManager>,
@@ -212,28 +212,25 @@ impl TunnelService for TunnelServiceImpl {
         let req = request.into_inner();
 
         // Auto-register machine if it doesn't exist, otherwise verify ownership
-        let _machine = match self.db.get_machine(&req.machine_id).await {
-            Ok(m) => {
-                if m.owner_id != user_id {
-                    return Err(Status::permission_denied("Not your machine"));
-                }
-                m
+        let _machine = if let Ok(m) = self.db.get_machine(&req.machine_id).await {
+            if m.owner_id != user_id {
+                return Err(Status::permission_denied("Not your machine"));
             }
-            Err(_) => {
-                let metadata_json =
-                    serde_json::to_string(&req.capabilities).unwrap_or_else(|_| "{}".to_string());
-                info!(
-                    machine_id = %req.machine_id,
-                    machine_name = %req.machine_name,
-                    "Auto-registering machine on first tunnel connect"
-                );
-                self.db
-                    .create_machine(&req.machine_id, &req.machine_name, &user_id, &metadata_json)
-                    .await
-                    .map_err(|e| {
-                        Status::internal(format!("Failed to auto-register machine: {}", e))
-                    })?
-            }
+            m
+        } else {
+            let metadata_json =
+                serde_json::to_string(&req.capabilities).unwrap_or_else(|_| "{}".to_string());
+            info!(
+                machine_id = %req.machine_id,
+                machine_name = %req.machine_name,
+                "Auto-registering machine on first tunnel connect"
+            );
+            self.db
+                .create_machine(&req.machine_id, &req.machine_name, &user_id, &metadata_json)
+                .await
+                .map_err(|e| {
+                    Status::internal(format!("Failed to auto-register machine: {e}"))
+                })?
         };
 
         // Store identity pubkey if provided

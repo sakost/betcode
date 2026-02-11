@@ -8,7 +8,7 @@ use tracing::info;
 
 pub use betcode_core::db::DatabaseError;
 
-/// Database handle for BetCode daemon.
+/// Database handle for `BetCode` daemon.
 #[derive(Clone)]
 pub struct Database {
     pool: Pool<Sqlite>,
@@ -74,7 +74,7 @@ impl Database {
     }
 
     /// Get a reference to the connection pool.
-    pub fn pool(&self) -> &Pool<Sqlite> {
+    pub const fn pool(&self) -> &Pool<Sqlite> {
         &self.pool
     }
 }

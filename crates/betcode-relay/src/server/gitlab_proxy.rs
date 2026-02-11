@@ -1,4 +1,4 @@
-//! GitLabService proxy that forwards calls through the tunnel to daemons.
+//! `GitLabService` proxy that forwards calls through the tunnel to daemons.
 
 use std::sync::Arc;
 
@@ -22,13 +22,13 @@ use crate::router::RequestRouter;
 use crate::server::agent_proxy::extract_machine_id;
 use crate::server::interceptor::extract_claims;
 
-/// Proxies GitLabService calls through the tunnel to a target daemon.
+/// Proxies `GitLabService` calls through the tunnel to a target daemon.
 pub struct GitLabProxyService {
     router: Arc<RequestRouter>,
 }
 
 impl GitLabProxyService {
-    pub fn new(router: Arc<RequestRouter>) -> Self {
+    pub const fn new(router: Arc<RequestRouter>) -> Self {
         Self { router }
     }
 }
@@ -139,5 +139,6 @@ impl GitLabService for GitLabProxyService {
 }
 
 #[cfg(test)]
+#[allow(clippy::panic, clippy::expect_used, clippy::unwrap_used)]
 #[path = "gitlab_proxy_tests.rs"]
 mod tests;

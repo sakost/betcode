@@ -1,5 +1,6 @@
-//! AgentService gRPC implementation.
+//! `AgentService` gRPC implementation.
 
+use std::collections::HashMap;
 use std::pin::Pin;
 use std::sync::Arc;
 
@@ -20,7 +21,7 @@ use crate::relay::SessionRelay;
 use crate::session::SessionMultiplexer;
 use crate::storage::Database;
 
-/// AgentService implementation backed by SessionRelay.
+/// `AgentService` implementation backed by `SessionRelay`.
 pub struct AgentServiceImpl {
     db: Database,
     relay: Arc<SessionRelay>,
@@ -28,8 +29,8 @@ pub struct AgentServiceImpl {
 }
 
 impl AgentServiceImpl {
-    /// Create a new AgentService.
-    pub fn new(
+    /// Create a new `AgentService`.
+    pub const fn new(
         db: Database,
         relay: Arc<SessionRelay>,
         multiplexer: Arc<SessionMultiplexer>,
@@ -128,7 +129,9 @@ impl AgentService for AgentServiceImpl {
                 worktree_id: s.worktree_id.unwrap_or_default(),
                 status: s.status,
                 message_count: 0,
+                #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
                 total_input_tokens: s.total_input_tokens as u32,
+                #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
                 total_output_tokens: s.total_output_tokens as u32,
                 total_cost_usd: s.total_cost_usd,
                 created_at: Some(prost_types::Timestamp {
@@ -143,6 +146,7 @@ impl AgentService for AgentServiceImpl {
             })
             .collect();
 
+        #[allow(clippy::cast_possible_truncation)]
         let total = summaries.len() as u32;
         Ok(Response::new(ListSessionsResponse {
             sessions: summaries,
@@ -156,9 +160,11 @@ impl AgentService for AgentServiceImpl {
         request: Request<ResumeSessionRequest>,
     ) -> Result<Response<Self::ResumeSessionStream>, Status> {
         let req = request.into_inner();
+        #[allow(clippy::cast_possible_wrap)]
+        let from_seq = req.from_sequence as i64;
         let messages = self
             .db
-            .get_messages_from_sequence(&req.session_id, req.from_sequence as i64)
+            .get_messages_from_sequence(&req.session_id, from_seq)
             .await
             .map_err(|e| Status::internal(e.to_string()))?;
 
@@ -191,9 +197,9 @@ impl AgentService for AgentServiceImpl {
                             event: Some(betcode_proto::v1::agent_event::Event::Error(
                                 betcode_proto::v1::ErrorEvent {
                                     code: "DECODE_ERROR".to_string(),
-                                    message: format!("Decode error: {}", e),
+                                    message: format!("Decode error: {e}"),
                                     is_fatal: false,
-                                    details: Default::default(),
+                                    details: HashMap::default(),
                                 },
                             )),
                         };
@@ -218,6 +224,7 @@ impl AgentService for AgentServiceImpl {
         let req = request.into_inner();
         let sid = &req.session_id;
 
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
         let messages_before = self
             .db
             .count_messages(sid)
@@ -239,7 +246,7 @@ impl AgentService for AgentServiceImpl {
             .await
             .map_err(|e| Status::internal(e.to_string()))?;
         let keep_count = (messages_before / 2).max(10).min(messages_before);
-        let cutoff = max_seq - keep_count as i64;
+        let cutoff = max_seq - i64::from(keep_count);
 
         if cutoff <= 0 {
             return Ok(Response::new(CompactSessionResponse {
@@ -260,8 +267,10 @@ impl AgentService for AgentServiceImpl {
             .await
             .map_err(|e| Status::internal(e.to_string()))?;
 
+        #[allow(clippy::cast_possible_truncation)]
         let messages_after = messages_before - deleted as u32;
         // Rough estimate: ~100 tokens per message on average
+        #[allow(clippy::cast_possible_truncation)]
         let tokens_saved = deleted as u32 * 100;
 
         info!(
@@ -336,13 +345,13 @@ impl AgentService for AgentServiceImpl {
     }
 }
 
-/// Extract client_id from gRPC request metadata.
+/// Extract `client_id` from gRPC request metadata.
 fn request_client_id<T>(request: &Request<T>) -> Option<String> {
     request
         .metadata()
         .get("x-client-id")
         .and_then(|v| v.to_str().ok())
-        .map(|s| s.to_string())
+        .map(std::string::ToString::to_string)
 }
 
 use betcode_core::db::base64_decode;

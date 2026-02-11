@@ -1,4 +1,4 @@
-//! Tests for WorktreeProxyService.
+//! Tests for `WorktreeProxyService`.
 
 use std::sync::Arc;
 

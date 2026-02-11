@@ -1,4 +1,4 @@
-//! gRPC server implementations for BetCode relay.
+//! gRPC server implementations for `BetCode` relay.
 
 pub mod agent_proxy;
 pub mod auth_svc;
@@ -11,8 +11,10 @@ pub mod tunnel_svc;
 pub mod worktree_proxy;
 
 #[cfg(test)]
+#[allow(clippy::panic, clippy::expect_used, clippy::unwrap_used)]
 mod auth_svc_tests;
 #[cfg(test)]
+#[allow(clippy::panic, clippy::expect_used, clippy::unwrap_used)]
 pub(crate) mod test_helpers;
 
 pub use agent_proxy::AgentProxyService;

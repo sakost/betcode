@@ -32,7 +32,7 @@ use betcode_crypto::{
 
 /// Attach relay authorization and machine-id headers to a gRPC request.
 ///
-/// Intended for use inside spawned tasks where only cloned token/machine_id
+/// Intended for use inside spawned tasks where only cloned `token/machine_id`
 /// strings are available (not a full `DaemonConnection` reference).
 pub fn attach_relay_metadata<T>(
     request: &mut tonic::Request<T>,
@@ -40,7 +40,7 @@ pub fn attach_relay_metadata<T>(
     machine_id: Option<&str>,
 ) {
     if let Some(token) = auth_token {
-        if let Ok(val) = format!("Bearer {}", token).parse() {
+        if let Ok(val) = format!("Bearer {token}").parse() {
             request.metadata_mut().insert("authorization", val);
         }
     }
@@ -75,8 +75,8 @@ pub struct ConnectionConfig {
 }
 
 impl ConnectionConfig {
-    /// Whether this config targets a relay (has auth + machine_id).
-    pub fn is_relay(&self) -> bool {
+    /// Whether this config targets a relay (has auth + `machine_id`).
+    pub const fn is_relay(&self) -> bool {
         self.auth_token.is_some() && self.machine_id.is_some()
     }
 }
@@ -111,8 +111,9 @@ fn apply_relay_meta<T>(
     auth_token: &Option<String>,
     machine_id: &Option<String>,
 ) {
+    #![allow(clippy::ref_option)]
     if let Some(token) = auth_token {
-        if let Ok(val) = format!("Bearer {}", token).parse() {
+        if let Ok(val) = format!("Bearer {token}").parse() {
             req.metadata_mut().insert("authorization", val);
         }
     }
@@ -236,7 +237,7 @@ impl DaemonConnection {
     /// Perform E2E key exchange with the daemon via the relay.
     ///
     /// Generates an ephemeral X25519 keypair, sends the public key to the daemon,
-    /// receives the daemon's ephemeral key, and derives a shared CryptoSession.
+    /// receives the daemon's ephemeral key, and derives a shared `CryptoSession`.
     /// Also performs TOFU fingerprint verification against the known daemons store.
     /// Must be called after `connect()` and before `converse()` for relay connections.
     ///
@@ -249,16 +250,16 @@ impl DaemonConnection {
         let machine_id_meta = self.config.machine_id.clone();
         let client = self.client.as_mut().ok_or(ConnectionError::NotConnected)?;
 
-        let state = match &self.identity {
-            Some(id) => KeyExchangeState::with_identity(std::sync::Arc::clone(id)),
-            None => KeyExchangeState::new(),
-        };
+        let state = self.identity.as_ref().map_or_else(
+            KeyExchangeState::new,
+            |id| KeyExchangeState::with_identity(std::sync::Arc::clone(id)),
+        );
         let our_pubkey = state.public_bytes();
 
-        let (identity_pubkey, fingerprint_str) = match &self.identity {
-            Some(id) => (id.public_bytes().to_vec(), id.fingerprint()),
-            None => (Vec::new(), String::new()),
-        };
+        let (identity_pubkey, fingerprint_str) = self.identity.as_ref().map_or_else(
+            || (Vec::new(), String::new()),
+            |id| (id.public_bytes().to_vec(), id.fingerprint()),
+        );
 
         let mut request = tonic::Request::new(KeyExchangeRequest {
             machine_id: machine_id.to_string(),
@@ -271,14 +272,14 @@ impl DaemonConnection {
         let response = client
             .exchange_keys(request)
             .await
-            .map_err(|e| ConnectionError::RpcFailed(format!("Key exchange failed: {}", e)))?;
+            .map_err(|e| ConnectionError::RpcFailed(format!("Key exchange failed: {e}")))?;
 
         let resp = response.into_inner();
         let session = state
             .complete(&resp.daemon_ephemeral_pubkey)
-            .map_err(|e| ConnectionError::RpcFailed(format!("Key derivation failed: {}", e)))?;
+            .map_err(|e| ConnectionError::RpcFailed(format!("Key derivation failed: {e}")))?;
 
-        let daemon_fingerprint = resp.daemon_fingerprint.clone();
+        let daemon_fingerprint = resp.daemon_fingerprint;
 
         // Check TOFU fingerprint store
         let fp_check = self
@@ -290,7 +291,9 @@ impl DaemonConnection {
                 let now = std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
                     .unwrap_or_default()
-                    .as_secs() as i64;
+                    .as_secs()
+                    .try_into()
+                    .unwrap_or(i64::MAX);
                 self.fingerprint_store
                     .record(machine_id, &daemon_fingerprint, now);
                 if let Err(e) = self.fingerprint_store.save(&self.fingerprint_store_path) {
@@ -306,7 +309,9 @@ impl DaemonConnection {
                 let now = std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
                     .unwrap_or_default()
-                    .as_secs() as i64;
+                    .as_secs()
+                    .try_into()
+                    .unwrap_or(i64::MAX);
                 self.fingerprint_store
                     .record(machine_id, &daemon_fingerprint, now);
                 let _ = self.fingerprint_store.save(&self.fingerprint_store_path);
@@ -339,7 +344,9 @@ impl DaemonConnection {
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
-            .as_secs() as i64;
+            .as_secs()
+            .try_into()
+            .unwrap_or(i64::MAX);
         self.fingerprint_store
             .update_fingerprint(machine_id, new_fingerprint, now);
         let _ = self.fingerprint_store.save(&self.fingerprint_store_path);
@@ -352,7 +359,7 @@ impl DaemonConnection {
     }
 
     /// Whether a crypto session has been established.
-    pub fn has_crypto(&self) -> bool {
+    pub const fn has_crypto(&self) -> bool {
         self.crypto.is_some()
     }
 
@@ -362,12 +369,12 @@ impl DaemonConnection {
     }
 
     /// Get a reference to the fingerprint store.
-    pub fn fingerprint_store(&self) -> &FingerprintStore {
+    pub const fn fingerprint_store(&self) -> &FingerprintStore {
         &self.fingerprint_store
     }
 
-    /// Whether this connection targets a relay (has auth + machine_id configured).
-    pub fn is_relay(&self) -> bool {
+    /// Whether this connection targets a relay (has auth + `machine_id` configured).
+    pub const fn is_relay(&self) -> bool {
         self.config.is_relay()
     }
 
@@ -377,7 +384,7 @@ impl DaemonConnection {
     }
 
     /// Get the auth token for relay connections.
-    pub fn auth_token(&self) -> Option<&String> {
+    pub const fn auth_token(&self) -> Option<&String> {
         self.config.auth_token.as_ref()
     }
 
@@ -388,8 +395,9 @@ impl DaemonConnection {
     /// waiting for the server to close its end of the stream.
     ///
     /// For relay connections, outgoing requests are encrypted and incoming events
-    /// are decrypted using the established CryptoSession. If no crypto session
+    /// are decrypted using the established `CryptoSession`. If no crypto session
     /// exists on a relay connection, returns `KeyExchangeRequired`.
+    #[allow(clippy::too_many_lines)]
     pub async fn converse(
         &mut self,
     ) -> Result<
@@ -470,7 +478,7 @@ impl DaemonConnection {
                 match event_stream.message().await {
                     Ok(Some(event)) => {
                         let event = if let Some(ref session) = crypto {
-                            match decrypt_agent_event(session, event) {
+                            match decrypt_agent_event(session, &event) {
                                 Ok(decrypted) => {
                                     consecutive_failures = 0;
                                     decrypted
@@ -845,7 +853,7 @@ impl DaemonConnection {
     // Command service methods
     // =========================================================================
 
-    /// Get a clone of the CommandServiceClient for use in background tasks.
+    /// Get a clone of the `CommandServiceClient` for use in background tasks.
     pub fn command_service_client(&self) -> Option<CommandServiceClient<Channel>> {
         self.command_client.clone()
     }
@@ -1095,7 +1103,7 @@ impl DaemonConnection {
     // =========================================================================
 
     /// Get connection state.
-    pub fn state(&self) -> ConnectionState {
+    pub const fn state(&self) -> ConnectionState {
         self.state
     }
 
@@ -1154,7 +1162,7 @@ pub(crate) fn encrypt_agent_request(
 /// Rejects non-encrypted events to prevent relay-injected plaintext attacks.
 pub(crate) fn decrypt_agent_event(
     session: &betcode_crypto::CryptoSession,
-    event: AgentEvent,
+    event: &AgentEvent,
 ) -> Result<AgentEvent, String> {
     use prost::Message;
     match event.event {
@@ -1183,7 +1191,7 @@ fn decrypt_resume_events(
     };
     events
         .into_iter()
-        .filter_map(|event| match decrypt_agent_event(session, event) {
+        .filter_map(|event| match decrypt_agent_event(session, &event) {
             Ok(decrypted) => Some(decrypted),
             Err(e) => {
                 warn!("Failed to decrypt resume event: {}", e);
@@ -1194,6 +1202,12 @@ fn decrypt_resume_events(
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::panic,
+    clippy::expect_used,
+    clippy::unwrap_used,
+    clippy::default_trait_access
+)]
 mod tests {
     use super::*;
 
@@ -1305,7 +1319,7 @@ mod tests {
         assert!(result.is_err());
         match result.unwrap_err() {
             ConnectionError::NotConnected => {}
-            other => panic!("Expected NotConnected, got {:?}", other),
+            other => panic!("Expected NotConnected, got {other:?}"),
         }
     }
 
@@ -1331,7 +1345,7 @@ mod tests {
                 assert!(!env.ciphertext.is_empty());
                 assert_eq!(env.nonce.len(), 12);
             }
-            other => panic!("Expected Encrypted variant, got {:?}", other),
+            other => panic!("Expected Encrypted variant, got {other:?}"),
         }
     }
 
@@ -1367,12 +1381,12 @@ mod tests {
                 },
             )),
         };
-        let decrypted = super::decrypt_agent_event(&session2, wrapped).unwrap();
+        let decrypted = super::decrypt_agent_event(&session2, &wrapped).unwrap();
         match decrypted.event {
             Some(betcode_proto::v1::agent_event::Event::TextDelta(ref td)) => {
                 assert_eq!(td.text, "hello");
             }
-            other => panic!("Expected TextDelta, got {:?}", other),
+            other => panic!("Expected TextDelta, got {other:?}"),
         }
     }
 
@@ -1408,10 +1422,10 @@ mod tests {
                         assert_eq!(s.working_directory, "/tmp");
                         assert_eq!(s.model, "test");
                     }
-                    other => panic!("Expected Start, got {:?}", other),
+                    other => panic!("Expected Start, got {other:?}"),
                 }
             }
-            other => panic!("Expected Encrypted, got {:?}", other),
+            other => panic!("Expected Encrypted, got {other:?}"),
         }
     }
 
@@ -1488,7 +1502,7 @@ mod tests {
                     },
                 )),
             };
-            let decrypted = super::decrypt_agent_event(&session2, wrapped).unwrap();
+            let decrypted = super::decrypt_agent_event(&session2, &wrapped).unwrap();
             assert_eq!(
                 std::mem::discriminant(&decrypted.event),
                 std::mem::discriminant(&original.event)
@@ -1511,7 +1525,7 @@ mod tests {
                 },
             )),
         };
-        let result = super::decrypt_agent_event(&session, event);
+        let result = super::decrypt_agent_event(&session, &event);
         assert!(
             result.is_err(),
             "plaintext event should be rejected when crypto is active"
@@ -1552,7 +1566,7 @@ mod tests {
                 },
             )),
         };
-        let result = super::decrypt_agent_event(&session2, wrapped);
+        let result = super::decrypt_agent_event(&session2, &wrapped);
         assert!(result.is_err());
     }
 
@@ -1591,7 +1605,7 @@ mod tests {
                 },
             )),
         };
-        let result = super::decrypt_agent_event(&session, wrapped);
+        let result = super::decrypt_agent_event(&session, &wrapped);
         assert!(result.is_err());
     }
 
@@ -1626,7 +1640,7 @@ mod tests {
                 },
             )),
         };
-        let result = super::decrypt_agent_event(&session, wrapped);
+        let result = super::decrypt_agent_event(&session, &wrapped);
         assert!(result.is_err());
     }
 
@@ -1645,7 +1659,7 @@ mod tests {
                 let decoded = AgentRequest::decode(plaintext.as_slice()).unwrap();
                 assert!(decoded.request.is_none());
             }
-            other => panic!("Expected Encrypted, got {:?}", other),
+            other => panic!("Expected Encrypted, got {other:?}"),
         }
     }
 
@@ -1668,7 +1682,7 @@ mod tests {
                 },
             )),
         };
-        let result = super::decrypt_agent_event(&session, event);
+        let result = super::decrypt_agent_event(&session, &event);
         assert!(result.is_err());
     }
 
@@ -1687,7 +1701,7 @@ mod tests {
                 },
             )),
         };
-        let result = super::decrypt_agent_event(&session, event);
+        let result = super::decrypt_agent_event(&session, &event);
         assert!(result.is_err());
     }
 
@@ -1706,7 +1720,7 @@ mod tests {
                 },
             )),
         };
-        let result = super::decrypt_agent_event(&session, event);
+        let result = super::decrypt_agent_event(&session, &event);
         assert!(result.is_err());
     }
 
@@ -1762,7 +1776,7 @@ mod tests {
         assert!(result.is_err());
         match result.unwrap_err() {
             ConnectionError::KeyExchangeRequired => {}
-            other => panic!("Expected KeyExchangeRequired, got {:?}", other),
+            other => panic!("Expected KeyExchangeRequired, got {other:?}"),
         }
         std::fs::remove_dir_all(&dir).ok();
     }
@@ -1810,11 +1824,10 @@ mod tests {
             ConnectionError::ConnectFailed(msg) => {
                 assert!(
                     msg.contains("Failed to read CA cert"),
-                    "Expected CA cert read error, got: {}",
-                    msg,
+                    "Expected CA cert read error, got: {msg}",
                 );
             }
-            other => panic!("Expected ConnectFailed, got {:?}", other),
+            other => panic!("Expected ConnectFailed, got {other:?}"),
         }
     }
 
@@ -1846,11 +1859,10 @@ mod tests {
             ConnectionError::ConnectFailed(msg) => {
                 assert!(
                     !msg.contains("Failed to read CA cert"),
-                    "Should not be a CA read error, got: {}",
-                    msg,
+                    "Should not be a CA read error, got: {msg}",
                 );
             }
-            other => panic!("Expected ConnectFailed, got {:?}", other),
+            other => panic!("Expected ConnectFailed, got {other:?}"),
         }
 
         std::fs::remove_dir_all(&dir).ok();
@@ -1904,7 +1916,7 @@ mod tests {
                 assert_eq!(td.text, "Hello from history");
                 assert!(td.is_complete);
             }
-            other => panic!("Expected TextDelta, got {:?}", other),
+            other => panic!("Expected TextDelta, got {other:?}"),
         }
     }
 
@@ -1928,7 +1940,7 @@ mod tests {
             Some(betcode_proto::v1::agent_event::Event::TextDelta(td)) => {
                 assert_eq!(td.text, "plain");
             }
-            other => panic!("Expected TextDelta, got {:?}", other),
+            other => panic!("Expected TextDelta, got {other:?}"),
         }
     }
 

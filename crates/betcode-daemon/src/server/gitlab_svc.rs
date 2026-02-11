@@ -1,6 +1,6 @@
-//! GitLabService gRPC implementation.
+//! `GitLabService` gRPC implementation.
 //!
-//! Wraps the reqwest-based GitLabClient to serve gRPC requests.
+//! Wraps the reqwest-based `GitLabClient` to serve gRPC requests.
 
 use std::sync::Arc;
 
@@ -15,17 +15,17 @@ use betcode_proto::v1::{
     PipelineStatus,
 };
 
-use super::gitlab_convert::*;
+use super::gitlab_convert::{mr_state_to_str, to_status, to_mr_info, pipeline_status_to_str, to_pipeline_info, issue_state_to_str, to_issue_info};
 use crate::gitlab::GitLabClient;
 
-/// GitLabService implementation backed by GitLabClient.
+/// `GitLabService` implementation backed by `GitLabClient`.
 pub struct GitLabServiceImpl {
     client: Arc<GitLabClient>,
 }
 
 impl GitLabServiceImpl {
-    /// Create a new GitLabService.
-    pub fn new(client: Arc<GitLabClient>) -> Self {
+    /// Create a new `GitLabService`.
+    pub const fn new(client: Arc<GitLabClient>) -> Self {
         Self { client }
     }
 }
@@ -57,6 +57,7 @@ impl GitLabService for GitLabServiceImpl {
             .map_err(to_status)?;
 
         let merge_requests: Vec<_> = mrs.into_iter().map(to_mr_info).collect();
+        #[allow(clippy::cast_possible_truncation)]
         let total = merge_requests.len() as u32;
         Ok(Response::new(ListMergeRequestsResponse {
             merge_requests,
@@ -108,6 +109,7 @@ impl GitLabService for GitLabServiceImpl {
             .map_err(to_status)?;
 
         let pipelines: Vec<_> = pipelines.into_iter().map(to_pipeline_info).collect();
+        #[allow(clippy::cast_possible_truncation)]
         let total = pipelines.len() as u32;
         Ok(Response::new(ListPipelinesResponse { pipelines, total }))
     }
@@ -156,6 +158,7 @@ impl GitLabService for GitLabServiceImpl {
             .map_err(to_status)?;
 
         let issues: Vec<_> = issues.into_iter().map(to_issue_info).collect();
+        #[allow(clippy::cast_possible_truncation)]
         let total = issues.len() as u32;
         Ok(Response::new(ListIssuesResponse { issues, total }))
     }

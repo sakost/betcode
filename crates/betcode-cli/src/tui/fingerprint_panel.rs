@@ -48,7 +48,7 @@ impl FingerprintPrompt {
     }
 
     /// Get the header text based on the check result.
-    pub fn header_text(&self) -> &'static str {
+    pub const fn header_text(&self) -> &'static str {
         match &self.check {
             FingerprintCheck::TrustOnFirstUse => "New daemon — verify the fingerprint if possible",
             FingerprintCheck::Matched => "Daemon fingerprint verified (matches known key)",
@@ -59,7 +59,7 @@ impl FingerprintPrompt {
     }
 
     /// Whether this prompt requires user action (mismatch needs explicit accept/reject).
-    pub fn needs_action(&self) -> bool {
+    pub const fn needs_action(&self) -> bool {
         matches!(self.check, FingerprintCheck::Mismatch { .. })
     }
 }

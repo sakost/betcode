@@ -1,4 +1,4 @@
-//! BetCode Relay Server
+//! `BetCode` Relay Server
 //!
 //! gRPC relay that routes requests through tunnels to daemon instances.
 
@@ -42,7 +42,7 @@ struct Args {
     #[arg(long, default_value = "0.0.0.0:443")]
     addr: SocketAddr,
 
-    /// Path to SQLite database file.
+    /// Path to `SQLite` database file.
     #[arg(long)]
     db_path: Option<PathBuf>,
 
@@ -84,6 +84,7 @@ struct Args {
 }
 
 #[tokio::main]
+#[allow(clippy::too_many_lines)]
 async fn main() -> anyhow::Result<()> {
     let args = Args::parse();
 
@@ -108,16 +109,13 @@ async fn main() -> anyhow::Result<()> {
         "Starting betcode-relay"
     );
 
-    let db = match &args.db_path {
-        Some(path) => {
-            info!(path = %path.display(), "Opening relay database");
-            RelayDatabase::open(path).await?
-        }
-        None => {
-            let default_path = default_db_path()?;
-            info!(path = %default_path.display(), "Opening relay database (default path)");
-            RelayDatabase::open(&default_path).await?
-        }
+    let db = if let Some(path) = &args.db_path {
+        info!(path = %path.display(), "Opening relay database");
+        RelayDatabase::open(path).await?
+    } else {
+        let default_path = default_db_path()?;
+        info!(path = %default_path.display(), "Opening relay database (default path)");
+        RelayDatabase::open(&default_path).await?
     };
 
     let jwt = Arc::new(JwtManager::new(

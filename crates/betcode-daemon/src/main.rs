@@ -1,4 +1,4 @@
-//! BetCode Daemon
+//! `BetCode` Daemon
 //!
 //! The daemon manages Claude Code subprocesses and serves the gRPC API
 //! to clients (CLI, Flutter app) over local socket or relay tunnel.
@@ -36,7 +36,7 @@ struct Args {
     #[arg(long, default_value_t = 10)]
     max_sessions: usize,
 
-    /// Relay server URL (enables tunnel mode, e.g. "https://relay.betcode.io:443")
+    /// Relay server URL (enables tunnel mode, e.g. "<https://relay.betcode.io:443>")
     #[arg(long, env = "BETCODE_RELAY_URL")]
     relay_url: Option<String>,
 
@@ -66,6 +66,7 @@ struct Args {
 }
 
 #[tokio::main]
+#[allow(clippy::too_many_lines)]
 async fn main() -> anyhow::Result<()> {
     let args = Args::parse();
 
@@ -93,16 +94,13 @@ async fn main() -> anyhow::Result<()> {
     );
 
     // Initialize database
-    let db = match &args.db_path {
-        Some(path) => {
-            info!(path = %path.display(), "Opening database");
-            Database::open(path).await?
-        }
-        None => {
-            let default_path = default_db_path()?;
-            info!(path = %default_path.display(), "Opening database (default path)");
-            Database::open(&default_path).await?
-        }
+    let db = if let Some(path) = &args.db_path {
+        info!(path = %path.display(), "Opening database");
+        Database::open(path).await?
+    } else {
+        let default_path = default_db_path()?;
+        info!(path = %default_path.display(), "Opening database (default path)");
+        Database::open(&default_path).await?
     };
 
     // Create subprocess manager
@@ -135,7 +133,7 @@ async fn main() -> anyhow::Result<()> {
             username,
             password,
         );
-        tunnel_config.ca_cert_path = args.relay_ca_cert.clone();
+        tunnel_config.ca_cert_path.clone_from(&args.relay_ca_cert);
 
         info!(
             relay_url = %relay_url,

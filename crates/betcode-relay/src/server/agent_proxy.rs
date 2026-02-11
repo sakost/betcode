@@ -1,7 +1,7 @@
-//! AgentService proxy that forwards calls through the tunnel to daemons.
+//! `AgentService` proxy that forwards calls through the tunnel to daemons.
 //!
 //! The relay acts as a pure frame forwarder — it never decodes the encrypted
-//! payload content. Only routing metadata (method, machine_id, request_id)
+//! payload content. Only routing metadata (method, `machine_id`, `request_id`)
 //! is visible to the relay.
 
 use std::collections::HashMap;
@@ -33,33 +33,33 @@ use crate::server::interceptor::extract_claims;
 
 type EventStream = Pin<Box<dyn tokio_stream::Stream<Item = Result<AgentEvent, Status>> + Send>>;
 
-/// Extract machine_id from gRPC request metadata.
+/// Extract `machine_id` from gRPC request metadata.
 #[allow(clippy::result_large_err)]
 pub fn extract_machine_id<T>(req: &Request<T>) -> Result<String, Status> {
     req.metadata()
         .get("x-machine-id")
         .and_then(|v| v.to_str().ok())
-        .map(|s| s.to_string())
+        .map(str::to_string)
         .ok_or_else(|| Status::invalid_argument("Missing x-machine-id metadata header"))
 }
 
-/// Map a RouterError to a gRPC Status.
+/// Map a `RouterError` to a gRPC `Status`.
 pub fn router_error_to_status(err: RouterError) -> Status {
     match err {
-        RouterError::MachineOffline(m) => Status::unavailable(format!("Machine offline: {}", m)),
+        RouterError::MachineOffline(m) => Status::unavailable(format!("Machine offline: {m}")),
         RouterError::Buffered(m) => {
-            Status::unavailable(format!("Machine offline, request buffered: {}", m))
+            Status::unavailable(format!("Machine offline, request buffered: {m}"))
         }
-        RouterError::Timeout(r) => Status::deadline_exceeded(format!("Request timed out: {}", r)),
-        RouterError::SendFailed(m) => Status::internal(format!("Failed to send to machine: {}", m)),
-        RouterError::ResponseDropped(r) => Status::internal(format!("Response dropped: {}", r)),
+        RouterError::Timeout(r) => Status::deadline_exceeded(format!("Request timed out: {r}")),
+        RouterError::SendFailed(m) => Status::internal(format!("Failed to send to machine: {m}")),
+        RouterError::ResponseDropped(r) => Status::internal(format!("Response dropped: {r}")),
     }
 }
 
-/// Decode a response payload from a TunnelFrame.
+/// Decode a response payload from a `TunnelFrame`.
 ///
 /// The relay decodes only the outer frame envelope — the encrypted payload
-/// inside StreamPayload is forwarded opaquely to the client for decryption.
+/// inside `StreamPayload` is forwarded opaquely to the client for decryption.
 #[allow(clippy::result_large_err)]
 pub fn decode_response<M: Message + Default>(frame: &TunnelFrame) -> Result<M, Status> {
     if frame.frame_type == FrameType::Error as i32 {
@@ -73,10 +73,9 @@ pub fn decode_response<M: Message + Default>(frame: &TunnelFrame) -> Result<M, S
             let data = p
                 .encrypted
                 .as_ref()
-                .map(|e| &e.ciphertext[..])
-                .unwrap_or(&[]);
+                .map_or(&[][..], |e| &e.ciphertext[..]);
             M::decode(data)
-                .map_err(|e| Status::internal(format!("Failed to decode response: {}", e)))
+                .map_err(|e| Status::internal(format!("Failed to decode response: {e}")))
         }
         _ => Err(Status::internal("Unexpected response payload format")),
     }
@@ -87,6 +86,7 @@ pub fn decode_response<M: Message + Default>(frame: &TunnelFrame) -> Result<M, S
 /// Reads the first message from the client, sets up the tunnel route, then
 /// forwards messages in both directions. Runs in a spawned task so the gRPC
 /// handler can return the response stream immediately (avoiding deadlock).
+#[allow(clippy::too_many_lines)]
 async fn converse_proxy_task(
     router: Arc<RequestRouter>,
     machine_id: &str,
@@ -98,9 +98,9 @@ async fn converse_proxy_task(
         Some(Ok(req)) => req,
         Some(Err(e)) => {
             let _ = out_tx
-                .send(Err(Status::internal(format!("Stream error: {}", e))))
+                .send(Err(Status::internal(format!("Stream error: {e}"))))
                 .await;
-            return Err(Status::internal(format!("Stream error: {}", e)));
+            return Err(Status::internal(format!("Stream error: {e}")));
         }
         None => {
             let _ = out_tx
@@ -114,7 +114,7 @@ async fn converse_proxy_task(
     let mut buf = Vec::with_capacity(first.encoded_len());
     first
         .encode(&mut buf)
-        .map_err(|e| Status::internal(format!("Encode error: {}", e)))?;
+        .map_err(|e| Status::internal(format!("Encode error: {e}")))?;
 
     let (client_tx, mut event_rx) = router
         .forward_bidi_stream(
@@ -188,8 +188,7 @@ async fn converse_proxy_task(
                     let data = p
                         .encrypted
                         .as_ref()
-                        .map(|e| &e.ciphertext[..])
-                        .unwrap_or(&[]);
+                        .map_or(&[][..], |e| &e.ciphertext[..]);
                     match AgentEvent::decode(data) {
                         Ok(event) => {
                             if out_tx.send(Ok(event)).await.is_err() {
@@ -223,13 +222,13 @@ async fn converse_proxy_task(
     Ok(())
 }
 
-/// Proxies AgentService calls through the tunnel to a target daemon.
+/// Proxies `AgentService` calls through the tunnel to a target daemon.
 pub struct AgentProxyService {
     router: Arc<RequestRouter>,
 }
 
 impl AgentProxyService {
-    pub fn new(router: Arc<RequestRouter>) -> Self {
+    pub const fn new(router: Arc<RequestRouter>) -> Self {
         Self { router }
     }
 }
@@ -255,10 +254,9 @@ impl AgentService for AgentProxyService {
         let (out_tx, out_rx) = mpsc::channel::<Result<AgentEvent, Status>>(128);
 
         let router = Arc::clone(&self.router);
-        let mid = machine_id.clone();
         tokio::spawn(async move {
-            if let Err(e) = converse_proxy_task(router, &mid, in_stream, out_tx).await {
-                warn!(machine_id = %mid, error = %e, "Converse proxy task failed");
+            if let Err(e) = converse_proxy_task(router, &machine_id, in_stream, out_tx).await {
+                warn!(machine_id = %machine_id, error = %e, "Converse proxy task failed");
             }
         });
 
@@ -293,7 +291,7 @@ impl AgentService for AgentProxyService {
         let request_id = uuid::Uuid::new_v4().to_string();
         let mut buf = Vec::with_capacity(req.encoded_len());
         req.encode(&mut buf)
-            .map_err(|e| Status::internal(format!("Encode error: {}", e)))?;
+            .map_err(|e| Status::internal(format!("Encode error: {e}")))?;
 
         let mut stream_rx = self
             .router
@@ -319,8 +317,7 @@ impl AgentService for AgentProxyService {
                             let data = p
                                 .encrypted
                                 .as_ref()
-                                .map(|e| &e.ciphertext[..])
-                                .unwrap_or(&[]);
+                                .map_or(&[][..], |e| &e.ciphertext[..]);
                             match AgentEvent::decode(data) {
                                 Ok(event) => {
                                     if tx.send(Ok(event)).await.is_err() {
@@ -424,5 +421,6 @@ impl AgentService for AgentProxyService {
 }
 
 #[cfg(test)]
+#[allow(clippy::panic, clippy::expect_used, clippy::unwrap_used)]
 #[path = "agent_proxy_tests.rs"]
 mod tests;

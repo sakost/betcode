@@ -8,7 +8,8 @@ use tonic::Status;
 
 use crate::gitlab::{self, GitLabError};
 
-/// Map GitLabError to tonic Status.
+/// Map `GitLabError` to tonic Status.
+#[allow(clippy::needless_pass_by_value)]
 pub fn to_status(err: GitLabError) -> Status {
     match &err {
         GitLabError::Api { status, .. } => match *status {
@@ -74,8 +75,9 @@ fn parse_rfc3339_seconds(s: &str) -> Option<i64> {
         30,
         31,
     ];
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
     for m in 0..(month - 1) as usize {
-        days += month_days.get(m).copied().unwrap_or(30) as i64;
+        days += i64::from(month_days.get(m).copied().unwrap_or(30));
     }
     days += day - 1;
 
@@ -86,7 +88,7 @@ fn parse_rfc3339_seconds(s: &str) -> Option<i64> {
 // Enum string <-> proto conversions
 // =============================================================================
 
-pub fn mr_state_to_str(state: MergeRequestState) -> Option<&'static str> {
+pub const fn mr_state_to_str(state: MergeRequestState) -> Option<&'static str> {
     match state {
         MergeRequestState::Unspecified => None,
         MergeRequestState::Opened => Some("opened"),
@@ -96,7 +98,7 @@ pub fn mr_state_to_str(state: MergeRequestState) -> Option<&'static str> {
     }
 }
 
-pub fn pipeline_status_to_str(status: PipelineStatus) -> Option<&'static str> {
+pub const fn pipeline_status_to_str(status: PipelineStatus) -> Option<&'static str> {
     match status {
         PipelineStatus::Unspecified => None,
         PipelineStatus::Created => Some("created"),
@@ -113,7 +115,7 @@ pub fn pipeline_status_to_str(status: PipelineStatus) -> Option<&'static str> {
     }
 }
 
-pub fn issue_state_to_str(state: IssueState) -> Option<&'static str> {
+pub const fn issue_state_to_str(state: IssueState) -> Option<&'static str> {
     match state {
         IssueState::Unspecified => None,
         IssueState::Opened => Some("opened"),
@@ -188,8 +190,7 @@ pub fn to_mr_info(mr: gitlab::MergeRequest) -> MergeRequestInfo {
         merge_status: mr
             .merge_status
             .as_deref()
-            .map(str_to_merge_status)
-            .unwrap_or(0),
+            .map_or(0, str_to_merge_status),
         assignee: mr.assignee.map(|u| u.username).unwrap_or_default(),
         assignees: mr.assignees.into_iter().map(|u| u.username).collect(),
         reviewers: mr.reviewers.into_iter().map(|u| u.username).collect(),

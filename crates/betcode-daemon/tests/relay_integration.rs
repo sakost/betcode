@@ -1,4 +1,4 @@
-#![allow(clippy::unwrap_used)] // Integration tests use unwrap for brevity
+#![allow(clippy::unwrap_used, clippy::panic, clippy::cast_possible_wrap)] // Integration tests
 
 //! Integration tests for the relay pipeline and handler wiring.
 //!
@@ -122,7 +122,7 @@ async fn message_stored_with_valid_types() {
     for (i, t) in types.iter().enumerate() {
         db.insert_message("test-1", i as i64 + 1, t, "payload")
             .await
-            .unwrap_or_else(|e| panic!("type '{}' failed: {}", t, e));
+            .unwrap_or_else(|e| panic!("type '{t}' failed: {e}"));
     }
 
     let msgs = db.get_messages_from_sequence("test-1", 0).await.unwrap();

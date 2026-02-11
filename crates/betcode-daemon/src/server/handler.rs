@@ -57,9 +57,9 @@ pub async fn handle_agent_request(
                         .write()
                         .await
                         .remove(&perm.request_id)
-                        .unwrap_or(serde_json::Value::Object(Default::default()))
+                        .unwrap_or_else(|| serde_json::Value::Object(serde_json::Map::default()))
                 } else {
-                    serde_json::Value::Object(Default::default())
+                    serde_json::Value::Object(serde_json::Map::default())
                 };
 
                 ctx.relay
@@ -80,9 +80,9 @@ pub async fn handle_agent_request(
                         .write()
                         .await
                         .remove(&qr.question_id)
-                        .unwrap_or(serde_json::Value::Object(Default::default()))
+                        .unwrap_or_else(|| serde_json::Value::Object(serde_json::Map::default()))
                 } else {
-                    serde_json::Value::Object(Default::default())
+                    serde_json::Value::Object(serde_json::Map::default())
                 };
 
                 ctx.relay
@@ -115,7 +115,7 @@ pub async fn handle_agent_request(
     Ok(())
 }
 
-/// Handle a StartConversation request.
+/// Handle a `StartConversation` request.
 async fn handle_start(
     ctx: &HandlerContext<'_>,
     session_id: &mut Option<String>,
@@ -136,20 +136,17 @@ async fn handle_start(
     let working_dir: std::path::PathBuf = start.working_directory.clone().into();
 
     // Check if session already exists in DB; create if new
-    let resume_session = match ctx.db.get_session(&sid).await {
-        Ok(existing) => {
-            info!(session_id = %sid, "Resuming existing session");
-            existing.claude_session_id.filter(|s| !s.is_empty())
-        }
-        Err(_) => {
-            // New session - create in DB
-            ctx.db
-                .create_session(&sid, &model, &start.working_directory)
-                .await
-                .map_err(|e| e.to_string())?;
-            info!(session_id = %sid, "Created new session in database");
-            None
-        }
+    let resume_session = if let Ok(existing) = ctx.db.get_session(&sid).await {
+        info!(session_id = %sid, "Resuming existing session");
+        existing.claude_session_id.filter(|s| !s.is_empty())
+    } else {
+        // New session - create in DB
+        ctx.db
+            .create_session(&sid, &model, &start.working_directory)
+            .await
+            .map_err(|e| e.to_string())?;
+        info!(session_id = %sid, "Created new session in database");
+        None
     };
 
     // Mark session as active

@@ -1,9 +1,9 @@
-//! Database queries for BetCode daemon.
+//! Database queries for `BetCode` daemon.
 
 use betcode_core::db::unix_timestamp;
 
 use super::db::{Database, DatabaseError};
-use super::models::*;
+use super::models::{Session, SessionStatus, Message, PermissionGrant, Worktree};
 
 impl Database {
     // =========================================================================
@@ -20,10 +20,10 @@ impl Database {
         let now = unix_timestamp();
 
         sqlx::query(
-            r#"
+            r"
             INSERT INTO sessions (id, model, working_directory, created_at, updated_at)
             VALUES (?, ?, ?, ?, ?)
-            "#,
+            ",
         )
         .bind(id)
         .bind(model)
@@ -42,7 +42,7 @@ impl Database {
             .bind(id)
             .fetch_optional(self.pool())
             .await?
-            .ok_or_else(|| DatabaseError::NotFound(format!("Session {}", id)))
+            .ok_or_else(|| DatabaseError::NotFound(format!("Session {id}")))
     }
 
     /// Update session status.
@@ -229,6 +229,7 @@ impl Database {
     // =========================================================================
 
     /// Create a new worktree record.
+    #[allow(clippy::too_many_arguments)]
     pub async fn create_worktree(
         &self,
         id: &str,
@@ -263,7 +264,7 @@ impl Database {
             .bind(id)
             .fetch_optional(self.pool())
             .await?
-            .ok_or_else(|| DatabaseError::NotFound(format!("Worktree {}", id)))
+            .ok_or_else(|| DatabaseError::NotFound(format!("Worktree {id}")))
     }
 
     /// List worktrees, optionally filtered by repository path.
@@ -288,8 +289,8 @@ impl Database {
     }
 
     /// Remove a worktree record. Sessions bound to this worktree have their
-    /// worktree_id set to NULL (handled by application logic, not FK cascade
-    /// since worktree_id is not a formal FK in the schema).
+    /// `worktree_id` set to NULL (handled by application logic, not FK cascade
+    /// since `worktree_id` is not a formal FK in the schema).
     pub async fn remove_worktree(&self, id: &str) -> Result<bool, DatabaseError> {
         // Clear worktree_id on sessions that reference this worktree
         sqlx::query("UPDATE sessions SET worktree_id = NULL WHERE worktree_id = ?")
@@ -305,7 +306,7 @@ impl Database {
         Ok(result.rows_affected() > 0)
     }
 
-    /// Update the last_active timestamp on a worktree.
+    /// Update the `last_active` timestamp on a worktree.
     pub async fn touch_worktree(&self, id: &str) -> Result<(), DatabaseError> {
         let now = unix_timestamp();
 

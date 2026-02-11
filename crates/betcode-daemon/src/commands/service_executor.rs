@@ -23,7 +23,7 @@ pub struct ServiceExecutor {
 }
 
 impl ServiceExecutor {
-    pub fn new(cwd: PathBuf) -> Self {
+    pub const fn new(cwd: PathBuf) -> Self {
         Self { cwd }
     }
 
@@ -75,12 +75,19 @@ impl ServiceExecutor {
 
         let mut msg = format!("Reloaded {count} Claude Code commands");
         if !result.warnings.is_empty() {
-            msg.push_str(&format!(" ({} warnings)", result.warnings.len()));
+            use std::fmt::Write;
+            let _ = write!(msg, " ({} warnings)", result.warnings.len());
         }
         Ok(msg)
     }
 
     /// Executes a bash command, streaming stdout/stderr line-by-line via the channel.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the child process stdout or stderr cannot be captured (should
+    /// never happen because both are configured as `Stdio::piped()`).
+    #[allow(clippy::expect_used)]
     pub async fn execute_bash(
         &self,
         cmd: &str,
@@ -129,6 +136,7 @@ impl ServiceExecutor {
 }
 
 #[cfg(test)]
+#[allow(clippy::panic, clippy::expect_used, clippy::unwrap_used)]
 mod tests {
     use super::*;
     use tempfile::TempDir;

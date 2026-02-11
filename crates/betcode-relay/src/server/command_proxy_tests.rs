@@ -1,4 +1,4 @@
-//! Tests for CommandProxyService.
+//! Tests for `CommandProxyService`.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -50,7 +50,7 @@ async fn get_command_registry_routes_to_machine() {
             commands: vec![CommandEntry {
                 name: "test-cmd".into(),
                 description: "A test command".into(),
-                category: 1, // COMMAND_CATEGORY_SERVICE
+                category: 1,       // COMMAND_CATEGORY_SERVICE
                 execution_mode: 1, // EXECUTION_MODE_LOCAL
                 source: "test".into(),
                 args_schema: None,
@@ -216,12 +216,7 @@ async fn add_plugin_routes_to_machine() {
 #[tokio::test]
 async fn remove_plugin_routes_to_machine() {
     let (svc, router, rx) = setup_with_machine("m1").await;
-    spawn_responder(
-        &router,
-        "m1",
-        rx,
-        RemovePluginResponse { removed: true },
-    );
+    spawn_responder(&router, "m1", rx, RemovePluginResponse { removed: true });
     let req = make_request(
         RemovePluginRequest {
             name: "old-plugin".into(),

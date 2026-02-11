@@ -21,7 +21,7 @@ pub struct BufferManager {
 }
 
 impl BufferManager {
-    pub fn new(db: RelayDatabase, registry: Arc<ConnectionRegistry>) -> Self {
+    pub const fn new(db: RelayDatabase, registry: Arc<ConnectionRegistry>) -> Self {
         Self {
             db,
             registry,
@@ -77,16 +77,13 @@ impl BufferManager {
         }
 
         let conn = self.registry.get(machine_id).await;
-        let conn = match conn {
-            Some(c) => c,
-            None => {
-                warn!(
-                    machine_id = %machine_id,
-                    count = messages.len(),
-                    "Machine went offline again before buffer drain completed"
-                );
-                return Err(BufferError::MachineOffline(machine_id.to_string()));
-            }
+        let Some(conn) = conn else {
+            warn!(
+                machine_id = %machine_id,
+                count = messages.len(),
+                "Machine went offline again before buffer drain completed"
+            );
+            return Err(BufferError::MachineOffline(machine_id.to_string()));
         };
 
         let total = messages.len();
@@ -190,6 +187,7 @@ pub enum BufferError {
 }
 
 #[cfg(test)]
+#[allow(clippy::panic, clippy::expect_used, clippy::unwrap_used)]
 mod tests {
     use super::*;
     use tokio::sync::mpsc;

@@ -1,4 +1,4 @@
-//! SQLite storage for BetCode relay server.
+//! `SQLite` storage for `BetCode` relay server.
 //!
 //! Provides persistence for users, tokens, machines, message buffer, and certificates.
 
@@ -8,6 +8,7 @@ mod queries;
 mod queries_buffer;
 
 #[cfg(test)]
+#[allow(clippy::panic, clippy::expect_used, clippy::unwrap_used)]
 mod tests;
 
 pub use db::{DatabaseError, RelayDatabase};

@@ -25,7 +25,7 @@ impl CommandCache {
         Self::default()
     }
 
-    pub fn is_empty(&self) -> bool {
+    pub const fn is_empty(&self) -> bool {
         self.entries.is_empty()
     }
 
@@ -107,9 +107,9 @@ mod tests {
 
         cache.load(vec![CachedCommand {
             name: "only".to_string(),
-            description: "".to_string(),
-            category: "".to_string(),
-            source: "".to_string(),
+            description: String::new(),
+            category: String::new(),
+            source: String::new(),
         }]);
         assert_eq!(cache.search("", 10).len(), 1);
     }

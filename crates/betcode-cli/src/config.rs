@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 /// Persistent CLI configuration.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct CliConfig {
-    /// Relay server URL (e.g., "https://relay.betcode.io:443").
+    /// Relay server URL (e.g., "<https://relay.betcode.io:443>").
     #[serde(skip_serializing_if = "Option::is_none")]
     pub relay_url: Option<String>,
     /// Currently active machine ID for relay routing.
@@ -68,12 +68,13 @@ impl CliConfig {
     }
 
     /// Whether this config has all fields needed for relay mode.
-    pub fn is_relay_mode(&self) -> bool {
+    pub const fn is_relay_mode(&self) -> bool {
         self.relay_url.is_some() && self.auth.is_some() && self.active_machine.is_some()
     }
 }
 
 #[cfg(test)]
+#[allow(clippy::panic, clippy::expect_used, clippy::unwrap_used)]
 mod tests {
     use super::*;
 
@@ -161,8 +162,7 @@ mod tests {
         // Field should be skipped when None
         assert!(
             !json.contains("relay_ca_cert"),
-            "relay_ca_cert should be omitted from JSON when None, got: {}",
-            json,
+            "relay_ca_cert should be omitted from JSON when None, got: {json}",
         );
         let loaded: CliConfig = serde_json::from_str(&json).unwrap();
         assert!(loaded.relay_ca_cert.is_none());

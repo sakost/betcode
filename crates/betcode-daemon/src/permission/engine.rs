@@ -14,7 +14,7 @@ use betcode_core::permissions::{PermissionAction, PermissionEngine};
 use crate::storage::Database;
 
 use super::pending::{PendingConfig, PendingManager, PendingRequest, PendingRequestParams};
-use super::types::*;
+use super::types::{SessionGrant, PermissionEvaluation, PermissionResponse, ProcessedResponse, PermissionError};
 
 /// Parameters for a permission evaluation request.
 pub struct PermissionEvalRequest<'a> {
@@ -159,11 +159,13 @@ impl DaemonPermissionEngine {
         &self,
         response: PermissionResponse,
     ) -> Result<ProcessedResponse, PermissionError> {
-        let request = self.pending.take(&response.request_id).await.ok_or(
-            PermissionError::RequestNotFound {
+        let request = self
+            .pending
+            .take(&response.request_id)
+            .await
+            .ok_or_else(|| PermissionError::RequestNotFound {
                 request_id: response.request_id.clone(),
-            },
-        )?;
+            })?;
 
         if response.remember_session {
             self.add_session_grant(
@@ -201,6 +203,7 @@ impl DaemonPermissionEngine {
     }
 
     /// Add a session-scoped grant.
+    #[allow(clippy::significant_drop_tightening)]
     pub async fn add_session_grant(
         &self,
         session_id: &str,
@@ -208,18 +211,21 @@ impl DaemonPermissionEngine {
         path_pattern: Option<&str>,
         granted: bool,
     ) {
-        let mut grants = self.session_grants.write().await;
-        let session_grants = grants.entry(session_id.to_string()).or_default();
-
-        session_grants.push(SessionGrant {
-            tool_name: tool_name.to_string(),
-            path_pattern: path_pattern.map(String::from),
-            granted,
-        });
+        let mut guard = self.session_grants.write().await;
+        guard
+            .entry(session_id.to_string())
+            .or_default()
+            .push(SessionGrant {
+                tool_name: tool_name.to_string(),
+                path_pattern: path_pattern.map(String::from),
+                granted,
+            });
+        drop(guard);
 
         debug!(session_id, tool_name, granted, "Added session grant");
     }
 
+    #[allow(clippy::significant_drop_tightening)]
     async fn check_session_grant(
         &self,
         session_id: &str,
@@ -274,7 +280,7 @@ impl DaemonPermissionEngine {
     }
 
     /// Get the underlying rule engine.
-    pub fn rule_engine(&self) -> &PermissionEngine {
+    pub const fn rule_engine(&self) -> &PermissionEngine {
         &self.rule_engine
     }
 }

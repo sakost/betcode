@@ -22,12 +22,12 @@ async fn relay_channel(url: &str, ca_cert: Option<&Path>) -> anyhow::Result<Chan
         let tls_config = ClientTlsConfig::new().ca_certificate(Certificate::from_pem(ca_pem));
         endpoint = endpoint
             .tls_config(tls_config)
-            .map_err(|e| anyhow::anyhow!("TLS config error: {}", e))?;
+            .map_err(|e| anyhow::anyhow!("TLS config error: {e}"))?;
     }
     endpoint
         .connect()
         .await
-        .map_err(|e| anyhow::anyhow!("Failed to connect to relay: {}", e))
+        .map_err(|e| anyhow::anyhow!("Failed to connect to relay: {e}"))
 }
 
 /// Auth subcommand actions.
@@ -74,10 +74,16 @@ pub async fn run(action: AuthAction, config: &mut CliConfig) -> anyhow::Result<(
     }
 }
 
-/// Refresh the access token via the relay's RefreshToken RPC.
+/// Refresh the access token via the relay's `RefreshToken` RPC.
 ///
 /// Connects to the relay, exchanges the current refresh token for new
 /// access + refresh tokens, and saves the updated config to disk.
+///
+/// # Panics
+///
+/// Panics if `config.auth` is `None` after the `is_none()` guard has already
+/// verified it is `Some`. This is structurally unreachable.
+#[allow(clippy::expect_used)]
 pub async fn ensure_valid_token(config: &mut CliConfig) -> anyhow::Result<()> {
     let relay_url = config
         .relay_url
@@ -94,7 +100,7 @@ pub async fn ensure_valid_token(config: &mut CliConfig) -> anyhow::Result<()> {
 
     let channel = relay_channel(&relay_url, config.relay_ca_cert.as_deref())
         .await
-        .map_err(|e| anyhow::anyhow!("Cannot reach relay: {}", e))?;
+        .map_err(|e| anyhow::anyhow!("Cannot reach relay: {e}"))?;
 
     let mut client = AuthServiceClient::new(channel);
     let resp = client
@@ -146,7 +152,7 @@ async fn register(
     config.save()?;
 
     let mut out = io::stdout();
-    writeln!(out, "Registered and logged in as {}", username)?;
+    writeln!(out, "Registered and logged in as {username}")?;
     Ok(())
 }
 
@@ -178,7 +184,7 @@ async fn login(config: &mut CliConfig, username: &str, password: &str) -> anyhow
     config.save()?;
 
     let mut out = io::stdout();
-    writeln!(out, "Logged in as {}", username)?;
+    writeln!(out, "Logged in as {username}")?;
     Ok(())
 }
 
@@ -200,6 +206,7 @@ async fn logout(config: &mut CliConfig) -> anyhow::Result<()> {
     Ok(())
 }
 
+#[allow(clippy::expect_used)]
 async fn status(config: &mut CliConfig) -> anyhow::Result<()> {
     let mut out = io::stdout();
     if config.auth.is_none() {
@@ -215,14 +222,14 @@ async fn status(config: &mut CliConfig) -> anyhow::Result<()> {
     writeln!(out, "Logged in as: {}", auth.username)?;
     writeln!(out, "User ID: {}", auth.user_id)?;
     if let Some(url) = &config.relay_url {
-        writeln!(out, "Relay: {}", url)?;
+        writeln!(out, "Relay: {url}")?;
     }
 
     // Check relay connectivity by refreshing token
     if config.relay_url.is_some() {
         match ensure_valid_token(config).await {
             Ok(()) => writeln!(out, "Token: valid (refreshed)")?,
-            Err(e) => writeln!(out, "Token: invalid ({})", e)?,
+            Err(e) => writeln!(out, "Token: invalid ({e})")?,
         }
     }
     Ok(())
@@ -236,7 +243,7 @@ fn status_to_writer(config: &CliConfig, out: &mut dyn Write) {
             let _ = writeln!(out, "Logged in as: {}", auth.username);
             let _ = writeln!(out, "User ID: {}", auth.user_id);
             if let Some(url) = &config.relay_url {
-                let _ = writeln!(out, "Relay: {}", url);
+                let _ = writeln!(out, "Relay: {url}");
             }
         }
         None => {
@@ -246,6 +253,12 @@ fn status_to_writer(config: &CliConfig, out: &mut dyn Write) {
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::panic,
+    clippy::expect_used,
+    clippy::unwrap_used,
+    clippy::default_trait_access
+)]
 mod tests {
     use super::*;
     use crate::config::AuthConfig;
@@ -269,8 +282,7 @@ mod tests {
         let err = ensure_valid_token(&mut config).await.unwrap_err();
         assert!(
             err.to_string().contains("No relay URL"),
-            "Expected 'No relay URL' error, got: {}",
-            err,
+            "Expected 'No relay URL' error, got: {err}",
         );
     }
 
@@ -284,8 +296,7 @@ mod tests {
         let err = ensure_valid_token(&mut config).await.unwrap_err();
         assert!(
             err.to_string().contains("Not logged in"),
-            "Expected 'Not logged in' error, got: {}",
-            err,
+            "Expected 'Not logged in' error, got: {err}",
         );
     }
 
@@ -300,8 +311,7 @@ mod tests {
         let err = ensure_valid_token(&mut config).await.unwrap_err();
         assert!(
             err.to_string().contains("Cannot reach relay"),
-            "Expected connection error, got: {}",
-            err,
+            "Expected connection error, got: {err}",
         );
     }
 
@@ -313,8 +323,7 @@ mod tests {
         let output = String::from_utf8(buf).unwrap();
         assert!(
             output.contains("Not logged in"),
-            "Expected 'Not logged in', got: {}",
-            output,
+            "Expected 'Not logged in', got: {output}",
         );
     }
 
@@ -399,12 +408,11 @@ mod tests {
         let mut buf = Vec::new();
         status_to_writer(&config, &mut buf);
         let output = String::from_utf8(buf).unwrap();
-        assert!(output.contains("alice"), "Missing username in: {}", output);
-        assert!(output.contains("u1"), "Missing user_id in: {}", output);
+        assert!(output.contains("alice"), "Missing username in: {output}");
+        assert!(output.contains("u1"), "Missing user_id in: {output}");
         assert!(
             output.contains("relay.test"),
-            "Missing relay URL in: {}",
-            output,
+            "Missing relay URL in: {output}",
         );
     }
 
@@ -420,8 +428,7 @@ mod tests {
         let err = result.unwrap_err().to_string();
         assert!(
             err.contains("Failed to connect"),
-            "Expected connection error, got: {}",
-            err,
+            "Expected connection error, got: {err}",
         );
     }
 
@@ -433,8 +440,7 @@ mod tests {
         let err = result.unwrap_err().to_string();
         assert!(
             err.contains("Failed to read CA cert"),
-            "Expected CA read error, got: {}",
-            err,
+            "Expected CA read error, got: {err}",
         );
     }
 
@@ -455,8 +461,7 @@ mod tests {
         let err = result.unwrap_err().to_string();
         assert!(
             !err.contains("Failed to read CA cert"),
-            "Should not be a CA read error, got: {}",
-            err,
+            "Should not be a CA read error, got: {err}",
         );
 
         std::fs::remove_dir_all(&dir).ok();

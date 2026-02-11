@@ -4,7 +4,7 @@
 
 use serde_json::Value;
 
-use super::types::*;
+use super::types::{Message, ToolSchema, SystemInit, AssistantMessage, ContentBlock, StopReason, Usage, ToolResult, UserMessage, StreamEventType, Delta, StreamEvent, ControlRequestType, ControlRequest, ResultSubtype, SessionResult};
 use crate::error::{Error, Result};
 
 /// Parse a single NDJSON line from Claude's stdout.
@@ -21,12 +21,12 @@ pub fn parse_value(raw: &Value) -> Result<Message> {
         .ok_or_else(|| Error::NdjsonParse("Missing 'type' field".into()))?;
 
     match msg_type {
-        "system" => parse_system(raw),
-        "assistant" => parse_assistant(raw),
-        "user" => parse_user(raw),
-        "stream_event" => parse_stream_event(raw),
+        "system" => Ok(parse_system(raw)),
+        "assistant" => Ok(parse_assistant(raw)),
+        "user" => Ok(parse_user(raw)),
+        "stream_event" => Ok(parse_stream_event(raw)),
         "control_request" => parse_control_request(raw),
-        "result" => parse_result(raw),
+        "result" => Ok(parse_result(raw)),
         _ => Ok(Message::Unknown {
             msg_type: msg_type.to_string(),
             payload: raw.clone(),
@@ -34,7 +34,7 @@ pub fn parse_value(raw: &Value) -> Result<Message> {
     }
 }
 
-fn parse_system(raw: &Value) -> Result<Message> {
+fn parse_system(raw: &Value) -> Message {
     let session_id = raw
         .get("session_id")
         .and_then(|v| v.as_str())
@@ -63,27 +63,37 @@ fn parse_system(raw: &Value) -> Result<Message> {
         .and_then(|v| v.as_str())
         .map(String::from);
 
-    Ok(Message::SystemInit(SystemInit {
+    Message::SystemInit(SystemInit {
         session_id,
         model,
         cwd,
         tools,
         api_version,
-    }))
+    })
 }
 
-fn parse_assistant(raw: &Value) -> Result<Message> {
+/// Extract a `u32` index from a JSON event object, defaulting to 0.
+fn event_index(event: &Value) -> u32 {
+    #[allow(clippy::cast_possible_truncation)]
+    let index = event
+        .get("index")
+        .and_then(serde_json::Value::as_u64)
+        .unwrap_or(0) as u32;
+    index
+}
+
+fn parse_assistant(raw: &Value) -> Message {
     let msg = raw.get("message").unwrap_or(raw);
 
     let content = parse_content_blocks(msg.get("content"));
     let stop_reason = parse_stop_reason(msg.get("stop_reason"));
     let usage = parse_usage(msg.get("usage"));
 
-    Ok(Message::Assistant(AssistantMessage {
+    Message::Assistant(AssistantMessage {
         content,
         stop_reason,
         usage,
-    }))
+    })
 }
 
 fn parse_content_blocks(content: Option<&Value>) -> Vec<ContentBlock> {
@@ -113,20 +123,19 @@ fn parse_content_blocks(content: Option<&Value>) -> Vec<ContentBlock> {
 
 fn parse_stop_reason(val: Option<&Value>) -> StopReason {
     match val.and_then(|v| v.as_str()) {
-        Some("end_turn") => StopReason::EndTurn,
+        Some("end_turn") | None => StopReason::EndTurn,
         Some("tool_use") => StopReason::ToolUse,
         Some("max_tokens") => StopReason::MaxTokens,
         Some(other) => StopReason::Unknown(other.to_string()),
-        None => StopReason::EndTurn,
     }
 }
 
-pub(crate) fn parse_usage(val: Option<&Value>) -> Usage {
+pub fn parse_usage(val: Option<&Value>) -> Usage {
     val.and_then(|v| serde_json::from_value(v.clone()).ok())
         .unwrap_or_default()
 }
 
-fn parse_user(raw: &Value) -> Result<Message> {
+fn parse_user(raw: &Value) -> Message {
     let msg = raw.get("message").unwrap_or(raw);
     let content = msg
         .get("content")
@@ -146,7 +155,7 @@ fn parse_user(raw: &Value) -> Result<Message> {
                             .to_string(),
                         is_error: block
                             .get("is_error")
-                            .and_then(|v| v.as_bool())
+                            .and_then(serde_json::Value::as_bool)
                             .unwrap_or(false),
                     })
                 })
@@ -154,16 +163,16 @@ fn parse_user(raw: &Value) -> Result<Message> {
         })
         .unwrap_or_default();
 
-    Ok(Message::User(UserMessage { content }))
+    Message::User(UserMessage { content })
 }
 
-fn parse_stream_event(raw: &Value) -> Result<Message> {
+fn parse_stream_event(raw: &Value) -> Message {
     let event = raw.get("event").unwrap_or(raw);
     let event_type = event.get("type").and_then(|v| v.as_str()).unwrap_or("");
 
     let stream_type = match event_type {
         "content_block_start" => StreamEventType::ContentBlockStart {
-            index: event.get("index").and_then(|v| v.as_u64()).unwrap_or(0) as u32,
+            index: event_index(event),
             block_type: event
                 .get("content_block")
                 .and_then(|b| b.get("type"))
@@ -172,7 +181,7 @@ fn parse_stream_event(raw: &Value) -> Result<Message> {
                 .to_string(),
         },
         "content_block_delta" => {
-            let index = event.get("index").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+            let index = event_index(event);
             let delta = event.get("delta").cloned().unwrap_or(Value::Null);
             let delta_type = delta.get("type").and_then(|v| v.as_str()).unwrap_or("");
             let delta = match delta_type {
@@ -195,7 +204,7 @@ fn parse_stream_event(raw: &Value) -> Result<Message> {
             StreamEventType::ContentBlockDelta { index, delta }
         }
         "content_block_stop" => StreamEventType::ContentBlockStop {
-            index: event.get("index").and_then(|v| v.as_u64()).unwrap_or(0) as u32,
+            index: event_index(event),
         },
         "message_start" => StreamEventType::MessageStart,
         "message_delta" => StreamEventType::MessageDelta {
@@ -209,9 +218,9 @@ fn parse_stream_event(raw: &Value) -> Result<Message> {
         _ => StreamEventType::Unknown(event.clone()),
     };
 
-    Ok(Message::StreamEvent(StreamEvent {
+    Message::StreamEvent(StreamEvent {
         event_type: stream_type,
-    }))
+    })
 }
 
 fn parse_control_request(raw: &Value) -> Result<Message> {
@@ -245,7 +254,7 @@ fn parse_control_request(raw: &Value) -> Result<Message> {
     }))
 }
 
-fn parse_result(raw: &Value) -> Result<Message> {
+fn parse_result(raw: &Value) -> Message {
     let session_id = raw
         .get("session_id")
         .and_then(|v| v.as_str())
@@ -253,23 +262,22 @@ fn parse_result(raw: &Value) -> Result<Message> {
         .to_string();
 
     let subtype = match raw.get("subtype").and_then(|v| v.as_str()) {
-        Some("success") => ResultSubtype::Success,
+        Some("success") | None => ResultSubtype::Success,
         Some("error") => ResultSubtype::Error,
         Some(other) => ResultSubtype::Unknown(other.to_string()),
-        None => ResultSubtype::Success,
     };
 
-    let duration_ms = raw.get("duration_ms").and_then(|v| v.as_u64()).unwrap_or(0);
-    let cost_usd = raw.get("total_cost_usd").and_then(|v| v.as_f64());
+    let duration_ms = raw.get("duration_ms").and_then(serde_json::Value::as_u64).unwrap_or(0);
+    let cost_usd = raw.get("total_cost_usd").and_then(serde_json::Value::as_f64);
     let usage = parse_usage(raw.get("usage"));
 
-    Ok(Message::Result(SessionResult {
+    Message::Result(SessionResult {
         subtype,
         session_id,
         duration_ms,
         cost_usd,
         usage,
-    }))
+    })
 }
 
 #[cfg(test)]

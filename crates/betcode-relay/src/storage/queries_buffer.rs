@@ -1,7 +1,7 @@
-//! Buffer and certificate queries for BetCode relay server.
+//! Buffer and certificate queries for `BetCode` relay server.
 
 use super::db::{DatabaseError, RelayDatabase};
-use super::models::*;
+use super::models::{BufferedMessage, Certificate};
 use betcode_core::db::unix_timestamp;
 
 /// Parameters for buffering a message.
@@ -56,7 +56,7 @@ impl RelayDatabase {
         Ok(result.last_insert_rowid())
     }
 
-    /// Fetch buffered messages for a machine (priority DESC, created_at ASC).
+    /// Fetch buffered messages for a machine (priority DESC, `created_at` ASC).
     ///
     /// Messages are NOT deleted by this call. Use `delete_buffered_message` to
     /// remove each message after it has been successfully delivered.
@@ -142,7 +142,7 @@ impl RelayDatabase {
             .bind(id)
             .fetch_optional(self.pool())
             .await?
-            .ok_or_else(|| DatabaseError::NotFound(format!("Certificate {}", id)))
+            .ok_or_else(|| DatabaseError::NotFound(format!("Certificate {id}")))
     }
 
     /// Get active certificates for a machine.

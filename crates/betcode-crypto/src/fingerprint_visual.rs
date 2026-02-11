@@ -208,12 +208,11 @@ mod tests {
     #[test]
     fn format_fingerprint_groups_into_lines() {
         let fp = (0..32)
-            .map(|i| format!("{:02x}", i))
+            .map(|i| format!("{i:02x}"))
             .collect::<Vec<_>>()
             .join(":");
         let display = format_fingerprint_display(&fp);
-        let lines: Vec<&str> = display.lines().collect();
-        assert_eq!(lines.len(), 4); // 32 parts / 8 per line = 4
+        assert_eq!(display.lines().count(), 4); // 32 parts / 8 per line = 4
     }
 
     #[test]
@@ -299,8 +298,7 @@ mod tests {
         }
         assert!(
             diff_count > 5,
-            "small input change should produce multiple visual differences, got {}",
-            diff_count
+            "small input change should produce multiple visual differences, got {diff_count}"
         );
     }
 

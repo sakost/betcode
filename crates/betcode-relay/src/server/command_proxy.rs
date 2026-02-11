@@ -1,4 +1,4 @@
-//! CommandService proxy that forwards calls through the tunnel to daemons.
+//! `CommandService` proxy that forwards calls through the tunnel to daemons.
 
 use std::collections::HashMap;
 use std::pin::Pin;
@@ -21,9 +21,9 @@ use betcode_proto::v1::{
 };
 
 use betcode_proto::methods::{
-    METHOD_ADD_PLUGIN, METHOD_DISABLE_PLUGIN, METHOD_ENABLE_PLUGIN,
-    METHOD_EXECUTE_SERVICE_COMMAND, METHOD_GET_COMMAND_REGISTRY, METHOD_GET_PLUGIN_STATUS,
-    METHOD_LIST_AGENTS, METHOD_LIST_PATH, METHOD_LIST_PLUGINS, METHOD_REMOVE_PLUGIN,
+    METHOD_ADD_PLUGIN, METHOD_DISABLE_PLUGIN, METHOD_ENABLE_PLUGIN, METHOD_EXECUTE_SERVICE_COMMAND,
+    METHOD_GET_COMMAND_REGISTRY, METHOD_GET_PLUGIN_STATUS, METHOD_LIST_AGENTS, METHOD_LIST_PATH,
+    METHOD_LIST_PLUGINS, METHOD_REMOVE_PLUGIN,
 };
 
 use crate::router::RequestRouter;
@@ -33,13 +33,13 @@ use crate::server::interceptor::extract_claims;
 type ServiceCommandStream =
     Pin<Box<dyn tokio_stream::Stream<Item = Result<ServiceCommandOutput, Status>> + Send>>;
 
-/// Proxies CommandService calls through the tunnel to a target daemon.
+/// Proxies `CommandService` calls through the tunnel to a target daemon.
 pub struct CommandProxyService {
     router: Arc<RequestRouter>,
 }
 
 impl CommandProxyService {
-    pub fn new(router: Arc<RequestRouter>) -> Self {
+    pub const fn new(router: Arc<RequestRouter>) -> Self {
         Self { router }
     }
 }
@@ -110,7 +110,7 @@ impl CommandService for CommandProxyService {
         let request_id = uuid::Uuid::new_v4().to_string();
         let mut buf = Vec::with_capacity(req.encoded_len());
         req.encode(&mut buf)
-            .map_err(|e| Status::internal(format!("Encode error: {}", e)))?;
+            .map_err(|e| Status::internal(format!("Encode error: {e}")))?;
 
         let mut stream_rx = self
             .router
@@ -135,8 +135,7 @@ impl CommandService for CommandProxyService {
                             let data = p
                                 .encrypted
                                 .as_ref()
-                                .map(|e| &e.ciphertext[..])
-                                .unwrap_or(&[]);
+                                .map_or(&[][..], |e| &e.ciphertext[..]);
                             match ServiceCommandOutput::decode(data) {
                                 Ok(output) => {
                                     if tx.send(Ok(output)).await.is_err() {
@@ -272,5 +271,11 @@ impl CommandService for CommandProxyService {
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::panic,
+    clippy::expect_used,
+    clippy::unwrap_used,
+    clippy::cast_possible_truncation
+)]
 #[path = "command_proxy_tests.rs"]
 mod tests;

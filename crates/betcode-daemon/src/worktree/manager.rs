@@ -64,8 +64,7 @@ fn validate_name(name: &str) -> Result<(), WorktreeError> {
         .all(|c| c.is_alphanumeric() || matches!(c, '-' | '_' | '.' | '/'))
     {
         return Err(WorktreeError::InvalidName(format!(
-            "name contains invalid characters: {}",
-            name
+            "name contains invalid characters: {name}"
         )));
     }
     Ok(())
@@ -74,7 +73,7 @@ fn validate_name(name: &str) -> Result<(), WorktreeError> {
 /// Validate a git branch name against safe character set.
 fn validate_branch(branch: &str) -> Result<(), WorktreeError> {
     validate_name(branch)
-        .map_err(|_| WorktreeError::InvalidName(format!("invalid branch name: {}", branch)))
+        .map_err(|_| WorktreeError::InvalidName(format!("invalid branch name: {branch}")))
 }
 
 /// Manages git worktrees and their lifecycle.
@@ -85,7 +84,7 @@ pub struct WorktreeManager {
 
 impl WorktreeManager {
     /// Create a new worktree manager.
-    pub fn new(db: Database) -> Self {
+    pub const fn new(db: Database) -> Self {
         Self { db }
     }
 
@@ -167,9 +166,8 @@ impl WorktreeManager {
 
     /// Remove a git worktree and its database record.
     pub async fn remove(&self, id: &str) -> Result<bool, WorktreeError> {
-        let wt = match self.db.get_worktree(id).await {
-            Ok(wt) => wt,
-            Err(_) => return Ok(false),
+        let Ok(wt) = self.db.get_worktree(id).await else {
+            return Ok(false);
         };
 
         let path = Path::new(&wt.path);
@@ -183,11 +181,11 @@ impl WorktreeManager {
                 .output()
                 .await?;
 
-            if !output.status.success() {
+            if output.status.success() {
+                info!(id, path = %path.display(), "Removed git worktree");
+            } else {
                 let stderr = String::from_utf8_lossy(&output.stderr);
                 warn!(id, error = %stderr.trim(), "git worktree remove failed, removing DB record anyway");
-            } else {
-                info!(id, path = %path.display(), "Removed git worktree");
             }
         }
 
@@ -230,7 +228,7 @@ impl WorktreeManager {
     }
 
     /// Get the worktree path for starting a session.
-    /// Updates last_active timestamp.
+    /// Updates `last_active` timestamp.
     pub async fn worktree_path(&self, id: &str) -> Result<PathBuf, WorktreeError> {
         let wt = self.db.get_worktree(id).await?;
         let path = PathBuf::from(&wt.path);

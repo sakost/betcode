@@ -13,7 +13,7 @@ use tracing::{debug, info, warn};
 use betcode_proto::v1::AgentEvent;
 
 use super::state::SessionState;
-use super::types::*;
+use super::types::{MultiplexerConfig, ClientHandle, MultiplexerError, InputLockResult, MultiplexerStats};
 
 /// Session multiplexer manages multiple client connections to sessions.
 pub struct SessionMultiplexer {
@@ -36,6 +36,7 @@ impl SessionMultiplexer {
     }
 
     /// Get or create a session.
+    #[allow(clippy::significant_drop_tightening)]
     pub async fn get_or_create_session(&self, session_id: &str) -> broadcast::Sender<AgentEvent> {
         let mut sessions = self.sessions.write().await;
 
@@ -46,12 +47,14 @@ impl SessionMultiplexer {
         let session = SessionState::new(session_id.to_string(), self.config.broadcast_capacity);
         let tx = session.event_tx.clone();
         sessions.insert(session_id.to_string(), session);
+        drop(sessions);
 
         info!(session_id, "Created new session");
         tx
     }
 
     /// Subscribe a client to a session.
+    #[allow(clippy::significant_drop_tightening)]
     pub async fn subscribe(
         &self,
         session_id: &str,
@@ -107,6 +110,7 @@ impl SessionMultiplexer {
     }
 
     /// Request input lock for a client.
+    #[allow(clippy::significant_drop_tightening)]
     pub async fn request_input_lock(
         &self,
         session_id: &str,
@@ -133,12 +137,11 @@ impl SessionMultiplexer {
                     granted: true,
                     previous_holder: None,
                 });
-            } else {
-                return Ok(InputLockResult {
-                    granted: false,
-                    previous_holder: Some(holder.clone()),
-                });
             }
+            return Ok(InputLockResult {
+                granted: false,
+                previous_holder: Some(holder.clone()),
+            });
         }
 
         session.input_lock_holder = Some(client_id.to_string());
@@ -176,10 +179,7 @@ impl SessionMultiplexer {
         if let Some(session) = sessions.get_mut(session_id) {
             event.sequence = session.next_sequence();
 
-            match session.event_tx.send(event) {
-                Ok(count) => debug!(session_id, receivers = count, "Event broadcast"),
-                Err(_) => debug!(session_id, "No receivers for broadcast"),
-            }
+            if let Ok(count) = session.event_tx.send(event) { debug!(session_id, receivers = count, "Event broadcast") } else { debug!(session_id, "No receivers for broadcast") }
         }
     }
 
@@ -221,7 +221,7 @@ impl SessionMultiplexer {
     /// Get session statistics.
     pub async fn stats(&self) -> MultiplexerStats {
         let sessions = self.sessions.read().await;
-        let total_clients: usize = sessions.values().map(|s| s.client_count()).sum();
+        let total_clients: usize = sessions.values().map(super::state::SessionState::client_count).sum();
 
         MultiplexerStats {
             session_count: sessions.len(),
@@ -234,8 +234,7 @@ impl SessionMultiplexer {
         let sessions = self.sessions.read().await;
         sessions
             .get(session_id)
-            .map(|s| s.input_lock_holder.as_deref() == Some(client_id))
-            .unwrap_or(false)
+            .is_some_and(|s| s.input_lock_holder.as_deref() == Some(client_id))
     }
 
     /// Create a sender channel for forwarding subprocess events.
@@ -261,6 +260,7 @@ impl SessionMultiplexer {
 }
 
 #[cfg(test)]
+#[allow(clippy::panic, clippy::expect_used, clippy::unwrap_used)]
 mod tests {
     use super::*;
 

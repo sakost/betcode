@@ -1,4 +1,4 @@
-//! AuthService gRPC implementation.
+//! `AuthService` gRPC implementation.
 
 use std::sync::Arc;
 
@@ -21,7 +21,7 @@ pub struct AuthServiceImpl {
 }
 
 impl AuthServiceImpl {
-    pub fn new(db: RelayDatabase, jwt: Arc<JwtManager>) -> Self {
+    pub const fn new(db: RelayDatabase, jwt: Arc<JwtManager>) -> Self {
         Self { db, jwt }
     }
 }
@@ -52,19 +52,19 @@ impl AuthService for AuthServiceImpl {
         let (access_token, expires_in) = self
             .jwt
             .issue_access_token(&user.id, &user.username)
-            .map_err(|e| Status::internal(format!("Token creation failed: {}", e)))?;
+            .map_err(|e| Status::internal(format!("Token creation failed: {e}")))?;
 
         let (refresh_token, refresh_exp) =
             self.jwt
                 .issue_refresh_token(&user.id, &user.username)
-                .map_err(|e| Status::internal(format!("Token creation failed: {}", e)))?;
+                .map_err(|e| Status::internal(format!("Token creation failed: {e}")))?;
 
         let token_id = uuid::Uuid::new_v4().to_string();
         let token_hash = JwtManager::hash_token(&refresh_token);
         self.db
             .create_token(&token_id, &user.id, &token_hash, refresh_exp)
             .await
-            .map_err(|e| Status::internal(format!("Token storage failed: {}", e)))?;
+            .map_err(|e| Status::internal(format!("Token storage failed: {e}")))?;
 
         info!(user_id = %user.id, username = %user.username, "User logged in");
 
@@ -99,30 +99,30 @@ impl AuthService for AuthServiceImpl {
         }
 
         let hash = password::hash_password(&req.password)
-            .map_err(|e| Status::internal(format!("Password hashing failed: {}", e)))?;
+            .map_err(|e| Status::internal(format!("Password hashing failed: {e}")))?;
 
         let user_id = uuid::Uuid::new_v4().to_string();
         self.db
             .create_user(&user_id, &req.username, &req.email, &hash)
             .await
-            .map_err(|e| Status::internal(format!("User creation failed: {}", e)))?;
+            .map_err(|e| Status::internal(format!("User creation failed: {e}")))?;
 
         let (access_token, expires_in) = self
             .jwt
             .issue_access_token(&user_id, &req.username)
-            .map_err(|e| Status::internal(format!("Token creation failed: {}", e)))?;
+            .map_err(|e| Status::internal(format!("Token creation failed: {e}")))?;
 
         let (refresh_token, refresh_exp) = self
             .jwt
             .issue_refresh_token(&user_id, &req.username)
-            .map_err(|e| Status::internal(format!("Token creation failed: {}", e)))?;
+            .map_err(|e| Status::internal(format!("Token creation failed: {e}")))?;
 
         let token_id = uuid::Uuid::new_v4().to_string();
         let token_hash = JwtManager::hash_token(&refresh_token);
         self.db
             .create_token(&token_id, &user_id, &token_hash, refresh_exp)
             .await
-            .map_err(|e| Status::internal(format!("Token storage failed: {}", e)))?;
+            .map_err(|e| Status::internal(format!("Token storage failed: {e}")))?;
 
         info!(user_id = %user_id, username = %req.username, "User registered");
 
@@ -155,31 +155,31 @@ impl AuthService for AuthServiceImpl {
             .db
             .get_token_by_hash(&token_hash)
             .await
-            .map_err(|e| Status::internal(format!("Token lookup failed: {}", e)))?
+            .map_err(|e| Status::internal(format!("Token lookup failed: {e}")))?
             .ok_or_else(|| Status::unauthenticated("Refresh token revoked or expired"))?;
 
         // Revoke old refresh token (rotation)
         self.db
             .revoke_token(&stored.id)
             .await
-            .map_err(|e| Status::internal(format!("Token revocation failed: {}", e)))?;
+            .map_err(|e| Status::internal(format!("Token revocation failed: {e}")))?;
 
         let (access_token, expires_in) = self
             .jwt
             .issue_access_token(&claims.sub, &claims.username)
-            .map_err(|e| Status::internal(format!("Token creation failed: {}", e)))?;
+            .map_err(|e| Status::internal(format!("Token creation failed: {e}")))?;
 
         let (refresh_token, refresh_exp) = self
             .jwt
             .issue_refresh_token(&claims.sub, &claims.username)
-            .map_err(|e| Status::internal(format!("Token creation failed: {}", e)))?;
+            .map_err(|e| Status::internal(format!("Token creation failed: {e}")))?;
 
         let new_token_id = uuid::Uuid::new_v4().to_string();
         let new_hash = JwtManager::hash_token(&refresh_token);
         self.db
             .create_token(&new_token_id, &claims.sub, &new_hash, refresh_exp)
             .await
-            .map_err(|e| Status::internal(format!("Token storage failed: {}", e)))?;
+            .map_err(|e| Status::internal(format!("Token storage failed: {e}")))?;
 
         Ok(Response::new(RefreshTokenResponse {
             access_token,
@@ -200,13 +200,13 @@ impl AuthService for AuthServiceImpl {
             .db
             .get_token_by_hash(&token_hash)
             .await
-            .map_err(|e| Status::internal(format!("Token lookup failed: {}", e)))?;
+            .map_err(|e| Status::internal(format!("Token lookup failed: {e}")))?;
 
         let revoked = if let Some(token) = stored {
             self.db
                 .revoke_token(&token.id)
                 .await
-                .map_err(|e| Status::internal(format!("Revocation failed: {}", e)))?
+                .map_err(|e| Status::internal(format!("Revocation failed: {e}")))?
         } else {
             false
         };

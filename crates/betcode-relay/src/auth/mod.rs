@@ -1,4 +1,4 @@
-//! Authentication module for BetCode relay.
+//! Authentication module for `BetCode` relay.
 //!
 //! Provides JWT token management and password hashing.
 

@@ -32,8 +32,8 @@ impl TlsMode {
     /// Returns `None` if TLS is disabled.
     pub fn to_server_tls_config(&self) -> Result<Option<ServerTlsConfig>, TlsConfigError> {
         match self {
-            TlsMode::Disabled => Ok(None),
-            TlsMode::DevSelfSigned { cert_dir } => {
+            Self::Disabled => Ok(None),
+            Self::DevSelfSigned { cert_dir } => {
                 info!("Generating dev TLS certificates");
                 let bundle = generate_dev_bundle(&["localhost", "127.0.0.1", "0.0.0.0"])
                     .map_err(|e| TlsConfigError::CertGeneration(e.to_string()))?;
@@ -46,7 +46,7 @@ impl TlsMode {
                 info!(cert_dir = %cert_dir.display(), "Dev TLS enabled");
                 Ok(Some(tls_config))
             }
-            TlsMode::Custom {
+            Self::Custom {
                 cert_path,
                 key_path,
             } => {
@@ -91,11 +91,12 @@ pub enum TlsConfigError {
 
 impl From<CertError> for TlsConfigError {
     fn from(e: CertError) -> Self {
-        TlsConfigError::CertGeneration(e.to_string())
+        Self::CertGeneration(e.to_string())
     }
 }
 
 #[cfg(test)]
+#[allow(clippy::panic, clippy::expect_used, clippy::unwrap_used)]
 mod tests {
     use super::*;
 

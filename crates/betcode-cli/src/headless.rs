@@ -31,6 +31,7 @@ pub struct HeadlessConfig {
 }
 
 /// Run headless mode.
+#[allow(clippy::too_many_lines, clippy::print_stderr)]
 pub async fn run(conn: &mut DaemonConnection, config: HeadlessConfig) -> Result<(), HeadlessError> {
     // Generate session ID if not provided
     let session_id = config
@@ -53,7 +54,7 @@ pub async fn run(conn: &mut DaemonConnection, config: HeadlessConfig) -> Result<
         Ok(_) => {} // No history, new session
         Err(e) => {
             // Non-fatal: session may be new
-            eprintln!("[Warning: could not load history: {}]", e);
+            eprintln!("[Warning: could not load history: {e}]");
         }
     }
 
@@ -68,8 +69,7 @@ pub async fn run(conn: &mut DaemonConnection, config: HeadlessConfig) -> Result<
             FingerprintCheck::TrustOnFirstUse | FingerprintCheck::Matched => {}
             FingerprintCheck::Mismatch { expected, actual } => {
                 return Err(HeadlessError::FatalError(format!(
-                    "Daemon fingerprint mismatch! Expected: {}, Actual: {}. Possible MITM attack.",
-                    expected, actual
+                    "Daemon fingerprint mismatch! Expected: {expected}, Actual: {actual}. Possible MITM attack."
                 )));
             }
         }
@@ -89,7 +89,7 @@ pub async fn run(conn: &mut DaemonConnection, config: HeadlessConfig) -> Result<
                     allowed_tools: Vec::new(),
                     plan_mode: false,
                     worktree_id: String::new(),
-                    metadata: Default::default(),
+                    metadata: std::collections::HashMap::default(),
                 },
             )),
         })
@@ -137,6 +137,7 @@ pub async fn run(conn: &mut DaemonConnection, config: HeadlessConfig) -> Result<
 }
 
 /// Process a single event in headless mode. Returns true if done.
+#[allow(clippy::print_stdout, clippy::print_stderr)]
 async fn process_headless_event(
     event: AgentEvent,
     request_tx: &mpsc::Sender<AgentRequest>,
@@ -222,6 +223,7 @@ async fn process_headless_event(
 }
 
 /// Print a historical event to stderr for headless context display.
+#[allow(clippy::print_stderr)]
 fn print_history_event(event: &AgentEvent) {
     match &event.event {
         Some(Event::TextDelta(delta)) if !delta.text.is_empty() => {

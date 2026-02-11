@@ -90,9 +90,9 @@ pub async fn run(conn: &mut DaemonConnection, action: WorktreeAction) -> anyhow:
         WorktreeAction::Remove { id } => {
             let resp = conn.remove_worktree(&id).await?;
             if resp.removed {
-                writeln!(out, "Worktree {} removed.", id)?;
+                writeln!(out, "Worktree {id} removed.")?;
             } else {
-                writeln!(out, "Worktree {} not found.", id)?;
+                writeln!(out, "Worktree {id} not found.")?;
             }
         }
     }

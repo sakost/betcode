@@ -1,4 +1,4 @@
-//! WorktreeService proxy that forwards calls through the tunnel to daemons.
+//! `WorktreeService` proxy that forwards calls through the tunnel to daemons.
 
 use std::sync::Arc;
 
@@ -19,13 +19,13 @@ use crate::router::RequestRouter;
 use crate::server::agent_proxy::extract_machine_id;
 use crate::server::interceptor::extract_claims;
 
-/// Proxies WorktreeService calls through the tunnel to a target daemon.
+/// Proxies `WorktreeService` calls through the tunnel to a target daemon.
 pub struct WorktreeProxyService {
     router: Arc<RequestRouter>,
 }
 
 impl WorktreeProxyService {
-    pub fn new(router: Arc<RequestRouter>) -> Self {
+    pub const fn new(router: Arc<RequestRouter>) -> Self {
         Self { router }
     }
 }
@@ -102,5 +102,6 @@ impl WorktreeService for WorktreeProxyService {
 }
 
 #[cfg(test)]
+#[allow(clippy::panic, clippy::expect_used, clippy::unwrap_used)]
 #[path = "worktree_proxy_tests.rs"]
 mod tests;

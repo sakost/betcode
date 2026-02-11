@@ -1,4 +1,4 @@
-//! Tests for AuthService gRPC implementation.
+//! Tests for `AuthService` gRPC implementation.
 
 use std::sync::Arc;
 

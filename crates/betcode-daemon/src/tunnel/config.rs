@@ -7,7 +7,7 @@ use std::time::Duration;
 /// Configuration for the daemon's tunnel connection to the relay.
 #[derive(Clone)]
 pub struct TunnelConfig {
-    /// Relay server URL (e.g., "https://relay.betcode.io:443").
+    /// Relay server URL (e.g., "<https://relay.betcode.io:443>").
     pub relay_url: String,
 
     /// Machine identifier for this daemon.
@@ -64,6 +64,12 @@ impl Default for ReconnectPolicy {
 
 impl ReconnectPolicy {
     /// Calculate the delay for a given attempt number (0-indexed).
+    #[allow(
+        clippy::cast_precision_loss,
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss,
+        clippy::cast_possible_wrap
+    )]
     pub fn delay_for_attempt(&self, attempt: u32) -> Duration {
         let base_ms = self.initial_delay.as_millis() as f64;
         let delay_ms = base_ms * self.multiplier.powi(attempt as i32);
@@ -72,7 +78,7 @@ impl ReconnectPolicy {
     }
 
     /// Whether another attempt should be made.
-    pub fn should_retry(&self, attempt: u32) -> bool {
+    pub const fn should_retry(&self, attempt: u32) -> bool {
         match self.max_attempts {
             Some(max) => attempt < max,
             None => true,
@@ -120,6 +126,7 @@ impl fmt::Debug for TunnelConfig {
 }
 
 #[cfg(test)]
+#[allow(clippy::panic, clippy::expect_used, clippy::unwrap_used, clippy::float_cmp)]
 mod tests {
     use super::*;
 

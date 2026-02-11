@@ -5,7 +5,7 @@
 use std::io::{self, Write};
 
 use crate::connection::DaemonConnection;
-use crate::gitlab_fmt::*;
+use crate::gitlab_fmt::{parse_mr_state, truncate, mr_state_str, write_mr_detail, parse_pipeline_status, pipeline_status_str, write_pipeline_detail, parse_issue_state, issue_state_str, write_issue_detail};
 
 /// GitLab subcommand actions.
 #[derive(clap::Subcommand, Debug)]
@@ -139,7 +139,7 @@ async fn run_mr(conn: &mut DaemonConnection, action: MrAction) -> anyhow::Result
             let resp = conn.get_merge_request(&project, iid).await?;
             match resp.merge_request {
                 Some(mr) => write_mr_detail(&mut out, &mr)?,
-                None => writeln!(out, "Merge request !{} not found.", iid)?,
+                None => writeln!(out, "Merge request !{iid} not found.")?,
             }
         }
     }
@@ -181,7 +181,7 @@ async fn run_pipeline(conn: &mut DaemonConnection, action: PipelineAction) -> an
             let resp = conn.get_pipeline(&project, id).await?;
             match resp.pipeline {
                 Some(p) => write_pipeline_detail(&mut out, &p)?,
-                None => writeln!(out, "Pipeline {} not found.", id)?,
+                None => writeln!(out, "Pipeline {id} not found.")?,
             }
         }
     }
@@ -223,7 +223,7 @@ async fn run_issue(conn: &mut DaemonConnection, action: IssueAction) -> anyhow::
             let resp = conn.get_issue(&project, iid).await?;
             match resp.issue {
                 Some(issue) => write_issue_detail(&mut out, &issue)?,
-                None => writeln!(out, "Issue #{} not found.", iid)?,
+                None => writeln!(out, "Issue #{iid} not found.")?,
             }
         }
     }

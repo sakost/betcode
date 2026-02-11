@@ -26,6 +26,12 @@ pub enum CompletionTrigger {
 /// - `@text` without path chars -> Agent
 /// - `!...` -> Bash
 /// - Otherwise -> None
+///
+/// # Panics
+///
+/// Panics if `rfind(char::is_whitespace)` returns an index that is not a valid
+/// char boundary, which is structurally impossible.
+#[allow(clippy::expect_used)]
 pub fn detect_trigger(input: &str, cursor_pos: usize) -> Option<CompletionTrigger> {
     let pos = cursor_pos.min(input.len());
     let before_cursor = &input[..pos];
@@ -42,14 +48,13 @@ pub fn detect_trigger(input: &str, cursor_pos: usize) -> Option<CompletionTrigge
     // Find the start of the current token by scanning backwards to whitespace
     let token_start = before_cursor
         .rfind(char::is_whitespace)
-        .map(|i| {
+        .map_or(0, |i| {
             i + before_cursor[i..]
                 .chars()
                 .next()
                 .expect("rfind returned a valid char index")
                 .len_utf8()
-        })
-        .unwrap_or(0);
+        });
 
     let token = &before_cursor[token_start..];
     if token.is_empty() {
@@ -116,7 +121,7 @@ pub fn looks_like_path(text: &str) -> bool {
     // Check for file extension pattern: something.ext where ext is alphanumeric
     if let Some(dot_pos) = text.rfind('.') {
         let ext = &text[dot_pos + 1..];
-        if !ext.is_empty() && ext.chars().all(|c| c.is_alphanumeric()) {
+        if !ext.is_empty() && ext.chars().all(char::is_alphanumeric) {
             return true;
         }
     }

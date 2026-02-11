@@ -19,7 +19,7 @@ enum BottomPanel {
     Fingerprint,
 }
 
-fn bottom_panel_mode(app: &App) -> BottomPanel {
+const fn bottom_panel_mode(app: &App) -> BottomPanel {
     match app.mode {
         AppMode::PermissionPrompt => BottomPanel::Permission,
         AppMode::PermissionEditInput
@@ -32,7 +32,11 @@ fn bottom_panel_mode(app: &App) -> BottomPanel {
 }
 
 /// Draw the full UI.
-pub fn draw(frame: &mut Frame, app: &mut App) {
+#[allow(clippy::too_many_lines)]
+pub fn draw(frame: &mut Frame<'_>, app: &mut App) {
+    use crate::app::COMPLETION_VISIBLE_COUNT;
+    use crate::ui::status_panel::{render_status_panel, SessionStatusInfo};
+
     let bottom_panel = bottom_panel_mode(app);
 
     let frame_width = frame.area().width;
@@ -60,8 +64,8 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
             let opt_count = app
                 .pending_question
                 .as_ref()
-                .map(|q| q.options.len())
-                .unwrap_or(0);
+                .map_or(0, |q| q.options.len());
+            #[allow(clippy::cast_possible_truncation)]
             let lines = 2 + opt_count as u16 + 2;
             (lines + 2).min(frame.area().height / 2).max(6)
         }
@@ -98,8 +102,12 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     // Render completion popup overlay if visible
     let area = frame.area();
     if app.completion_state.popup_visible && !app.completion_state.items.is_empty() {
-        use crate::app::COMPLETION_VISIBLE_COUNT;
-        let visible_count = app.completion_state.items.len().min(COMPLETION_VISIBLE_COUNT);
+        let visible_count = app
+            .completion_state
+            .items
+            .len()
+            .min(COMPLETION_VISIBLE_COUNT);
+        #[allow(clippy::cast_possible_truncation)]
         let popup_height = visible_count as u16 + 2; // +2 for borders
 
         let popup_area = Rect {
@@ -111,7 +119,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
 
         let offset = app.completion_state.scroll_offset;
         let end = (offset + COMPLETION_VISIBLE_COUNT).min(app.completion_state.items.len());
-        let items: Vec<Line> = app.completion_state.items[offset..end]
+        let items: Vec<Line<'_>> = app.completion_state.items[offset..end]
             .iter()
             .enumerate()
             .map(|(i, item)| {
@@ -133,20 +141,13 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
 
     // Render status panel overlay if visible
     if app.show_status_panel {
-        use crate::ui::status_panel::{render_status_panel, SessionStatusInfo};
         let info = SessionStatusInfo {
-            cwd: std::env::current_dir()
-                .map(|p| p.display().to_string())
-                .unwrap_or_else(|_| "unknown".to_string()),
+            cwd: std::env::current_dir().map_or_else(|_| "unknown".to_string(), |p| p.display().to_string()),
             session_id: app.session_id.clone().unwrap_or_else(|| "none".to_string()),
             connection: app.connection_type.clone(),
             model: app.model.clone(),
             active_agents: 0,
-            pending_permissions: if app.pending_permission.is_some() {
-                1
-            } else {
-                0
-            },
+            pending_permissions: usize::from(app.pending_permission.is_some()),
             worktree: None,
             uptime_secs: 0,
         };
@@ -154,7 +155,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     }
 }
 
-fn draw_header(frame: &mut Frame, app: &App, area: Rect) {
+fn draw_header(frame: &mut Frame<'_>, app: &App, area: Rect) {
     let model_info = if app.model.is_empty() {
         "BetCode".to_string()
     } else {
@@ -180,8 +181,8 @@ fn draw_header(frame: &mut Frame, app: &App, area: Rect) {
     frame.render_widget(header, area);
 }
 
-fn draw_messages(frame: &mut Frame, app: &mut App, area: Rect) {
-    let mut lines: Vec<Line> = Vec::new();
+fn draw_messages(frame: &mut Frame<'_>, app: &mut App, area: Rect) {
+    let mut lines: Vec<Line<'_>> = Vec::new();
 
     for (i, msg) in app.messages.iter().enumerate() {
         // Add empty line separator between messages (not before the first)
@@ -237,6 +238,7 @@ fn draw_messages(frame: &mut Frame, app: &mut App, area: Rect) {
     // Use ratatui's own word-wrap line count so scroll range exactly matches
     // what the Paragraph widget actually renders.
     let paragraph = Paragraph::new(lines).wrap(Wrap { trim: false });
+    #[allow(clippy::cast_possible_truncation)]
     let total = paragraph.line_count(inner_width) as u16;
 
     app.viewport_height = inner_height;
@@ -249,15 +251,15 @@ fn draw_messages(frame: &mut Frame, app: &mut App, area: Rect) {
         max_scroll.saturating_sub(app.scroll_offset)
     };
 
-    let title = if !app.scroll_pinned {
+    let title = if app.scroll_pinned {
+        "Conversation".to_string()
+    } else {
         let position = max_scroll.saturating_sub(scroll);
         format!(
             "Conversation [scroll: {}/{}]",
             position.min(max_scroll),
             max_scroll
         )
-    } else {
-        "Conversation".to_string()
     };
 
     let messages = paragraph
@@ -271,17 +273,19 @@ fn draw_messages(frame: &mut Frame, app: &mut App, area: Rect) {
     frame.render_widget(messages, area);
 }
 
-fn draw_input(frame: &mut Frame, app: &App, area: Rect) {
+#[allow(clippy::option_if_let_else)]
+fn draw_input(frame: &mut Frame<'_>, app: &App, area: Rect) {
+    use crate::completion::controller::detect_trigger;
+    use crate::completion::ghost::ghost_suffix;
+
     // Build input line with optional ghost text suffix inserted at cursor position
     let input_line = if let Some(ref ghost) = app.completion_state.ghost_text {
-        use crate::completion::controller::detect_trigger;
-        use crate::completion::ghost::ghost_suffix;
 
         let query = detect_trigger(&app.input, app.cursor_pos).and_then(|t| match t {
-            crate::completion::controller::CompletionTrigger::Command { query } => Some(query),
-            crate::completion::controller::CompletionTrigger::Agent { query, .. } => Some(query),
-            crate::completion::controller::CompletionTrigger::File { query } => Some(query),
-            _ => None,
+            crate::completion::controller::CompletionTrigger::Command { query }
+            | crate::completion::controller::CompletionTrigger::Agent { query, .. }
+            | crate::completion::controller::CompletionTrigger::File { query } => Some(query),
+            crate::completion::controller::CompletionTrigger::Bash { .. } => None,
         });
 
         // Only show ghost text when cursor is at the end of the current token
@@ -340,7 +344,7 @@ fn draw_input(frame: &mut Frame, app: &App, area: Rect) {
     frame.set_cursor_position((cursor_x, cursor_y));
 }
 
-fn draw_status_bar(frame: &mut Frame, app: &App, area: Rect) {
+fn draw_status_bar(frame: &mut Frame<'_>, app: &App, area: Rect) {
     let usage = app.token_usage.as_ref().map_or(String::new(), |u| {
         format!(
             " | Tokens: {}in/{}out | ${:.4}",
@@ -357,14 +361,14 @@ fn draw_status_bar(frame: &mut Frame, app: &App, area: Rect) {
             if app
                 .pending_fingerprint
                 .as_ref()
-                .is_some_and(|fp| fp.needs_action())
+                .is_some_and(super::super::tui::fingerprint_panel::FingerprintPrompt::needs_action)
             {
                 " | Y:accept N/Esc:reject"
             } else {
                 " | Press any key to continue"
             }
         }
-        _ => " | Ctrl+C: quit | Enter: send",
+        AppMode::Normal | AppMode::SessionList => " | Ctrl+C: quit | Enter: send",
     };
 
     let status = Paragraph::new(Line::from(vec![
@@ -381,6 +385,7 @@ fn draw_status_bar(frame: &mut Frame, app: &App, area: Rect) {
 /// - Breaks at word boundaries (spaces) when a word would overflow the line
 /// - Long words that exceed the line width break at the character boundary
 /// - Leading whitespace is preserved on wrapped lines
+#[allow(clippy::cast_possible_truncation)]
 pub fn compute_wrapped_cursor(text: &str, cursor_pos: usize, max_width: usize) -> (u16, u16) {
     if max_width == 0 {
         return (0, 0);
@@ -426,6 +431,7 @@ pub fn compute_wrapped_cursor(text: &str, cursor_pos: usize, max_width: usize) -
 /// - The space before a wrapped word is consumed (not rendered)
 /// - Whitespace is preserved as leading indent when trim=false
 /// - Long words exceeding the line width are broken at character boundaries
+#[allow(clippy::too_many_lines, clippy::cast_possible_truncation, clippy::expect_used)]
 fn compute_word_wrap_breaks(text: &str, max_width: u16) -> Vec<usize> {
     if text.is_empty() {
         return Vec::new();
@@ -528,45 +534,43 @@ fn compute_word_wrap_breaks(text: &str, max_width: u16) -> Vec<usize> {
                     line_width = remaining_ws + word_w;
                     i += 2; // consumed ws + word
                     continue;
-                } else {
-                    // Fits: add ws + word
-                    line_width += tok_w + word_w;
-                    i += 2;
-                    continue;
                 }
-            } else {
-                // Trailing whitespace, just add it
-                line_width += tok_w;
-                i += 1;
+                // Fits: add ws + word
+                line_width += tok_w + word_w;
+                i += 2;
                 continue;
             }
-        } else {
-            // Word token
-            if line_width + tok_w > max_width {
-                if line_width > 0 {
-                    // Word overflows current line: wrap
-                    breaks.push(tok_start);
-                }
-                // Word alone may exceed line width: break at character boundary
-                if tok_w > max_width {
-                    let remaining =
-                        break_long_word(text, tok_start, tok_end, max_width, &mut breaks);
-                    line_width = remaining;
-                } else {
-                    line_width = tok_w;
-                }
-            } else {
-                line_width += tok_w;
-            }
+            // Trailing whitespace, just add it
+            line_width += tok_w;
             i += 1;
+            continue;
         }
+        // Word token
+        if line_width + tok_w > max_width {
+            if line_width > 0 {
+                // Word overflows current line: wrap
+                breaks.push(tok_start);
+            }
+            // Word alone may exceed line width: break at character boundary
+            if tok_w > max_width {
+                let remaining =
+                    break_long_word(text, tok_start, tok_end, max_width, &mut breaks);
+                line_width = remaining;
+            } else {
+                line_width = tok_w;
+            }
+        } else {
+            line_width += tok_w;
+        }
+        i += 1;
     }
 
     breaks
 }
 
-/// Break a long word that exceeds max_width at character boundaries.
+/// Break a long word that exceeds `max_width` at character boundaries.
 /// Returns the width of the last (partial) line produced.
+#[allow(clippy::cast_possible_truncation)]
 fn break_long_word(
     text: &str,
     start: usize,

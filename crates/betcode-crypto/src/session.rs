@@ -180,9 +180,9 @@ pub fn ecdh(local_secret: &StaticSecret, remote_public: &PublicKey) -> [u8; 32] 
     *local_secret.diffie_hellman(remote_public).as_bytes()
 }
 
-/// Create a matched pair of CryptoSessions for testing.
+/// Create a matched pair of `CryptoSessions` for testing.
 ///
-/// Returns (client_session, server_session) that can encrypt/decrypt each other's data.
+/// Returns (`client_session`, `server_session`) that can encrypt/decrypt each other's data.
 #[cfg(any(test, feature = "test-utils"))]
 pub fn test_session_pair() -> Result<(CryptoSession, CryptoSession), CryptoError> {
     let client_secret = StaticSecret::random_from_rng(OsRng);
@@ -198,6 +198,7 @@ pub fn test_session_pair() -> Result<(CryptoSession, CryptoSession), CryptoError
 }
 
 #[cfg(test)]
+#[allow(clippy::panic, clippy::expect_used, clippy::unwrap_used)]
 mod tests {
     use super::*;
 
@@ -422,8 +423,7 @@ mod tests {
         let result = client.encrypt(b"should fail");
         assert!(
             matches!(result, Err(CryptoError::NonceExhausted)),
-            "expected NonceExhausted, got {:?}",
-            result
+            "expected NonceExhausted, got {result:?}"
         );
     }
 
@@ -452,7 +452,7 @@ mod tests {
             match h.join().unwrap() {
                 Ok(_) => success += 1,
                 Err(CryptoError::NonceExhausted) => exhausted += 1,
-                Err(e) => panic!("unexpected error: {:?}", e),
+                Err(e) => panic!("unexpected error: {e:?}"),
             }
         }
         // Exactly 100 should succeed (counters MAX-100 through MAX-1)

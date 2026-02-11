@@ -16,9 +16,9 @@ pub struct TunnelConnection {
     pub owner_id: String,
     /// Sender for pushing frames to the daemon through the tunnel.
     pub frame_tx: mpsc::Sender<TunnelFrame>,
-    /// Pending response waiters for unary requests (single response per request_id).
+    /// Pending response waiters for unary requests (single response per `request_id`).
     pub pending: Arc<RwLock<HashMap<String, oneshot::Sender<TunnelFrame>>>>,
-    /// Pending stream channels for streaming requests (multiple frames per request_id).
+    /// Pending stream channels for streaming requests (multiple frames per `request_id`).
     stream_pending: Arc<RwLock<HashMap<String, mpsc::Sender<TunnelFrame>>>>,
     /// Request IDs of streams whose receivers were dropped (client disconnected).
     /// Used to silently drop subsequent frames instead of warning.
@@ -54,11 +54,8 @@ impl TunnelConnection {
 
     /// Complete a pending request with a response frame.
     pub async fn complete_pending(&self, request_id: &str, frame: TunnelFrame) -> bool {
-        if let Some(tx) = self.pending.write().await.remove(request_id) {
-            tx.send(frame).is_ok()
-        } else {
-            false
-        }
+        let tx = self.pending.write().await.remove(request_id);
+        tx.is_some_and(|tx| tx.send(frame).is_ok())
     }
 
     // --- Stream pending (mpsc) ---
@@ -106,7 +103,7 @@ impl TunnelConnection {
             .is_some()
     }
 
-    /// Check if a request_id has an active stream channel.
+    /// Check if a `request_id` has an active stream channel.
     pub async fn has_stream_pending(&self, request_id: &str) -> bool {
         self.stream_pending.read().await.contains_key(request_id)
     }
@@ -116,7 +113,7 @@ impl TunnelConnection {
         self.cancelled_streams.read().await.contains(request_id)
     }
 
-    /// Remove a request_id from the cancelled set (e.g. after StreamEnd cleanup).
+    /// Remove a `request_id` from the cancelled set (e.g. after `StreamEnd` cleanup).
     pub async fn clear_cancelled_stream(&self, request_id: &str) {
         self.cancelled_streams.write().await.remove(request_id);
     }
@@ -214,6 +211,7 @@ impl Default for ConnectionRegistry {
 }
 
 #[cfg(test)]
+#[allow(clippy::panic, clippy::expect_used, clippy::unwrap_used)]
 mod tests {
     use super::*;
     use betcode_proto::v1::FrameType;

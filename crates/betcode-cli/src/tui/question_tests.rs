@@ -1,6 +1,7 @@
 //! Tests for user question input handling.
 
 #[cfg(test)]
+#[allow(clippy::panic, clippy::expect_used, clippy::unwrap_used)]
 mod tests {
     use crate::app::{App, AppMode, PendingUserQuestion, QuestionOptionDisplay};
     use betcode_proto::v1::AgentRequest;

@@ -59,6 +59,7 @@ pub async fn forward_unary<Req: Message, Resp: Message + Default>(
 }
 
 #[cfg(test)]
+#[allow(clippy::panic, clippy::expect_used, clippy::unwrap_used)]
 mod tests {
     use tonic::{Code, Status};
 

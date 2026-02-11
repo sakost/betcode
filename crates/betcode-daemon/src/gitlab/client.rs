@@ -23,7 +23,7 @@ pub enum GitLabError {
 /// Configuration for connecting to a GitLab instance.
 #[derive(Debug, Clone)]
 pub struct GitLabConfig {
-    /// GitLab instance URL (e.g., "https://gitlab.com").
+    /// GitLab instance URL (e.g., "<https://gitlab.com>").
     pub base_url: String,
     /// Personal access token or OAuth token.
     pub token: String,
@@ -96,12 +96,13 @@ impl GitLabClient {
         let encoded = Self::encode_project(project);
         let mut url = format!(
             "{}?per_page={}&page={}",
-            self.api_url(&format!("/projects/{}/merge_requests", encoded)),
+            self.api_url(&format!("/projects/{encoded}/merge_requests")),
             per_page,
             page
         );
         if let Some(s) = state {
-            url.push_str(&format!("&state={}", s));
+            use std::fmt::Write;
+            let _ = write!(url, "&state={s}");
         }
         let resp = self.http.get(&url).send().await?;
         Self::check_status(&resp)?;
@@ -115,7 +116,7 @@ impl GitLabClient {
         iid: u64,
     ) -> Result<MergeRequest, GitLabError> {
         let encoded = Self::encode_project(project);
-        let url = self.api_url(&format!("/projects/{}/merge_requests/{}", encoded, iid));
+        let url = self.api_url(&format!("/projects/{encoded}/merge_requests/{iid}"));
         let resp = self.http.get(&url).send().await?;
         Self::check_status(&resp)?;
         Ok(resp.json().await?)
@@ -136,12 +137,13 @@ impl GitLabClient {
         let encoded = Self::encode_project(project);
         let mut url = format!(
             "{}?per_page={}&page={}",
-            self.api_url(&format!("/projects/{}/pipelines", encoded)),
+            self.api_url(&format!("/projects/{encoded}/pipelines")),
             per_page,
             page
         );
         if let Some(s) = status {
-            url.push_str(&format!("&status={}", s));
+            use std::fmt::Write;
+            let _ = write!(url, "&status={s}");
         }
         let resp = self.http.get(&url).send().await?;
         Self::check_status(&resp)?;
@@ -155,7 +157,7 @@ impl GitLabClient {
         pipeline_id: u64,
     ) -> Result<Pipeline, GitLabError> {
         let encoded = Self::encode_project(project);
-        let url = self.api_url(&format!("/projects/{}/pipelines/{}", encoded, pipeline_id));
+        let url = self.api_url(&format!("/projects/{encoded}/pipelines/{pipeline_id}"));
         let resp = self.http.get(&url).send().await?;
         Self::check_status(&resp)?;
         Ok(resp.json().await?)
@@ -176,12 +178,13 @@ impl GitLabClient {
         let encoded = Self::encode_project(project);
         let mut url = format!(
             "{}?per_page={}&page={}",
-            self.api_url(&format!("/projects/{}/issues", encoded)),
+            self.api_url(&format!("/projects/{encoded}/issues")),
             per_page,
             page
         );
         if let Some(s) = state {
-            url.push_str(&format!("&state={}", s));
+            use std::fmt::Write;
+            let _ = write!(url, "&state={s}");
         }
         let resp = self.http.get(&url).send().await?;
         Self::check_status(&resp)?;
@@ -191,7 +194,7 @@ impl GitLabClient {
     /// Get a single issue by IID.
     pub async fn get_issue(&self, project: &str, iid: u64) -> Result<Issue, GitLabError> {
         let encoded = Self::encode_project(project);
-        let url = self.api_url(&format!("/projects/{}/issues/{}", encoded, iid));
+        let url = self.api_url(&format!("/projects/{encoded}/issues/{iid}"));
         let resp = self.http.get(&url).send().await?;
         Self::check_status(&resp)?;
         Ok(resp.json().await?)

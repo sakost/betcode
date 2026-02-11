@@ -118,9 +118,7 @@ impl IdentityKeyPair {
             if mode != 0o600 {
                 return Err(CryptoError::IoError(std::io::Error::new(
                     std::io::ErrorKind::PermissionDenied,
-                    format!(
-                        "Identity key file has insecure permissions: {mode:o} (expected 600)"
-                    ),
+                    format!("Identity key file has insecure permissions: {mode:o} (expected 600)"),
                 )));
             }
         }
@@ -156,6 +154,7 @@ pub fn fingerprint_of(pubkey_bytes: &[u8; 32]) -> String {
 }
 
 #[cfg(test)]
+#[allow(clippy::panic, clippy::expect_used, clippy::unwrap_used)]
 mod tests {
     use super::*;
 
@@ -209,7 +208,7 @@ mod tests {
                 expected: 32,
                 actual: 16,
             } => {}
-            _ => panic!("wrong error: {:?}", err),
+            _ => panic!("wrong error: {err:?}"),
         }
     }
 
@@ -267,7 +266,7 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
 
         // Write 16 bytes instead of 32 — read_exact should fail
-        std::fs::write(&path, &[0u8; 16]).unwrap();
+        std::fs::write(&path, [0u8; 16]).unwrap();
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
@@ -292,7 +291,7 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
 
         // Simulate partial write (20 bytes instead of 32)
-        std::fs::write(&path, &[0u8; 20]).unwrap();
+        std::fs::write(&path, [0u8; 20]).unwrap();
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
@@ -354,7 +353,7 @@ mod tests {
     #[test]
     fn debug_impl_redacts_secret() {
         let kp = IdentityKeyPair::generate();
-        let debug_output = format!("{:?}", kp);
+        let debug_output = format!("{kp:?}");
         assert!(
             debug_output.contains("[REDACTED]"),
             "Debug output should redact secret key"

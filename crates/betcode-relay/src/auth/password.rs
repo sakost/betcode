@@ -21,6 +21,7 @@ pub fn verify_password(password: &str, hash: &str) -> Result<bool, argon2::passw
 }
 
 #[cfg(test)]
+#[allow(clippy::panic, clippy::expect_used, clippy::unwrap_used)]
 mod tests {
     use super::*;
 

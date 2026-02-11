@@ -27,7 +27,7 @@ pub struct HealthServiceImpl {
 
 impl HealthServiceImpl {
     /// Create a new health service.
-    pub fn new(db: Database, subprocess_manager: Arc<SubprocessManager>) -> Self {
+    pub const fn new(db: Database, subprocess_manager: Arc<SubprocessManager>) -> Self {
         Self {
             db,
             subprocess_manager,
@@ -61,7 +61,7 @@ impl HealthServiceImpl {
         ComponentHealth {
             name: "subprocess_pool".to_string(),
             status: ServingStatus::Serving.into(),
-            message: format!("{}/{} subprocess slots in use", active, capacity),
+            message: format!("{active}/{capacity} subprocess slots in use"),
             last_check: Some(prost_types::Timestamp::from(std::time::SystemTime::now())),
         }
     }

@@ -1,4 +1,4 @@
-//! Tests for AgentProxyService.
+//! Tests for `AgentProxyService`.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -406,6 +406,6 @@ async fn encrypted_agent_event_forwards_through_proxy() {
                 "nonce should pass through relay unchanged"
             );
         }
-        other => panic!("Expected Encrypted event, got {:?}", other),
+        other => panic!("Expected Encrypted event, got {other:?}"),
     }
 }

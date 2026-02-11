@@ -17,7 +17,7 @@ pub struct PermissionResponse {
 
 /// Session-scoped permission grant.
 #[derive(Debug, Clone)]
-pub(crate) struct SessionGrant {
+pub struct SessionGrant {
     pub tool_name: String,
     pub path_pattern: Option<String>,
     pub granted: bool,

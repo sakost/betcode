@@ -55,13 +55,15 @@ impl ServerConfig {
     }
 
     /// Set max sessions.
-    pub fn with_max_sessions(mut self, max: usize) -> Self {
+    #[must_use]
+    pub const fn with_max_sessions(mut self, max: usize) -> Self {
         self.max_sessions = max;
         self
     }
 
     /// Set max clients per session.
-    pub fn with_max_clients_per_session(mut self, max: usize) -> Self {
+    #[must_use]
+    pub const fn with_max_clients_per_session(mut self, max: usize) -> Self {
         self.max_clients_per_session = max;
         self
     }

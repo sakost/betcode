@@ -1,5 +1,6 @@
 //! Tunnel client that connects the daemon to a relay server.
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use tokio::sync::mpsc;
@@ -34,11 +35,11 @@ pub struct TunnelClient {
     db: Database,
     /// X25519 identity keypair for E2E encryption key exchange.
     identity: Arc<IdentityKeyPair>,
-    /// Optional CommandServiceImpl for handling command RPCs through the tunnel.
+    /// Optional `CommandServiceImpl` for handling command RPCs through the tunnel.
     command_service: Option<Arc<CommandServiceImpl>>,
-    /// Optional GitLabServiceImpl for handling GitLab RPCs through the tunnel.
+    /// Optional `GitLabServiceImpl` for handling GitLab RPCs through the tunnel.
     gitlab_service: Option<Arc<GitLabServiceImpl>>,
-    /// Optional WorktreeServiceImpl for handling worktree RPCs through the tunnel.
+    /// Optional `WorktreeServiceImpl` for handling worktree RPCs through the tunnel.
     worktree_service: Option<Arc<WorktreeServiceImpl>>,
 }
 
@@ -66,17 +67,17 @@ impl TunnelClient {
         })
     }
 
-    /// Set the CommandService implementation for handling command RPCs through the tunnel.
+    /// Set the `CommandService` implementation for handling command RPCs through the tunnel.
     pub fn set_command_service(&mut self, service: Arc<CommandServiceImpl>) {
         self.command_service = Some(service);
     }
 
-    /// Set the GitLabService implementation for handling GitLab RPCs through the tunnel.
+    /// Set the `GitLabService` implementation for handling GitLab RPCs through the tunnel.
     pub fn set_gitlab_service(&mut self, service: Arc<GitLabServiceImpl>) {
         self.gitlab_service = Some(service);
     }
 
-    /// Set the WorktreeService implementation for handling worktree RPCs through the tunnel.
+    /// Set the `WorktreeService` implementation for handling worktree RPCs through the tunnel.
     pub fn set_worktree_service(&mut self, service: Arc<WorktreeServiceImpl>) {
         self.worktree_service = Some(service);
     }
@@ -90,7 +91,7 @@ impl TunnelClient {
                 .join("identity.key")
         });
         IdentityKeyPair::load_or_generate(&path)
-            .map_err(|e| TunnelClientError::Auth(format!("Failed to load identity key: {}", e)))
+            .map_err(|e| TunnelClientError::Auth(format!("Failed to load identity key: {e}")))
     }
 
     /// Run the tunnel client with automatic reconnection.
@@ -128,7 +129,7 @@ impl TunnelClient {
                     warn!(error = %e, attempt, delay_ms = delay.as_millis(), "Reconnecting");
 
                     tokio::select! {
-                        _ = sleep(delay) => {}
+                        () = sleep(delay) => {}
                         _ = shutdown.changed() => {
                             info!("Tunnel client shutting down during reconnect wait");
                             return;
@@ -205,7 +206,7 @@ impl TunnelClient {
         let mut request = Request::new(outbound_stream);
         request.metadata_mut().insert(
             "authorization",
-            format!("Bearer {}", token)
+            format!("Bearer {token}")
                 .parse()
                 .map_err(|_| TunnelClientError::Auth("Invalid token format".into()))?,
         );
@@ -247,12 +248,12 @@ impl TunnelClient {
         let mut request = Request::new(TunnelRegisterRequest {
             machine_id: self.config.machine_id.clone(),
             machine_name: self.config.machine_name.clone(),
-            capabilities: Default::default(),
+            capabilities: HashMap::default(),
             identity_pubkey: self.identity.public_bytes().to_vec(),
         });
         request.metadata_mut().insert(
             "authorization",
-            format!("Bearer {}", token)
+            format!("Bearer {token}")
                 .parse()
                 .map_err(|_| TunnelClientError::Auth("Invalid token format".into()))?,
         );
@@ -284,8 +285,7 @@ impl TunnelClient {
             payload: Some(betcode_proto::v1::tunnel_frame::Payload::Control(
                 TunnelControl {
                     control_type: TunnelControlType::Unspecified as i32,
-                    params: [("machine_id".to_string(), self.config.machine_id.clone())]
-                        .into_iter()
+                    params: std::iter::once(("machine_id".to_string(), self.config.machine_id.clone()))
                         .collect(),
                 },
             )),
@@ -342,11 +342,10 @@ impl TunnelClient {
                             betcode_proto::v1::tunnel_frame::Payload::Control(
                                 TunnelControl {
                                     control_type: TunnelControlType::Ping as i32,
-                                    params: [(
+                                    params: std::iter::once((
                                         "machine_id".to_string(),
                                         machine_id.clone(),
-                                    )]
-                                    .into_iter()
+                                    ))
                                     .collect(),
                                 },
                             ),

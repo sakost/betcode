@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PluginStatus {
     Healthy,
     Degraded,
@@ -15,7 +15,7 @@ pub struct PluginHealth {
 }
 
 impl PluginHealth {
-    pub fn new(degraded_threshold: u32, unavailable_threshold: u32) -> Self {
+    pub const fn new(degraded_threshold: u32, unavailable_threshold: u32) -> Self {
         Self {
             consecutive_failures: 0,
             degraded_threshold,
@@ -23,7 +23,7 @@ impl PluginHealth {
         }
     }
 
-    pub fn status(&self) -> PluginStatus {
+    pub const fn status(&self) -> PluginStatus {
         if self.consecutive_failures >= self.unavailable_threshold {
             PluginStatus::Unavailable
         } else if self.consecutive_failures >= self.degraded_threshold {
@@ -33,15 +33,15 @@ impl PluginHealth {
         }
     }
 
-    pub fn record_failure(&mut self) {
+    pub const fn record_failure(&mut self) {
         self.consecutive_failures += 1;
     }
 
-    pub fn record_success(&mut self) {
+    pub const fn record_success(&mut self) {
         self.consecutive_failures = 0;
     }
 
-    pub fn reset(&mut self) {
+    pub const fn reset(&mut self) {
         self.consecutive_failures = 0;
     }
 }

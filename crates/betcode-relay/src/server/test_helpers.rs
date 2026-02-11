@@ -3,7 +3,6 @@
 //! Provides common setup and utility functions used across
 //! `agent_proxy_tests`, `command_proxy_tests`, `gitlab_proxy_tests`,
 //! and `worktree_proxy_tests`.
-
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
@@ -12,9 +11,7 @@ use prost::Message;
 use tokio::sync::mpsc;
 use tonic::Request;
 
-use betcode_proto::v1::{
-    EncryptedPayload, FrameType, StreamPayload, TunnelErrorCode, TunnelFrame,
-};
+use betcode_proto::v1::{EncryptedPayload, FrameType, StreamPayload, TunnelErrorCode, TunnelFrame};
 
 use crate::auth::claims::Claims;
 use crate::buffer::BufferManager;

@@ -26,11 +26,12 @@ pub enum DatabaseError {
 
 impl From<sqlx::Error> for DatabaseError {
     fn from(e: sqlx::Error) -> Self {
-        DatabaseError::Query(e.to_string())
+        Self::Query(e.to_string())
     }
 }
 
 /// Returns the current time as a Unix timestamp (seconds since epoch).
+#[allow(clippy::cast_possible_wrap)]
 pub fn unix_timestamp() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -45,9 +46,9 @@ pub fn base64_encode(data: &[u8]) -> String {
     let mut result = String::with_capacity(data.len().div_ceil(3) * 4);
 
     for chunk in data.chunks(3) {
-        let b0 = chunk[0] as u32;
-        let b1 = chunk.get(1).copied().unwrap_or(0) as u32;
-        let b2 = chunk.get(2).copied().unwrap_or(0) as u32;
+        let b0 = u32::from(chunk[0]);
+        let b1 = u32::from(chunk.get(1).copied().unwrap_or(0));
+        let b2 = u32::from(chunk.get(2).copied().unwrap_or(0));
         let n = (b0 << 16) | (b1 << 8) | b2;
 
         let _ = result.write_char(CHARS[(n >> 18 & 0x3F) as usize] as char);
@@ -70,6 +71,7 @@ pub fn base64_encode(data: &[u8]) -> String {
 
 /// Simple base64 decoding for stored event payloads.
 pub fn base64_decode(input: &str) -> Result<Vec<u8>, String> {
+    #[allow(clippy::cast_possible_truncation)]
     const DECODE: [u8; 128] = {
         let mut table = [255u8; 128];
         let chars = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
@@ -93,7 +95,7 @@ pub fn base64_decode(input: &str) -> Result<Vec<u8>, String> {
             if b as usize >= 128 || DECODE[b as usize] == 255 {
                 return Err(format!("Invalid base64 character: {}", b as char));
             }
-            n |= (DECODE[b as usize] as u32) << (18 - i * 6);
+            n |= u32::from(DECODE[b as usize]) << (18 - i * 6);
         }
 
         result.push((n >> 16 & 0xFF) as u8);

@@ -36,7 +36,7 @@ pub fn is_service_command(input: &str) -> bool {
     false
 }
 
-/// Parses input into a typed ServiceCommand, returning None if not a service command.
+/// Parses input into a typed `ServiceCommand`, returning None if not a service command.
 pub fn parse_service_command(input: &str) -> Option<ServiceCommand> {
     let trimmed = input.trim();
 

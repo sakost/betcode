@@ -1,6 +1,6 @@
-//! BetCode Core Library
+//! `BetCode` Core Library
 //!
-//! Shared functionality for BetCode components:
+//! Shared functionality for `BetCode` components:
 //! - NDJSON parsing for Claude Code stream-json protocol
 //! - Configuration resolution and hierarchy
 //! - Permission rule matching engine

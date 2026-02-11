@@ -9,10 +9,10 @@ use betcode_proto::v1::{AgentRequest, PermissionDecision, PermissionResponse, Us
 /// Handle a key press during the permission prompt (Y/A/Tab/E/N/X).
 pub async fn handle_permission_key(app: &mut App, tx: &mpsc::Sender<AgentRequest>, code: KeyCode) {
     match code {
-        KeyCode::Char('y') | KeyCode::Char('Y') => {
+        KeyCode::Char('y' | 'Y' | '1') => {
             send_permission(app, tx, PermissionDecision::AllowOnce, None, String::new()).await;
         }
-        KeyCode::Char('a') | KeyCode::Char('A') => {
+        KeyCode::Char('a' | 'A' | '2') => {
             send_permission(
                 app,
                 tx,
@@ -22,46 +22,20 @@ pub async fn handle_permission_key(app: &mut App, tx: &mpsc::Sender<AgentRequest
             )
             .await;
         }
-        KeyCode::Tab => {
+        KeyCode::Tab | KeyCode::Char('3') => {
             app.start_permission_edit();
         }
-        KeyCode::Char('e') | KeyCode::Char('E') => {
+        KeyCode::Char('e' | 'E' | '4') => {
             app.start_permission_text(AppMode::PermissionComment, false);
         }
-        KeyCode::Char('n') | KeyCode::Char('N') => {
+        KeyCode::Char('n' | 'N' | '5') => {
             app.start_permission_text(AppMode::PermissionDenyMessage, false);
         }
-        KeyCode::Char('x') | KeyCode::Char('X') => {
+        KeyCode::Char('x' | 'X' | '6') => {
             app.start_permission_text(AppMode::PermissionDenyMessage, true);
         }
         KeyCode::Esc => {
             send_permission(app, tx, PermissionDecision::Deny, None, String::new()).await;
-        }
-        // Number keys 1-6 as shortcuts
-        KeyCode::Char('1') => {
-            send_permission(app, tx, PermissionDecision::AllowOnce, None, String::new()).await;
-        }
-        KeyCode::Char('2') => {
-            send_permission(
-                app,
-                tx,
-                PermissionDecision::AllowSession,
-                None,
-                String::new(),
-            )
-            .await;
-        }
-        KeyCode::Char('3') => {
-            app.start_permission_edit();
-        }
-        KeyCode::Char('4') => {
-            app.start_permission_text(AppMode::PermissionComment, false);
-        }
-        KeyCode::Char('5') => {
-            app.start_permission_text(AppMode::PermissionDenyMessage, false);
-        }
-        KeyCode::Char('6') => {
-            app.start_permission_text(AppMode::PermissionDenyMessage, true);
         }
         _ => {}
     }
@@ -90,8 +64,7 @@ pub async fn handle_permission_edit_key(
                     let prev = perm.edit_buffer[..perm.edit_cursor]
                         .char_indices()
                         .next_back()
-                        .map(|(i, _)| i)
-                        .unwrap_or(0);
+                        .map_or(0, |(i, _)| i);
                     perm.edit_buffer.remove(prev);
                     perm.edit_cursor = prev;
                 }
@@ -103,8 +76,7 @@ pub async fn handle_permission_edit_key(
                     perm.edit_cursor = perm.edit_buffer[..perm.edit_cursor]
                         .char_indices()
                         .next_back()
-                        .map(|(i, _)| i)
-                        .unwrap_or(0);
+                        .map_or(0, |(i, _)| i);
                 }
             }
         }
@@ -114,8 +86,7 @@ pub async fn handle_permission_edit_key(
                     perm.edit_cursor = perm.edit_buffer[perm.edit_cursor..]
                         .char_indices()
                         .nth(1)
-                        .map(|(i, _)| perm.edit_cursor + i)
-                        .unwrap_or(perm.edit_buffer.len());
+                        .map_or(perm.edit_buffer.len(), |(i, _)| perm.edit_cursor + i);
                 }
             }
         }
@@ -170,8 +141,7 @@ async fn submit_permission_edit(app: &mut App, tx: &mpsc::Sender<AgentRequest>) 
             let interrupt = app
                 .pending_permission
                 .as_ref()
-                .map(|p| p.deny_interrupt)
-                .unwrap_or(true);
+                .is_none_or(|p| p.deny_interrupt);
             let decision = if interrupt {
                 PermissionDecision::DenyWithInterrupt
             } else {

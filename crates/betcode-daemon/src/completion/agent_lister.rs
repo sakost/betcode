@@ -49,7 +49,7 @@ impl AgentLister {
     }
 
     /// Search for agents by name substring (case-insensitive).
-    /// An empty query returns all agents up to max_results.
+    /// An empty query returns all agents up to `max_results`.
     pub fn search(&self, query: &str, max_results: usize) -> Vec<AgentInfo> {
         let query_lower = query.to_lowercase();
         self.agents

@@ -36,16 +36,15 @@ use crate::storage::Database;
 // and any other in-crate consumers continue to see them at the same path.
 pub use betcode_proto::methods::{
     METHOD_ADD_PLUGIN, METHOD_CANCEL_TURN, METHOD_COMPACT_SESSION, METHOD_CONVERSE,
-    METHOD_CREATE_WORKTREE, METHOD_DISABLE_PLUGIN, METHOD_ENABLE_PLUGIN,
-    METHOD_EXCHANGE_KEYS, METHOD_EXECUTE_SERVICE_COMMAND, METHOD_GET_COMMAND_REGISTRY,
-    METHOD_GET_ISSUE, METHOD_GET_MERGE_REQUEST, METHOD_GET_PIPELINE, METHOD_GET_PLUGIN_STATUS,
-    METHOD_GET_WORKTREE, METHOD_LIST_AGENTS, METHOD_LIST_ISSUES, METHOD_LIST_MERGE_REQUESTS,
-    METHOD_LIST_PATH, METHOD_LIST_PIPELINES, METHOD_LIST_PLUGINS, METHOD_LIST_SESSIONS,
-    METHOD_LIST_WORKTREES, METHOD_REMOVE_PLUGIN, METHOD_REMOVE_WORKTREE,
-    METHOD_REQUEST_INPUT_LOCK, METHOD_RESUME_SESSION,
+    METHOD_CREATE_WORKTREE, METHOD_DISABLE_PLUGIN, METHOD_ENABLE_PLUGIN, METHOD_EXCHANGE_KEYS,
+    METHOD_EXECUTE_SERVICE_COMMAND, METHOD_GET_COMMAND_REGISTRY, METHOD_GET_ISSUE,
+    METHOD_GET_MERGE_REQUEST, METHOD_GET_PIPELINE, METHOD_GET_PLUGIN_STATUS, METHOD_GET_WORKTREE,
+    METHOD_LIST_AGENTS, METHOD_LIST_ISSUES, METHOD_LIST_MERGE_REQUESTS, METHOD_LIST_PATH,
+    METHOD_LIST_PIPELINES, METHOD_LIST_PLUGINS, METHOD_LIST_SESSIONS, METHOD_LIST_WORKTREES,
+    METHOD_REMOVE_PLUGIN, METHOD_REMOVE_WORKTREE, METHOD_REQUEST_INPUT_LOCK, METHOD_RESUME_SESSION,
 };
 
-/// Default maximum number of sessions returned by ListSessions.
+/// Default maximum number of sessions returned by `ListSessions`.
 const DEFAULT_LIST_SESSIONS_LIMIT: u32 = 50;
 
 /// Minimum number of messages to keep during session compaction.
@@ -68,7 +67,7 @@ fn generate_tunnel_client_id() -> String {
 /// Info about an active streaming session routed through the tunnel.
 struct ActiveStream {
     session_id: String,
-    /// Deferred session config — subprocess is only started on first UserMessage.
+    /// Deferred session config — subprocess is only started on first `UserMessage`.
     pending_config: Option<crate::relay::RelaySessionConfig>,
 }
 
@@ -111,21 +110,22 @@ pub struct TunnelRequestHandler {
     db: Database,
     /// Sender for pushing response frames back through the tunnel.
     outbound_tx: mpsc::Sender<TunnelFrame>,
-    /// Active streaming sessions keyed by request_id.
+    /// Active streaming sessions keyed by `request_id`.
     active_streams: Arc<RwLock<HashMap<String, ActiveStream>>>,
     /// E2E crypto session for encrypt/decrypt. None = passthrough (no encryption).
     crypto: Arc<RwLock<Option<Arc<CryptoSession>>>>,
     /// Identity keypair for key exchange. None = key exchange disabled.
     identity: Option<Arc<IdentityKeyPair>>,
-    /// CommandService implementation for handling command-related RPCs through the tunnel.
+    /// `CommandService` implementation for handling command-related RPCs through the tunnel.
     command_service: Option<Arc<CommandServiceImpl>>,
-    /// GitLabService implementation for handling GitLab-related RPCs through the tunnel.
+    /// `GitLabService` implementation for handling GitLab-related RPCs through the tunnel.
     gitlab_service: Option<Arc<GitLabServiceImpl>>,
-    /// WorktreeService implementation for handling worktree-related RPCs through the tunnel.
+    /// `WorktreeService` implementation for handling worktree-related RPCs through the tunnel.
     worktree_service: Option<Arc<WorktreeServiceImpl>>,
 }
 
 impl TunnelRequestHandler {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         machine_id: String,
         relay: Arc<SessionRelay>,
@@ -150,17 +150,17 @@ impl TunnelRequestHandler {
         }
     }
 
-    /// Set the CommandService implementation for handling command RPCs through the tunnel.
+    /// Set the `CommandService` implementation for handling command RPCs through the tunnel.
     pub fn set_command_service(&mut self, service: Arc<CommandServiceImpl>) {
         self.command_service = Some(service);
     }
 
-    /// Set the GitLabService implementation for handling GitLab RPCs through the tunnel.
+    /// Set the `GitLabService` implementation for handling GitLab RPCs through the tunnel.
     pub fn set_gitlab_service(&mut self, service: Arc<GitLabServiceImpl>) {
         self.gitlab_service = Some(service);
     }
 
-    /// Set the WorktreeService implementation for handling worktree RPCs through the tunnel.
+    /// Set the `WorktreeService` implementation for handling worktree RPCs through the tunnel.
     pub fn set_worktree_service(&mut self, service: Arc<WorktreeServiceImpl>) {
         self.worktree_service = Some(service);
     }
@@ -201,7 +201,7 @@ impl TunnelRequestHandler {
                 vec![Self::error_response(
                     &request_id,
                     TunnelErrorCode::Internal,
-                    &format!("Unexpected frame type: {:?}", frame_type),
+                    &format!("Unexpected frame type: {frame_type:?}"),
                 )]
             }
             Err(_) => {
@@ -215,12 +215,12 @@ impl TunnelRequestHandler {
         }
     }
 
-    /// Decrypt an EncryptedPayload using the session key, or passthrough if no crypto.
+    /// Decrypt an `EncryptedPayload` using the session key, or passthrough if no crypto.
     ///
     /// When the nonce is empty, the payload is treated as plaintext passthrough.
     /// This happens when the relay forwards data without tunnel-layer encryption
     /// (the relay doesn't have the crypto keys). App-layer encryption
-    /// (EncryptedEnvelope) handles the actual E2E protection.
+    /// (`EncryptedEnvelope`) handles the actual E2E protection.
     ///
     /// Clones the `Arc<CryptoSession>` and drops the read lock immediately so
     /// the actual decryption (CPU-bound) does not hold the lock.
@@ -232,18 +232,20 @@ impl TunnelRequestHandler {
             return Ok(enc.ciphertext.clone());
         }
         let crypto = self.crypto.read().await.clone();
-        match crypto {
-            Some(crypto) => crypto
-                .decrypt(&enc.ciphertext, &enc.nonce)
-                .map_err(|e| format!("decryption failed: {e}")),
-            None => {
+        crypto.map_or_else(
+            || {
                 debug!("Tunnel-layer passthrough (no crypto session) — app-layer handles E2E");
                 Ok(enc.ciphertext.clone())
-            }
-        }
+            },
+            |crypto| {
+                crypto
+                    .decrypt(&enc.ciphertext, &enc.nonce)
+                    .map_err(|e| format!("decryption failed: {e}"))
+            },
+        )
     }
 
-    /// Encrypt data into an EncryptedPayload using the session key, or passthrough.
+    /// Encrypt data into an `EncryptedPayload` using the session key, or passthrough.
     ///
     /// Clones the `Arc<CryptoSession>` and drops the read lock immediately.
     async fn encrypt_payload(&self, data: &[u8]) -> Result<EncryptedPayload, String> {
@@ -259,16 +261,15 @@ impl TunnelRequestHandler {
         self.crypto.read().await.clone()
     }
 
+    #[allow(clippy::too_many_lines)]
     async fn handle_request(&self, request_id: String, frame: TunnelFrame) -> Vec<TunnelFrame> {
-        let payload = match frame.payload {
-            Some(betcode_proto::v1::tunnel_frame::Payload::StreamData(p)) => p,
-            _ => {
-                return vec![Self::error_response(
-                    &request_id,
-                    TunnelErrorCode::Internal,
-                    "Missing StreamPayload",
-                )]
-            }
+        let Some(betcode_proto::v1::tunnel_frame::Payload::StreamData(payload)) = frame.payload
+        else {
+            return vec![Self::error_response(
+                &request_id,
+                TunnelErrorCode::Internal,
+                "Missing StreamPayload",
+            )];
         };
 
         debug!(request_id = %request_id, method = %payload.method, machine_id = %self.machine_id, "Handling tunneled request");
@@ -290,7 +291,7 @@ impl TunnelRequestHandler {
         let relay_forwarded = payload
             .encrypted
             .as_ref()
-            .map_or(true, |e| e.nonce.is_empty());
+            .is_none_or(|e| e.nonce.is_empty());
 
         let data = match payload.encrypted.as_ref() {
             Some(enc) => match self.decrypt_payload(enc).await {
@@ -342,8 +343,13 @@ impl TunnelRequestHandler {
             | METHOD_REMOVE_PLUGIN
             | METHOD_ENABLE_PLUGIN
             | METHOD_DISABLE_PLUGIN => {
-                self.dispatch_command_rpc(&request_id, payload.method.as_str(), &data, relay_forwarded)
-                    .await
+                self.dispatch_command_rpc(
+                    &request_id,
+                    payload.method.as_str(),
+                    &data,
+                    relay_forwarded,
+                )
+                .await
             }
             METHOD_EXECUTE_SERVICE_COMMAND => {
                 self.handle_execute_service_command(&request_id, &data, relay_forwarded)
@@ -357,21 +363,31 @@ impl TunnelRequestHandler {
             | METHOD_GET_PIPELINE
             | METHOD_LIST_ISSUES
             | METHOD_GET_ISSUE => {
-                self.dispatch_gitlab_rpc(&request_id, payload.method.as_str(), &data, relay_forwarded)
-                    .await
+                self.dispatch_gitlab_rpc(
+                    &request_id,
+                    payload.method.as_str(),
+                    &data,
+                    relay_forwarded,
+                )
+                .await
             }
             // WorktreeService RPCs
             METHOD_CREATE_WORKTREE
             | METHOD_REMOVE_WORKTREE
             | METHOD_LIST_WORKTREES
             | METHOD_GET_WORKTREE => {
-                self.dispatch_worktree_rpc(&request_id, payload.method.as_str(), &data, relay_forwarded)
-                    .await
+                self.dispatch_worktree_rpc(
+                    &request_id,
+                    payload.method.as_str(),
+                    &data,
+                    relay_forwarded,
+                )
+                .await
             }
             other => vec![Self::error_response(
                 &request_id,
                 TunnelErrorCode::NotFound,
-                &format!("Unknown method: {}", other),
+                &format!("Unknown method: {other}"),
             )],
         }
     }
@@ -388,7 +404,7 @@ impl TunnelRequestHandler {
                 return vec![Self::error_response(
                     request_id,
                     TunnelErrorCode::Internal,
-                    &format!("Decode error: {}", e),
+                    &format!("Decode error: {e}"),
                 )]
             }
         };
@@ -414,7 +430,9 @@ impl TunnelRequestHandler {
                         worktree_id: s.worktree_id.unwrap_or_default(),
                         status: s.status,
                         message_count: 0,
+                        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
                         total_input_tokens: s.total_input_tokens as u32,
+                        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
                         total_output_tokens: s.total_output_tokens as u32,
                         total_cost_usd: s.total_cost_usd,
                         created_at: Some(prost_types::Timestamp {
@@ -428,6 +446,7 @@ impl TunnelRequestHandler {
                         last_message_preview: s.last_message_preview.unwrap_or_default(),
                     })
                     .collect();
+                #[allow(clippy::cast_possible_truncation)]
                 let total = summaries.len() as u32;
                 vec![
                     self.unary_response_frame(
@@ -444,11 +463,12 @@ impl TunnelRequestHandler {
             Err(e) => vec![Self::error_response(
                 request_id,
                 TunnelErrorCode::Internal,
-                &format!("ListSessions failed: {}", e),
+                &format!("ListSessions failed: {e}"),
             )],
         }
     }
 
+    #[allow(clippy::too_many_lines)]
     async fn handle_compact_session(
         &self,
         request_id: &str,
@@ -461,12 +481,13 @@ impl TunnelRequestHandler {
                 return vec![Self::error_response(
                     request_id,
                     TunnelErrorCode::Internal,
-                    &format!("Decode error: {}", e),
+                    &format!("Decode error: {e}"),
                 )]
             }
         };
         let sid = &req.session_id;
         let messages_before = match self.db.count_messages(sid).await {
+            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
             Ok(c) => c as u32,
             Err(e) => {
                 return vec![Self::error_response(
@@ -503,7 +524,7 @@ impl TunnelRequestHandler {
         let keep_count = (messages_before / 2)
             .max(MIN_COMPACTION_KEEP)
             .min(messages_before);
-        let cutoff = max_seq - keep_count as i64;
+        let cutoff = max_seq - i64::from(keep_count);
         if cutoff <= 0 {
             return vec![
                 self.unary_response_frame(
@@ -529,7 +550,9 @@ impl TunnelRequestHandler {
             }
         };
         let _ = self.db.update_compaction_sequence(sid, cutoff).await;
+        #[allow(clippy::cast_possible_truncation)]
         let messages_after = messages_before - deleted as u32;
+        #[allow(clippy::cast_possible_truncation)]
         let tokens_saved = deleted as u32 * ESTIMATED_TOKENS_PER_MESSAGE;
         info!(session_id = %sid, messages_before, messages_after, "Session compacted via tunnel");
         vec![
@@ -558,7 +581,7 @@ impl TunnelRequestHandler {
                 return vec![Self::error_response(
                     request_id,
                     TunnelErrorCode::Internal,
-                    &format!("Decode error: {}", e),
+                    &format!("Decode error: {e}"),
                 )]
             }
         };
@@ -589,7 +612,7 @@ impl TunnelRequestHandler {
                 return vec![Self::error_response(
                     request_id,
                     TunnelErrorCode::Internal,
-                    &format!("Decode error: {}", e),
+                    &format!("Decode error: {e}"),
                 )]
             }
         };
@@ -613,30 +636,28 @@ impl TunnelRequestHandler {
             Err(e) => vec![Self::error_response(
                 request_id,
                 TunnelErrorCode::Internal,
-                &format!("InputLock failed: {}", e),
+                &format!("InputLock failed: {e}"),
             )],
         }
     }
 
-    /// Handle an incoming StreamData frame for an active streaming session.
+    /// Handle an incoming `StreamData` frame for an active streaming session.
     /// Routes user messages, permissions, etc. to the relay.
     ///
     /// On the first `UserMessage`, if the subprocess hasn't been started yet
-    /// (pending_config is Some), starts it and immediately sends the message.
+    /// (`pending_config` is Some), starts it and immediately sends the message.
     ///
     /// If E2E crypto is active, incoming `AgentRequest` messages must use the
     /// `Encrypted` oneof variant containing an `EncryptedEnvelope`. The envelope
     /// is decrypted and re-decoded as the real `AgentRequest`. Plaintext requests
     /// are rejected when crypto is active (prevents downgrade attacks).
+    #[allow(clippy::too_many_lines, clippy::items_after_statements)]
     pub async fn handle_incoming_stream_data(&self, request_id: &str, data: &[u8]) {
         let sid = {
             let stream = self.active_streams.read().await;
-            match stream.get(request_id) {
-                Some(a) => a.session_id.clone(),
-                None => {
-                    debug!(request_id = %request_id, "StreamData for unknown active stream");
-                    return;
-                }
+            if let Some(a) = stream.get(request_id) { a.session_id.clone() } else {
+                debug!(request_id = %request_id, "StreamData for unknown active stream");
+                return;
             }
         };
 
@@ -702,7 +723,7 @@ impl TunnelRequestHandler {
                     .send(Self::error_response(
                         request_id,
                         TunnelErrorCode::Internal,
-                        &format!("Start session failed: {}", e),
+                        &format!("Start session failed: {e}"),
                     ))
                     .await;
                 self.active_streams.write().await.remove(request_id);
@@ -729,9 +750,9 @@ impl TunnelRequestHandler {
                         .write()
                         .await
                         .remove(&perm.request_id)
-                        .unwrap_or(serde_json::Value::Object(Default::default()))
+                        .unwrap_or_else(|| serde_json::Value::Object(serde_json::Map::default()))
                 } else {
-                    serde_json::Value::Object(Default::default())
+                    serde_json::Value::Object(serde_json::Map::default())
                 };
 
                 if let Err(e) = self
@@ -754,9 +775,9 @@ impl TunnelRequestHandler {
                         .write()
                         .await
                         .remove(&qr.question_id)
-                        .unwrap_or(serde_json::Value::Object(Default::default()))
+                        .unwrap_or_else(|| serde_json::Value::Object(serde_json::Map::default()))
                 } else {
-                    serde_json::Value::Object(Default::default())
+                    serde_json::Value::Object(serde_json::Map::default())
                 };
 
                 if let Err(e) = self
@@ -776,11 +797,12 @@ impl TunnelRequestHandler {
         }
     }
 
-    /// Check if a request_id has an active streaming session.
+    /// Check if a `request_id` has an active streaming session.
     pub async fn has_active_stream(&self, request_id: &str) -> bool {
         self.active_streams.read().await.contains_key(request_id)
     }
 
+    #[allow(clippy::too_many_lines)]
     async fn handle_converse(&self, request_id: &str, data: &[u8], relay_forwarded: bool) {
         let outer_req = match AgentRequest::decode(data) {
             Ok(r) => r,
@@ -790,7 +812,7 @@ impl TunnelRequestHandler {
                     .send(Self::error_response(
                         request_id,
                         TunnelErrorCode::Internal,
-                        &format!("Decode error: {}", e),
+                        &format!("Decode error: {e}"),
                     ))
                     .await;
                 return;
@@ -846,19 +868,17 @@ impl TunnelRequestHandler {
             (None, _) => outer_req,
         };
 
-        let start_conv = match start.request {
-            Some(betcode_proto::v1::agent_request::Request::Start(s)) => s,
-            _ => {
-                let _ = self
-                    .outbound_tx
-                    .send(Self::error_response(
-                        request_id,
-                        TunnelErrorCode::Internal,
-                        "First Converse message must be StartConversation",
-                    ))
-                    .await;
-                return;
-            }
+        let Some(betcode_proto::v1::agent_request::Request::Start(start_conv)) = start.request
+        else {
+            let _ = self
+                .outbound_tx
+                .send(Self::error_response(
+                    request_id,
+                    TunnelErrorCode::Internal,
+                    "First Converse message must be StartConversation",
+                ))
+                .await;
+            return;
         };
 
         let sid = start_conv.session_id.clone();
@@ -872,30 +892,27 @@ impl TunnelRequestHandler {
         let working_dir: std::path::PathBuf = start_conv.working_directory.clone().into();
 
         // Create or resume session in DB
-        let resume_session = match self.db.get_session(&sid).await {
-            Ok(existing) => existing.claude_session_id.filter(|s| !s.is_empty()),
-            Err(_) => {
-                if let Err(e) = self
-                    .db
-                    .create_session(
-                        &sid,
-                        model.as_deref().unwrap_or("default"),
-                        &start_conv.working_directory,
-                    )
-                    .await
-                {
-                    let _ = self
-                        .outbound_tx
-                        .send(Self::error_response(
-                            request_id,
-                            TunnelErrorCode::Internal,
-                            &format!("Create session failed: {}", e),
-                        ))
-                        .await;
-                    return;
-                }
-                None
+        let resume_session = if let Ok(existing) = self.db.get_session(&sid).await { existing.claude_session_id.filter(|s| !s.is_empty()) } else {
+            if let Err(e) = self
+                .db
+                .create_session(
+                    &sid,
+                    model.as_deref().unwrap_or("default"),
+                    &start_conv.working_directory,
+                )
+                .await
+            {
+                let _ = self
+                    .outbound_tx
+                    .send(Self::error_response(
+                        request_id,
+                        TunnelErrorCode::Internal,
+                        &format!("Create session failed: {e}"),
+                    ))
+                    .await;
+                return;
             }
+            None
         };
 
         let _ = self
@@ -912,7 +929,7 @@ impl TunnelRequestHandler {
                     .send(Self::error_response(
                         request_id,
                         TunnelErrorCode::Internal,
-                        &format!("Subscribe failed: {}", e),
+                        &format!("Subscribe failed: {e}"),
                     ))
                     .await;
                 return;
@@ -1044,7 +1061,6 @@ impl TunnelRequestHandler {
                     }
                     Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
                         warn!(request_id = %rid, skipped = n, "Broadcast receiver lagged, events lost");
-                        continue;
                     }
                     Err(tokio::sync::broadcast::error::RecvError::Closed) => {
                         debug!(request_id = %rid, "Broadcast channel closed, ending event forwarder");
@@ -1072,7 +1088,7 @@ impl TunnelRequestHandler {
     }
 
     /// Handle a key exchange request: generate ephemeral keypair, compute shared
-    /// secret, and install the resulting CryptoSession. Returns the daemon's
+    /// secret, and install the resulting `CryptoSession`. Returns the daemon's
     /// ephemeral public key (and identity info) unencrypted.
     async fn handle_exchange_keys(&self, request_id: &str, data: &[u8]) -> Vec<TunnelFrame> {
         let req = match KeyExchangeRequest::decode(data) {
@@ -1115,10 +1131,10 @@ impl TunnelRequestHandler {
         }
 
         // Generate our ephemeral keypair and complete the exchange
-        let state = match &self.identity {
-            Some(id) => KeyExchangeState::with_identity(Arc::clone(id)),
-            None => KeyExchangeState::new(),
-        };
+        let state = self.identity.as_ref().map_or_else(
+            KeyExchangeState::new,
+            |id| KeyExchangeState::with_identity(Arc::clone(id)),
+        );
 
         let daemon_ephemeral_pub = state.public_bytes();
         let session = match state.complete(&req.ephemeral_pubkey) {
@@ -1139,10 +1155,10 @@ impl TunnelRequestHandler {
         // while we build the response frame below.
         drop(crypto_guard);
 
-        let (daemon_identity_pubkey, daemon_fingerprint) = match &self.identity {
-            Some(id) => (id.public_bytes().to_vec(), id.fingerprint()),
-            None => (Vec::new(), String::new()),
-        };
+        let (daemon_identity_pubkey, daemon_fingerprint) = self.identity.as_ref().map_or_else(
+            || (Vec::new(), String::new()),
+            |id| (id.public_bytes().to_vec(), id.fingerprint()),
+        );
 
         info!(
             request_id = %request_id,
@@ -1168,6 +1184,7 @@ impl TunnelRequestHandler {
         }
     }
 
+    #[allow(clippy::too_many_lines)]
     async fn handle_resume_session(
         &self,
         request_id: &str,
@@ -1180,14 +1197,16 @@ impl TunnelRequestHandler {
                 return vec![Self::error_response(
                     request_id,
                     TunnelErrorCode::Internal,
-                    &format!("Decode error: {}", e),
+                    &format!("Decode error: {e}"),
                 )]
             }
         };
 
+        #[allow(clippy::cast_possible_wrap)]
+        let from_seq = req.from_sequence as i64;
         let messages = match self
             .db
-            .get_messages_from_sequence(&req.session_id, req.from_sequence as i64)
+            .get_messages_from_sequence(&req.session_id, from_seq)
             .await
         {
             Ok(m) => m,
@@ -1195,7 +1214,7 @@ impl TunnelRequestHandler {
                 return vec![Self::error_response(
                     request_id,
                     TunnelErrorCode::Internal,
-                    &format!("Resume failed: {}", e),
+                    &format!("Resume failed: {e}"),
                 )]
             }
         };
@@ -1210,9 +1229,8 @@ impl TunnelRequestHandler {
         tokio::spawn(async move {
             let mut seq = 0u64;
             for msg in messages {
-                let raw_bytes = match base64_decode(&msg.payload) {
-                    Ok(b) => b,
-                    Err(_) => continue,
+                let Ok(raw_bytes) = base64_decode(&msg.payload) else {
+                    continue;
                 };
 
                 // Match the converse event forwarder: when crypto is active,
@@ -1291,6 +1309,7 @@ impl TunnelRequestHandler {
 
     // --- CommandService dispatch ---
 
+    #[allow(clippy::too_many_lines)]
     async fn dispatch_command_rpc(
         &self,
         request_id: &str,
@@ -1298,26 +1317,95 @@ impl TunnelRequestHandler {
         data: &[u8],
         relay_forwarded: bool,
     ) -> Vec<TunnelFrame> {
-        let svc = match &self.command_service {
-            Some(s) => s,
-            None => {
-                return vec![Self::error_response(
-                    request_id,
-                    TunnelErrorCode::Internal,
-                    "CommandService not available in tunnel handler",
-                )]
-            }
+        let Some(svc) = &self.command_service else {
+            return vec![Self::error_response(
+                request_id,
+                TunnelErrorCode::Internal,
+                "CommandService not available in tunnel handler",
+            )];
         };
         match method {
-            METHOD_GET_COMMAND_REGISTRY => dispatch_rpc!(self, svc, request_id, data, relay_forwarded, GetCommandRegistryRequest, get_command_registry),
-            METHOD_LIST_AGENTS => dispatch_rpc!(self, svc, request_id, data, relay_forwarded, ListAgentsRequest, list_agents),
-            METHOD_LIST_PATH => dispatch_rpc!(self, svc, request_id, data, relay_forwarded, ListPathRequest, list_path),
-            METHOD_LIST_PLUGINS => dispatch_rpc!(self, svc, request_id, data, relay_forwarded, ListPluginsRequest, list_plugins),
-            METHOD_GET_PLUGIN_STATUS => dispatch_rpc!(self, svc, request_id, data, relay_forwarded, GetPluginStatusRequest, get_plugin_status),
-            METHOD_ADD_PLUGIN => dispatch_rpc!(self, svc, request_id, data, relay_forwarded, AddPluginRequest, add_plugin),
-            METHOD_REMOVE_PLUGIN => dispatch_rpc!(self, svc, request_id, data, relay_forwarded, RemovePluginRequest, remove_plugin),
-            METHOD_ENABLE_PLUGIN => dispatch_rpc!(self, svc, request_id, data, relay_forwarded, EnablePluginRequest, enable_plugin),
-            METHOD_DISABLE_PLUGIN => dispatch_rpc!(self, svc, request_id, data, relay_forwarded, DisablePluginRequest, disable_plugin),
+            METHOD_GET_COMMAND_REGISTRY => dispatch_rpc!(
+                self,
+                svc,
+                request_id,
+                data,
+                relay_forwarded,
+                GetCommandRegistryRequest,
+                get_command_registry
+            ),
+            METHOD_LIST_AGENTS => dispatch_rpc!(
+                self,
+                svc,
+                request_id,
+                data,
+                relay_forwarded,
+                ListAgentsRequest,
+                list_agents
+            ),
+            METHOD_LIST_PATH => dispatch_rpc!(
+                self,
+                svc,
+                request_id,
+                data,
+                relay_forwarded,
+                ListPathRequest,
+                list_path
+            ),
+            METHOD_LIST_PLUGINS => dispatch_rpc!(
+                self,
+                svc,
+                request_id,
+                data,
+                relay_forwarded,
+                ListPluginsRequest,
+                list_plugins
+            ),
+            METHOD_GET_PLUGIN_STATUS => dispatch_rpc!(
+                self,
+                svc,
+                request_id,
+                data,
+                relay_forwarded,
+                GetPluginStatusRequest,
+                get_plugin_status
+            ),
+            METHOD_ADD_PLUGIN => dispatch_rpc!(
+                self,
+                svc,
+                request_id,
+                data,
+                relay_forwarded,
+                AddPluginRequest,
+                add_plugin
+            ),
+            METHOD_REMOVE_PLUGIN => dispatch_rpc!(
+                self,
+                svc,
+                request_id,
+                data,
+                relay_forwarded,
+                RemovePluginRequest,
+                remove_plugin
+            ),
+            METHOD_ENABLE_PLUGIN => dispatch_rpc!(
+                self,
+                svc,
+                request_id,
+                data,
+                relay_forwarded,
+                EnablePluginRequest,
+                enable_plugin
+            ),
+            METHOD_DISABLE_PLUGIN => dispatch_rpc!(
+                self,
+                svc,
+                request_id,
+                data,
+                relay_forwarded,
+                DisablePluginRequest,
+                disable_plugin
+            ),
             _ => vec![Self::error_response(
                 request_id,
                 TunnelErrorCode::NotFound,
@@ -1326,25 +1414,23 @@ impl TunnelRequestHandler {
         }
     }
 
+    #[allow(clippy::too_many_lines)]
     async fn handle_execute_service_command(
         &self,
         request_id: &str,
         data: &[u8],
         relay_forwarded: bool,
     ) {
-        let cmd_svc = match &self.command_service {
-            Some(s) => s,
-            None => {
-                let _ = self
-                    .outbound_tx
-                    .send(Self::error_response(
-                        request_id,
-                        TunnelErrorCode::Internal,
-                        "CommandService not available in tunnel handler",
-                    ))
-                    .await;
-                return;
-            }
+        let Some(cmd_svc) = &self.command_service else {
+            let _ = self
+                .outbound_tx
+                .send(Self::error_response(
+                    request_id,
+                    TunnelErrorCode::Internal,
+                    "CommandService not available in tunnel handler",
+                ))
+                .await;
+            return;
         };
         let req = match ExecuteServiceCommandRequest::decode(data) {
             Ok(r) => r,
@@ -1354,7 +1440,7 @@ impl TunnelRequestHandler {
                     .send(Self::error_response(
                         request_id,
                         TunnelErrorCode::Internal,
-                        &format!("Decode error: {}", e),
+                        &format!("Decode error: {e}"),
                     ))
                     .await;
                 return;
@@ -1393,11 +1479,11 @@ impl TunnelRequestHandler {
                         if output.encode(&mut buf).is_err() {
                             continue;
                         }
-                        let encrypted =
-                            match make_encrypted_payload(crypto_for_response.as_deref(), &buf) {
-                                Ok(e) => e,
-                                Err(_) => continue,
-                            };
+                        let Ok(encrypted) =
+                            make_encrypted_payload(crypto_for_response.as_deref(), &buf)
+                        else {
+                            continue;
+                        };
                         let frame = TunnelFrame {
                             request_id: rid.clone(),
                             frame_type: FrameType::StreamData as i32,
@@ -1421,10 +1507,10 @@ impl TunnelRequestHandler {
                     Err(e) => {
                         warn!(error = %e, request_id = %rid, "ExecuteServiceCommand stream error");
                         let _ = outbound_tx
-                            .send(TunnelRequestHandler::error_response(
+                            .send(Self::error_response(
                                 &rid,
                                 TunnelErrorCode::Internal,
-                                &format!("Stream error: {}", e),
+                                &format!("Stream error: {e}"),
                             ))
                             .await;
                         break;
@@ -1444,7 +1530,6 @@ impl TunnelRequestHandler {
         });
     }
 
-
     // --- GitLabService / WorktreeService tunnel handlers ---
 
     async fn dispatch_gitlab_rpc(
@@ -1454,23 +1539,68 @@ impl TunnelRequestHandler {
         data: &[u8],
         relay_forwarded: bool,
     ) -> Vec<TunnelFrame> {
-        let svc = match &self.gitlab_service {
-            Some(s) => s,
-            None => {
-                return vec![Self::error_response(
-                    request_id,
-                    TunnelErrorCode::Internal,
-                    "GitLabService not available in tunnel handler",
-                )]
-            }
+        let Some(svc) = &self.gitlab_service else {
+            return vec![Self::error_response(
+                request_id,
+                TunnelErrorCode::Internal,
+                "GitLabService not available in tunnel handler",
+            )];
         };
         match method {
-            METHOD_LIST_MERGE_REQUESTS => dispatch_rpc!(self, svc, request_id, data, relay_forwarded, ListMergeRequestsRequest, list_merge_requests),
-            METHOD_GET_MERGE_REQUEST => dispatch_rpc!(self, svc, request_id, data, relay_forwarded, GetMergeRequestRequest, get_merge_request),
-            METHOD_LIST_PIPELINES => dispatch_rpc!(self, svc, request_id, data, relay_forwarded, ListPipelinesRequest, list_pipelines),
-            METHOD_GET_PIPELINE => dispatch_rpc!(self, svc, request_id, data, relay_forwarded, GetPipelineRequest, get_pipeline),
-            METHOD_LIST_ISSUES => dispatch_rpc!(self, svc, request_id, data, relay_forwarded, ListIssuesRequest, list_issues),
-            METHOD_GET_ISSUE => dispatch_rpc!(self, svc, request_id, data, relay_forwarded, GetIssueRequest, get_issue),
+            METHOD_LIST_MERGE_REQUESTS => dispatch_rpc!(
+                self,
+                svc,
+                request_id,
+                data,
+                relay_forwarded,
+                ListMergeRequestsRequest,
+                list_merge_requests
+            ),
+            METHOD_GET_MERGE_REQUEST => dispatch_rpc!(
+                self,
+                svc,
+                request_id,
+                data,
+                relay_forwarded,
+                GetMergeRequestRequest,
+                get_merge_request
+            ),
+            METHOD_LIST_PIPELINES => dispatch_rpc!(
+                self,
+                svc,
+                request_id,
+                data,
+                relay_forwarded,
+                ListPipelinesRequest,
+                list_pipelines
+            ),
+            METHOD_GET_PIPELINE => dispatch_rpc!(
+                self,
+                svc,
+                request_id,
+                data,
+                relay_forwarded,
+                GetPipelineRequest,
+                get_pipeline
+            ),
+            METHOD_LIST_ISSUES => dispatch_rpc!(
+                self,
+                svc,
+                request_id,
+                data,
+                relay_forwarded,
+                ListIssuesRequest,
+                list_issues
+            ),
+            METHOD_GET_ISSUE => dispatch_rpc!(
+                self,
+                svc,
+                request_id,
+                data,
+                relay_forwarded,
+                GetIssueRequest,
+                get_issue
+            ),
             _ => vec![Self::error_response(
                 request_id,
                 TunnelErrorCode::NotFound,
@@ -1486,21 +1616,50 @@ impl TunnelRequestHandler {
         data: &[u8],
         relay_forwarded: bool,
     ) -> Vec<TunnelFrame> {
-        let svc = match &self.worktree_service {
-            Some(s) => s,
-            None => {
-                return vec![Self::error_response(
-                    request_id,
-                    TunnelErrorCode::Internal,
-                    "WorktreeService not available in tunnel handler",
-                )]
-            }
+        let Some(svc) = &self.worktree_service else {
+            return vec![Self::error_response(
+                request_id,
+                TunnelErrorCode::Internal,
+                "WorktreeService not available in tunnel handler",
+            )];
         };
         match method {
-            METHOD_CREATE_WORKTREE => dispatch_rpc!(self, svc, request_id, data, relay_forwarded, CreateWorktreeRequest, create_worktree),
-            METHOD_REMOVE_WORKTREE => dispatch_rpc!(self, svc, request_id, data, relay_forwarded, RemoveWorktreeRequest, remove_worktree),
-            METHOD_LIST_WORKTREES => dispatch_rpc!(self, svc, request_id, data, relay_forwarded, ListWorktreesRequest, list_worktrees),
-            METHOD_GET_WORKTREE => dispatch_rpc!(self, svc, request_id, data, relay_forwarded, GetWorktreeRequest, get_worktree),
+            METHOD_CREATE_WORKTREE => dispatch_rpc!(
+                self,
+                svc,
+                request_id,
+                data,
+                relay_forwarded,
+                CreateWorktreeRequest,
+                create_worktree
+            ),
+            METHOD_REMOVE_WORKTREE => dispatch_rpc!(
+                self,
+                svc,
+                request_id,
+                data,
+                relay_forwarded,
+                RemoveWorktreeRequest,
+                remove_worktree
+            ),
+            METHOD_LIST_WORKTREES => dispatch_rpc!(
+                self,
+                svc,
+                request_id,
+                data,
+                relay_forwarded,
+                ListWorktreesRequest,
+                list_worktrees
+            ),
+            METHOD_GET_WORKTREE => dispatch_rpc!(
+                self,
+                svc,
+                request_id,
+                data,
+                relay_forwarded,
+                GetWorktreeRequest,
+                get_worktree
+            ),
             _ => vec![Self::error_response(
                 request_id,
                 TunnelErrorCode::NotFound,
@@ -1543,7 +1702,7 @@ impl TunnelRequestHandler {
     ) -> Result<TunnelFrame, String> {
         let mut buf = Vec::with_capacity(msg.encoded_len());
         msg.encode(&mut buf)
-            .map_err(|e| format!("Prost encode failed: {}", e))?;
+            .map_err(|e| format!("Prost encode failed: {e}"))?;
         Ok(TunnelFrame {
             request_id: request_id.to_string(),
             frame_type: FrameType::Response as i32,
@@ -1600,13 +1759,13 @@ impl TunnelRequestHandler {
         }
     }
 
-    pub fn relay(&self) -> &Arc<SessionRelay> {
+    pub const fn relay(&self) -> &Arc<SessionRelay> {
         &self.relay
     }
-    pub fn multiplexer(&self) -> &Arc<SessionMultiplexer> {
+    pub const fn multiplexer(&self) -> &Arc<SessionMultiplexer> {
         &self.multiplexer
     }
-    pub fn db(&self) -> &Database {
+    pub const fn db(&self) -> &Database {
         &self.db
     }
 }
@@ -1620,7 +1779,7 @@ fn make_encrypted_payload(
         Some(c) => {
             let enc = c
                 .encrypt(data)
-                .map_err(|e| format!("Encryption failed: {}", e))?;
+                .map_err(|e| format!("Encryption failed: {e}"))?;
             Ok(EncryptedPayload {
                 ciphertext: enc.ciphertext,
                 nonce: enc.nonce.to_vec(),
@@ -1638,5 +1797,22 @@ fn make_encrypted_payload(
 use betcode_core::db::base64_decode;
 
 #[cfg(test)]
+#[allow(
+    clippy::panic,
+    clippy::expect_used,
+    clippy::unwrap_used,
+    clippy::similar_names,
+    clippy::struct_excessive_bools,
+    clippy::redundant_clone,
+    clippy::implicit_clone,
+    clippy::items_after_statements,
+    clippy::needless_pass_by_value,
+    clippy::doc_markdown,
+    clippy::single_match_else,
+    clippy::significant_drop_tightening,
+    clippy::map_unwrap_or,
+    clippy::uninlined_format_args,
+    clippy::iter_on_single_items,
+)]
 #[path = "handler_tests.rs"]
 mod tests;

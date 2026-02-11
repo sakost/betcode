@@ -1,4 +1,4 @@
-//! gRPC server for BetCode daemon.
+//! gRPC server for `BetCode` daemon.
 //!
 //! Provides local socket and TCP server implementations.
 
@@ -208,22 +208,22 @@ impl GrpcServer {
     }
 
     /// Get the server configuration.
-    pub fn config(&self) -> &ServerConfig {
+    pub const fn config(&self) -> &ServerConfig {
         &self.config
     }
 
     /// Get a reference to the session relay (for tunnel handler).
-    pub fn relay(&self) -> &Arc<SessionRelay> {
+    pub const fn relay(&self) -> &Arc<SessionRelay> {
         &self.relay
     }
 
     /// Get a reference to the session multiplexer (for tunnel handler).
-    pub fn multiplexer(&self) -> &Arc<SessionMultiplexer> {
+    pub const fn multiplexer(&self) -> &Arc<SessionMultiplexer> {
         &self.multiplexer
     }
 
     /// Get a clone of the database (for tunnel handler).
-    pub fn db(&self) -> &Database {
+    pub const fn db(&self) -> &Database {
         &self.db
     }
 
@@ -243,8 +243,12 @@ impl GrpcServer {
     /// are set (and valid); returns `None` otherwise, meaning GitLab RPCs through
     /// the tunnel will respond with "not available".
     pub fn gitlab_service_impl_from_env() -> Option<GitLabServiceImpl> {
-        let base_url = std::env::var("BETCODE_GITLAB_URL").ok().filter(|s| !s.is_empty())?;
-        let token = std::env::var("BETCODE_GITLAB_TOKEN").ok().filter(|s| !s.is_empty())?;
+        let base_url = std::env::var("BETCODE_GITLAB_URL")
+            .ok()
+            .filter(|s| !s.is_empty())?;
+        let token = std::env::var("BETCODE_GITLAB_TOKEN")
+            .ok()
+            .filter(|s| !s.is_empty())?;
         let config = GitLabConfig { base_url, token };
         let client = match GitLabClient::new(&config) {
             Ok(c) => c,

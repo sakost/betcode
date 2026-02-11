@@ -17,7 +17,7 @@ pub enum Message {
 }
 
 /// System initialization message.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SystemInit {
     pub session_id: String,
     pub model: String,
@@ -28,7 +28,7 @@ pub struct SystemInit {
 }
 
 /// Tool schema from system init.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ToolSchema {
     pub name: String,
     #[serde(default)]
@@ -38,7 +38,7 @@ pub struct ToolSchema {
 }
 
 /// Complete assistant message.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AssistantMessage {
     pub content: Vec<ContentBlock>,
     pub stop_reason: StopReason,
@@ -46,7 +46,7 @@ pub struct AssistantMessage {
 }
 
 /// Content block in assistant message.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ContentBlock {
     Text {
         text: String,
@@ -59,7 +59,7 @@ pub enum ContentBlock {
 }
 
 /// Reason the assistant stopped.
-#[derive(Debug, Clone, PartialEq, Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub enum StopReason {
     #[default]
     EndTurn,
@@ -69,7 +69,7 @@ pub enum StopReason {
 }
 
 /// Token usage statistics.
-#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub struct Usage {
     #[serde(default)]
     pub input_tokens: u32,
@@ -82,13 +82,13 @@ pub struct Usage {
 }
 
 /// User message (tool results echo).
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UserMessage {
     pub content: Vec<ToolResult>,
 }
 
 /// Tool execution result.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ToolResult {
     pub tool_use_id: String,
     pub content: String,
@@ -96,13 +96,13 @@ pub struct ToolResult {
 }
 
 /// Streaming event for real-time output.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StreamEvent {
     pub event_type: StreamEventType,
 }
 
 /// Stream event types.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum StreamEventType {
     ContentBlockStart { index: u32, block_type: String },
     ContentBlockDelta { index: u32, delta: Delta },
@@ -114,7 +114,7 @@ pub enum StreamEventType {
 }
 
 /// Delta content in streaming.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Delta {
     Text(String),
     InputJson(String),
@@ -122,14 +122,14 @@ pub enum Delta {
 }
 
 /// Permission or input request from Claude.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ControlRequest {
     pub request_id: String,
     pub request: ControlRequestType,
 }
 
 /// Control request type.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ControlRequestType {
     CanUseTool { tool_name: String, input: Value },
     Unknown(Value),
@@ -146,7 +146,7 @@ pub struct SessionResult {
 }
 
 /// Result subtype.
-#[derive(Debug, Clone, PartialEq, Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub enum ResultSubtype {
     #[default]
     Success,

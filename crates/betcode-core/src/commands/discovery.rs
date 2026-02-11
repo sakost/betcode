@@ -1,8 +1,15 @@
 use std::path::Path;
+use std::sync::LazyLock;
 
 use regex::Regex;
 
 use super::{CommandCategory, CommandEntry, ExecutionMode};
+
+/// Pre-compiled regex for extracting slash-command names from help text.
+#[allow(clippy::expect_used)]
+static COMMAND_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"/([a-zA-Z][\w-]*)").expect("static regex is valid")
+});
 
 /// Returns a hardcoded list of known Claude Code slash commands.
 pub fn hardcoded_cc_commands(version: &str) -> Vec<CommandEntry> {
@@ -46,9 +53,8 @@ pub fn hardcoded_cc_commands(version: &str) -> Vec<CommandEntry> {
 pub fn discover_user_commands(working_dir: &Path) -> Vec<CommandEntry> {
     let commands_dir = working_dir.join(".claude").join("commands");
 
-    let entries = match std::fs::read_dir(&commands_dir) {
-        Ok(entries) => entries,
-        Err(_) => return Vec::new(),
+    let Ok(entries) = std::fs::read_dir(&commands_dir) else {
+        return Vec::new();
     };
 
     let mut commands = Vec::new();
@@ -75,9 +81,8 @@ pub fn discover_user_commands(working_dir: &Path) -> Vec<CommandEntry> {
 pub fn discover_agents(working_dir: &Path) -> Vec<String> {
     let agents_dir = working_dir.join(".claude").join("agents");
 
-    let entries = match std::fs::read_dir(&agents_dir) {
-        Ok(entries) => entries,
-        Err(_) => return Vec::new(),
+    let Ok(entries) = std::fs::read_dir(&agents_dir) else {
+        return Vec::new();
     };
 
     let mut agents = Vec::new();
@@ -100,7 +105,7 @@ pub fn parse_help_output(
     help_text: &str,
     hardcoded: &[CommandEntry],
 ) -> (Vec<CommandEntry>, Vec<CommandEntry>) {
-    let re = Regex::new(r"/([a-zA-Z][\w-]*)").expect("static regex is valid");
+    let re = &*COMMAND_RE;
 
     let mut known = Vec::new();
     let mut unknown = Vec::new();
@@ -186,7 +191,7 @@ mod tests {
 
     #[test]
     fn test_parse_help_output() {
-        let help_text = r#"
+        let help_text = r"
 Usage: claude [options]
 
 Commands:
@@ -194,7 +199,7 @@ Commands:
   /clear       Clear conversation
   /compact     Compact conversation
   /unknown-new Some new command
-        "#;
+        ";
         let hardcoded = hardcoded_cc_commands("1.0.0");
         let (known, unknown) = parse_help_output(help_text, &hardcoded);
         assert!(known.iter().any(|c| c.name == "help"));

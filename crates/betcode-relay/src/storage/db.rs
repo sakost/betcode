@@ -1,4 +1,4 @@
-//! SQLite database for BetCode relay server.
+//! `SQLite` database for `BetCode` relay server.
 
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use sqlx::{Pool, Sqlite};
@@ -68,7 +68,7 @@ impl RelayDatabase {
         Ok(())
     }
 
-    pub fn pool(&self) -> &Pool<Sqlite> {
+    pub const fn pool(&self) -> &Pool<Sqlite> {
         &self.pool
     }
 }

@@ -1,9 +1,9 @@
-//! Database queries for BetCode relay server.
+//! Database queries for `BetCode` relay server.
 
 use betcode_core::db::unix_timestamp;
 
 use super::db::{DatabaseError, RelayDatabase};
-use super::models::*;
+use super::models::{Machine, Token, User};
 
 impl RelayDatabase {
     // =========================================================================
@@ -41,7 +41,7 @@ impl RelayDatabase {
             .bind(id)
             .fetch_optional(self.pool())
             .await?
-            .ok_or_else(|| DatabaseError::NotFound(format!("User {}", id)))
+            .ok_or_else(|| DatabaseError::NotFound(format!("User {id}")))
     }
 
     /// Get a user by username.
@@ -50,7 +50,7 @@ impl RelayDatabase {
             .bind(username)
             .fetch_optional(self.pool())
             .await?
-            .ok_or_else(|| DatabaseError::NotFound(format!("User with username {}", username)))
+            .ok_or_else(|| DatabaseError::NotFound(format!("User with username {username}")))
     }
 
     // =========================================================================
@@ -87,7 +87,7 @@ impl RelayDatabase {
             .bind(id)
             .fetch_optional(self.pool())
             .await?
-            .ok_or_else(|| DatabaseError::NotFound(format!("Token {}", id)))
+            .ok_or_else(|| DatabaseError::NotFound(format!("Token {id}")))
     }
 
     /// Find a valid (non-revoked, non-expired) token by hash.
@@ -163,7 +163,7 @@ impl RelayDatabase {
             .bind(id)
             .fetch_optional(self.pool())
             .await?
-            .ok_or_else(|| DatabaseError::NotFound(format!("Machine {}", id)))
+            .ok_or_else(|| DatabaseError::NotFound(format!("Machine {id}")))
     }
 
     /// List machines for an owner.
@@ -212,7 +212,7 @@ impl RelayDatabase {
         Ok(())
     }
 
-    /// Update machine last_seen timestamp.
+    /// Update machine `last_seen` timestamp.
     pub async fn touch_machine(&self, id: &str) -> Result<(), DatabaseError> {
         let now = unix_timestamp();
 

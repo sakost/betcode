@@ -23,7 +23,7 @@ impl PluginConfig {
         if content.trim().is_empty() {
             return Ok(Self::default());
         }
-        let config: PluginConfig = toml::from_str(&content)?;
+        let config: Self = toml::from_str(&content)?;
         Ok(config)
     }
 

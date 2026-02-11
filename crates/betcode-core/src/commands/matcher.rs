@@ -33,7 +33,7 @@ pub fn fuzzy_match(query: &str, items: &[&str], max_results: usize) -> Vec<Match
             let score = atom.indices(haystack, &mut matcher, &mut indices)?;
             Some(MatchResult {
                 text: item.to_string(),
-                score: score as u32,
+                score: u32::from(score),
                 match_positions: indices.into_iter().map(|i| i as usize).collect(),
             })
         })
@@ -71,8 +71,8 @@ mod tests {
 
     #[test]
     fn test_fuzzy_match_max_results() {
-        let items: Vec<String> = (0..100).map(|i| format!("item-{}", i)).collect();
-        let refs: Vec<&str> = items.iter().map(|s| s.as_str()).collect();
+        let items: Vec<String> = (0..100).map(|i| format!("item-{i}")).collect();
+        let refs: Vec<&str> = items.iter().map(std::string::String::as_str).collect();
         let results = fuzzy_match("item", &refs, 5);
         assert_eq!(results.len(), 5);
     }

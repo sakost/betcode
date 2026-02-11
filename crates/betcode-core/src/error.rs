@@ -1,11 +1,11 @@
-//! Error types for BetCode core library.
+//! Error types for `BetCode` core library.
 
 use thiserror::Error;
 
-/// Result type alias using BetCode Error.
+/// Result type alias using `BetCode` Error.
 pub type Result<T> = std::result::Result<T, Error>;
 
-/// Core error types for BetCode operations.
+/// Core error types for `BetCode` operations.
 #[derive(Debug, Error)]
 pub enum Error {
     /// NDJSON parsing error

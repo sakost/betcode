@@ -1,4 +1,4 @@
-//! BetCode CLI
+//! `BetCode` CLI
 //!
 //! Terminal interface for interacting with Claude Code through the daemon.
 //! Provides both TUI (ratatui) and headless modes.
@@ -92,6 +92,7 @@ enum Commands {
 }
 
 #[tokio::main]
+#[allow(clippy::too_many_lines, clippy::expect_used, clippy::print_stderr)]
 async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
 
@@ -145,7 +146,7 @@ async fn main() -> anyhow::Result<()> {
             match auth_cmd::ensure_valid_token(&mut cli_config).await {
                 Ok(()) => {}
                 Err(e) => {
-                    eprintln!("Warning: token refresh failed: {}", e);
+                    eprintln!("Warning: token refresh failed: {e}");
                     // Don't bail — the existing token might still work,
                     // or the relay will reject it with a clear error.
                 }
@@ -203,8 +204,7 @@ async fn main() -> anyhow::Result<()> {
             session_id = Some(latest.id.clone());
         } else {
             anyhow::bail!(
-                "No sessions found in {}. Start a new session first.",
-                working_dir
+                "No sessions found in {working_dir}. Start a new session first."
             );
         }
     }

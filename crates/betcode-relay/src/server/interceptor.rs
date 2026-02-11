@@ -41,6 +41,7 @@ pub fn extract_claims<T>(req: &Request<T>) -> Result<&Claims, Status> {
 }
 
 #[cfg(test)]
+#[allow(clippy::panic, clippy::expect_used, clippy::unwrap_used)]
 mod tests {
     use super::*;
     use tonic::metadata::MetadataValue;
@@ -57,7 +58,7 @@ mod tests {
         let mut req = Request::new(());
         req.metadata_mut().insert(
             "authorization",
-            MetadataValue::try_from(format!("Bearer {}", token)).unwrap(),
+            MetadataValue::try_from(format!("Bearer {token}")).unwrap(),
         );
 
         let interceptor = jwt_interceptor(jwt);
@@ -87,7 +88,7 @@ mod tests {
         let mut req = Request::new(());
         req.metadata_mut().insert(
             "authorization",
-            MetadataValue::try_from(format!("Bearer {}", token)).unwrap(),
+            MetadataValue::try_from(format!("Bearer {token}")).unwrap(),
         );
 
         let interceptor = jwt_interceptor(jwt);

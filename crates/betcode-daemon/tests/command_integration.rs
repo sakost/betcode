@@ -1,12 +1,12 @@
-#![allow(clippy::unwrap_used)] // Integration tests use unwrap for brevity
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)] // Integration tests
 
 //! End-to-end integration test for the command system.
 //!
-//! Verifies that CommandServiceImpl correctly wires together:
-//! - CommandRegistry with builtins + user-discovered commands
-//! - FileIndex built from a temp directory
-//! - AgentLister (empty)
-//! - ServiceExecutor for command execution
+//! Verifies that `CommandServiceImpl` correctly wires together:
+//! - `CommandRegistry` with builtins + user-discovered commands
+//! - `FileIndex` built from a temp directory
+//! - `AgentLister` (empty)
+//! - `ServiceExecutor` for command execution
 
 use std::sync::Arc;
 
@@ -24,6 +24,7 @@ use betcode_proto::v1::command_service_server::CommandService;
 use betcode_proto::v1::*;
 
 #[tokio::test]
+#[allow(clippy::too_many_lines)]
 async fn test_full_command_flow() {
     // Setup: create a temp directory with test files and user commands.
     let dir = tempfile::TempDir::new().unwrap();
@@ -141,6 +142,6 @@ async fn test_full_command_flow() {
                 "pwd should return a valid path"
             );
         }
-        other => panic!("Expected StdoutLine from pwd, got {:?}", other),
+        other => panic!("Expected StdoutLine from pwd, got {other:?}"),
     }
 }

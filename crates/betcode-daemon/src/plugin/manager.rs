@@ -50,7 +50,7 @@ impl PluginManager {
                 client.enabled = false;
                 Ok(())
             }
-            None => bail!("plugin '{}' not found", name),
+            None => bail!("plugin '{name}' not found"),
         }
     }
 
@@ -60,7 +60,7 @@ impl PluginManager {
                 client.enabled = true;
                 Ok(())
             }
-            None => bail!("plugin '{}' not found", name),
+            None => bail!("plugin '{name}' not found"),
         }
     }
 
@@ -80,7 +80,7 @@ impl PluginManager {
         self.plugins.get(name)
     }
 
-    pub fn get_all_plugin_commands(&self) -> Vec<String> {
+    pub const fn get_all_plugin_commands(&self) -> Vec<String> {
         Vec::new()
     }
 }
