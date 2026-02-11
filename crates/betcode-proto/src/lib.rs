@@ -25,3 +25,6 @@ pub use v1::*;
 
 // Re-export prost_types for downstream crates that need Struct/Value conversion
 pub use prost_types;
+
+/// Named constants for gRPC method strings shared across the tunnel protocol.
+pub mod methods;

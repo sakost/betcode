@@ -89,12 +89,7 @@ async fn get_worktree_routes_to_machine() {
         ..Default::default()
     };
     spawn_responder(&router, "m1", rx, detail);
-    let req = make_request(
-        GetWorktreeRequest {
-            id: "wt-2".into(),
-        },
-        "m1",
-    );
+    let req = make_request(GetWorktreeRequest { id: "wt-2".into() }, "m1");
     let resp = svc.get_worktree(req).await.unwrap().into_inner();
     assert_eq!(resp.id, "wt-2");
     assert!(resp.exists_on_disk);
@@ -103,18 +98,8 @@ async fn get_worktree_routes_to_machine() {
 #[tokio::test]
 async fn remove_worktree_routes_to_machine() {
     let (svc, router, rx) = setup_with_machine("m1").await;
-    spawn_responder(
-        &router,
-        "m1",
-        rx,
-        RemoveWorktreeResponse { removed: true },
-    );
-    let req = make_request(
-        RemoveWorktreeRequest {
-            id: "wt-1".into(),
-        },
-        "m1",
-    );
+    spawn_responder(&router, "m1", rx, RemoveWorktreeResponse { removed: true });
+    let req = make_request(RemoveWorktreeRequest { id: "wt-1".into() }, "m1");
     let resp = svc.remove_worktree(req).await.unwrap().into_inner();
     assert!(resp.removed);
 }

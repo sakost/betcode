@@ -14,6 +14,7 @@ use betcode_proto::v1::{
 use crate::worktree::{WorktreeInfo, WorktreeManager};
 
 /// WorktreeService implementation backed by WorktreeManager.
+#[derive(Clone)]
 pub struct WorktreeServiceImpl {
     manager: WorktreeManager,
 }

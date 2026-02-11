@@ -78,6 +78,7 @@ fn validate_branch(branch: &str) -> Result<(), WorktreeError> {
 }
 
 /// Manages git worktrees and their lifecycle.
+#[derive(Clone)]
 pub struct WorktreeManager {
     db: Database,
 }

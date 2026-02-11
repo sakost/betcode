@@ -11,6 +11,10 @@ use betcode_proto::v1::{
     RemoveWorktreeRequest, RemoveWorktreeResponse, WorktreeDetail,
 };
 
+use betcode_proto::methods::{
+    METHOD_CREATE_WORKTREE, METHOD_GET_WORKTREE, METHOD_LIST_WORKTREES, METHOD_REMOVE_WORKTREE,
+};
+
 use crate::router::RequestRouter;
 use crate::server::agent_proxy::extract_machine_id;
 use crate::server::interceptor::extract_claims;
@@ -37,11 +41,11 @@ impl WorktreeService for WorktreeProxyService {
         let machine_id = extract_machine_id(&request)?;
         let resp = super::grpc_util::forward_unary(
             &self.router,
-                &machine_id,
-                "WorktreeService/CreateWorktree",
-                &request.into_inner(),
-            )
-            .await?;
+            &machine_id,
+            METHOD_CREATE_WORKTREE,
+            &request.into_inner(),
+        )
+        .await?;
         Ok(Response::new(resp))
     }
 
@@ -54,11 +58,11 @@ impl WorktreeService for WorktreeProxyService {
         let machine_id = extract_machine_id(&request)?;
         let resp = super::grpc_util::forward_unary(
             &self.router,
-                &machine_id,
-                "WorktreeService/RemoveWorktree",
-                &request.into_inner(),
-            )
-            .await?;
+            &machine_id,
+            METHOD_REMOVE_WORKTREE,
+            &request.into_inner(),
+        )
+        .await?;
         Ok(Response::new(resp))
     }
 
@@ -71,11 +75,11 @@ impl WorktreeService for WorktreeProxyService {
         let machine_id = extract_machine_id(&request)?;
         let resp = super::grpc_util::forward_unary(
             &self.router,
-                &machine_id,
-                "WorktreeService/ListWorktrees",
-                &request.into_inner(),
-            )
-            .await?;
+            &machine_id,
+            METHOD_LIST_WORKTREES,
+            &request.into_inner(),
+        )
+        .await?;
         Ok(Response::new(resp))
     }
 
@@ -88,11 +92,11 @@ impl WorktreeService for WorktreeProxyService {
         let machine_id = extract_machine_id(&request)?;
         let resp = super::grpc_util::forward_unary(
             &self.router,
-                &machine_id,
-                "WorktreeService/GetWorktree",
-                &request.into_inner(),
-            )
-            .await?;
+            &machine_id,
+            METHOD_GET_WORKTREE,
+            &request.into_inner(),
+        )
+        .await?;
         Ok(Response::new(resp))
     }
 }

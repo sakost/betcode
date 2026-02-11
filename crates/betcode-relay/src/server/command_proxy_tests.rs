@@ -51,12 +51,7 @@ async fn get_command_registry_routes_to_machine() {
 #[tokio::test]
 async fn list_agents_routes_to_machine() {
     let (svc, router, rx) = setup_with_machine("m1").await;
-    spawn_responder(
-        &router,
-        "m1",
-        rx,
-        ListAgentsResponse { agents: vec![] },
-    );
+    spawn_responder(&router, "m1", rx, ListAgentsResponse { agents: vec![] });
     let req = make_request(
         ListAgentsRequest {
             query: String::new(),
@@ -220,14 +215,10 @@ async fn execute_service_command_streams_output() {
     assert_eq!(outputs.len(), 2);
     assert_eq!(
         outputs[0].output,
-        Some(betcode_proto::v1::service_command_output::Output::StdoutLine(
-            "first line".into()
-        ))
+        Some(betcode_proto::v1::service_command_output::Output::StdoutLine("first line".into()))
     );
     assert_eq!(
         outputs[1].output,
-        Some(betcode_proto::v1::service_command_output::Output::StdoutLine(
-            "second line".into()
-        ))
+        Some(betcode_proto::v1::service_command_output::Output::StdoutLine("second line".into()))
     );
 }

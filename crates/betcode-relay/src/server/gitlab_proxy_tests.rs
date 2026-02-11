@@ -7,10 +7,10 @@ use tonic::Request;
 
 use betcode_proto::v1::git_lab_service_server::GitLabService;
 use betcode_proto::v1::{
-    FrameType, GetIssueRequest, GetIssueResponse, GetMergeRequestRequest,
-    GetMergeRequestResponse, GetPipelineRequest, GetPipelineResponse, ListIssuesRequest,
-    ListIssuesResponse, ListMergeRequestsRequest, ListMergeRequestsResponse,
-    ListPipelinesRequest, ListPipelinesResponse, MergeRequestInfo, PipelineInfo, TunnelFrame,
+    FrameType, GetIssueRequest, GetIssueResponse, GetMergeRequestRequest, GetMergeRequestResponse,
+    GetPipelineRequest, GetPipelineResponse, ListIssuesRequest, ListIssuesResponse,
+    ListMergeRequestsRequest, ListMergeRequestsResponse, ListPipelinesRequest,
+    ListPipelinesResponse, MergeRequestInfo, PipelineInfo, TunnelFrame,
 };
 
 use super::GitLabProxyService;
@@ -117,12 +117,7 @@ async fn list_issues_routes_to_machine() {
 #[tokio::test]
 async fn get_issue_routes_to_machine() {
     let (svc, router, rx) = setup_with_machine("m1").await;
-    spawn_responder(
-        &router,
-        "m1",
-        rx,
-        GetIssueResponse { issue: None },
-    );
+    spawn_responder(&router, "m1", rx, GetIssueResponse { issue: None });
     let req = make_request(
         GetIssueRequest {
             project: "proj".into(),

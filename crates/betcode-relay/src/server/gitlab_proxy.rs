@@ -13,6 +13,11 @@ use betcode_proto::v1::{
     ListPipelinesResponse,
 };
 
+use betcode_proto::methods::{
+    METHOD_GET_ISSUE, METHOD_GET_MERGE_REQUEST, METHOD_GET_PIPELINE, METHOD_LIST_ISSUES,
+    METHOD_LIST_MERGE_REQUESTS, METHOD_LIST_PIPELINES,
+};
+
 use crate::router::RequestRouter;
 use crate::server::agent_proxy::extract_machine_id;
 use crate::server::interceptor::extract_claims;
@@ -39,11 +44,11 @@ impl GitLabService for GitLabProxyService {
         let machine_id = extract_machine_id(&request)?;
         let resp = super::grpc_util::forward_unary(
             &self.router,
-                &machine_id,
-                "GitLabService/ListMergeRequests",
-                &request.into_inner(),
-            )
-            .await?;
+            &machine_id,
+            METHOD_LIST_MERGE_REQUESTS,
+            &request.into_inner(),
+        )
+        .await?;
         Ok(Response::new(resp))
     }
 
@@ -56,11 +61,11 @@ impl GitLabService for GitLabProxyService {
         let machine_id = extract_machine_id(&request)?;
         let resp = super::grpc_util::forward_unary(
             &self.router,
-                &machine_id,
-                "GitLabService/GetMergeRequest",
-                &request.into_inner(),
-            )
-            .await?;
+            &machine_id,
+            METHOD_GET_MERGE_REQUEST,
+            &request.into_inner(),
+        )
+        .await?;
         Ok(Response::new(resp))
     }
 
@@ -73,11 +78,11 @@ impl GitLabService for GitLabProxyService {
         let machine_id = extract_machine_id(&request)?;
         let resp = super::grpc_util::forward_unary(
             &self.router,
-                &machine_id,
-                "GitLabService/ListPipelines",
-                &request.into_inner(),
-            )
-            .await?;
+            &machine_id,
+            METHOD_LIST_PIPELINES,
+            &request.into_inner(),
+        )
+        .await?;
         Ok(Response::new(resp))
     }
 
@@ -90,11 +95,11 @@ impl GitLabService for GitLabProxyService {
         let machine_id = extract_machine_id(&request)?;
         let resp = super::grpc_util::forward_unary(
             &self.router,
-                &machine_id,
-                "GitLabService/GetPipeline",
-                &request.into_inner(),
-            )
-            .await?;
+            &machine_id,
+            METHOD_GET_PIPELINE,
+            &request.into_inner(),
+        )
+        .await?;
         Ok(Response::new(resp))
     }
 
@@ -107,11 +112,11 @@ impl GitLabService for GitLabProxyService {
         let machine_id = extract_machine_id(&request)?;
         let resp = super::grpc_util::forward_unary(
             &self.router,
-                &machine_id,
-                "GitLabService/ListIssues",
-                &request.into_inner(),
-            )
-            .await?;
+            &machine_id,
+            METHOD_LIST_ISSUES,
+            &request.into_inner(),
+        )
+        .await?;
         Ok(Response::new(resp))
     }
 
@@ -123,8 +128,12 @@ impl GitLabService for GitLabProxyService {
         let _claims = extract_claims(&request)?;
         let machine_id = extract_machine_id(&request)?;
         let resp = super::grpc_util::forward_unary(
-            &self.router,&machine_id, "GitLabService/GetIssue", &request.into_inner())
-            .await?;
+            &self.router,
+            &machine_id,
+            METHOD_GET_ISSUE,
+            &request.into_inner(),
+        )
+        .await?;
         Ok(Response::new(resp))
     }
 }

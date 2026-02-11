@@ -23,6 +23,11 @@ use betcode_proto::v1::{
     ResumeSessionRequest, StreamPayload, TunnelFrame,
 };
 
+use betcode_proto::methods::{
+    METHOD_CANCEL_TURN, METHOD_COMPACT_SESSION, METHOD_CONVERSE, METHOD_EXCHANGE_KEYS,
+    METHOD_LIST_SESSIONS, METHOD_REQUEST_INPUT_LOCK, METHOD_RESUME_SESSION,
+};
+
 use crate::router::{RequestRouter, RouterError};
 use crate::server::interceptor::extract_claims;
 
@@ -115,7 +120,7 @@ async fn converse_proxy_task(
         .forward_bidi_stream(
             machine_id,
             &request_id,
-            "AgentService/Converse",
+            METHOD_CONVERSE,
             buf,
             HashMap::new(),
         )
@@ -269,11 +274,11 @@ impl AgentService for AgentProxyService {
         let machine_id = extract_machine_id(&request)?;
         let resp = super::grpc_util::forward_unary(
             &self.router,
-                &machine_id,
-                "AgentService/ListSessions",
-                &request.into_inner(),
-            )
-            .await?;
+            &machine_id,
+            METHOD_LIST_SESSIONS,
+            &request.into_inner(),
+        )
+        .await?;
         Ok(Response::new(resp))
     }
 
@@ -295,7 +300,7 @@ impl AgentService for AgentProxyService {
             .forward_stream(
                 &machine_id,
                 &request_id,
-                "AgentService/ResumeSession",
+                METHOD_RESUME_SESSION,
                 buf,
                 HashMap::new(),
             )
@@ -358,11 +363,11 @@ impl AgentService for AgentProxyService {
         let machine_id = extract_machine_id(&request)?;
         let resp = super::grpc_util::forward_unary(
             &self.router,
-                &machine_id,
-                "AgentService/CompactSession",
-                &request.into_inner(),
-            )
-            .await?;
+            &machine_id,
+            METHOD_COMPACT_SESSION,
+            &request.into_inner(),
+        )
+        .await?;
         Ok(Response::new(resp))
     }
 
@@ -375,11 +380,11 @@ impl AgentService for AgentProxyService {
         let machine_id = extract_machine_id(&request)?;
         let resp = super::grpc_util::forward_unary(
             &self.router,
-                &machine_id,
-                "AgentService/CancelTurn",
-                &request.into_inner(),
-            )
-            .await?;
+            &machine_id,
+            METHOD_CANCEL_TURN,
+            &request.into_inner(),
+        )
+        .await?;
         Ok(Response::new(resp))
     }
 
@@ -392,11 +397,11 @@ impl AgentService for AgentProxyService {
         let machine_id = extract_machine_id(&request)?;
         let resp = super::grpc_util::forward_unary(
             &self.router,
-                &machine_id,
-                "AgentService/RequestInputLock",
-                &request.into_inner(),
-            )
-            .await?;
+            &machine_id,
+            METHOD_REQUEST_INPUT_LOCK,
+            &request.into_inner(),
+        )
+        .await?;
         Ok(Response::new(resp))
     }
 
@@ -409,11 +414,11 @@ impl AgentService for AgentProxyService {
         let machine_id = extract_machine_id(&request)?;
         let resp = super::grpc_util::forward_unary(
             &self.router,
-                &machine_id,
-                "AgentService/ExchangeKeys",
-                &request.into_inner(),
-            )
-            .await?;
+            &machine_id,
+            METHOD_EXCHANGE_KEYS,
+            &request.into_inner(),
+        )
+        .await?;
         Ok(Response::new(resp))
     }
 }

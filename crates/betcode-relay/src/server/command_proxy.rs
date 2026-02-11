@@ -20,6 +20,12 @@ use betcode_proto::v1::{
     RemovePluginResponse, ServiceCommandOutput,
 };
 
+use betcode_proto::methods::{
+    METHOD_ADD_PLUGIN, METHOD_DISABLE_PLUGIN, METHOD_ENABLE_PLUGIN,
+    METHOD_EXECUTE_SERVICE_COMMAND, METHOD_GET_COMMAND_REGISTRY, METHOD_GET_PLUGIN_STATUS,
+    METHOD_LIST_AGENTS, METHOD_LIST_PATH, METHOD_LIST_PLUGINS, METHOD_REMOVE_PLUGIN,
+};
+
 use crate::router::RequestRouter;
 use crate::server::agent_proxy::{extract_machine_id, router_error_to_status};
 use crate::server::interceptor::extract_claims;
@@ -51,11 +57,11 @@ impl CommandService for CommandProxyService {
         let machine_id = extract_machine_id(&request)?;
         let resp = super::grpc_util::forward_unary(
             &self.router,
-                &machine_id,
-                "CommandService/GetCommandRegistry",
-                &request.into_inner(),
-            )
-            .await?;
+            &machine_id,
+            METHOD_GET_COMMAND_REGISTRY,
+            &request.into_inner(),
+        )
+        .await?;
         Ok(Response::new(resp))
     }
 
@@ -68,11 +74,11 @@ impl CommandService for CommandProxyService {
         let machine_id = extract_machine_id(&request)?;
         let resp = super::grpc_util::forward_unary(
             &self.router,
-                &machine_id,
-                "CommandService/ListAgents",
-                &request.into_inner(),
-            )
-            .await?;
+            &machine_id,
+            METHOD_LIST_AGENTS,
+            &request.into_inner(),
+        )
+        .await?;
         Ok(Response::new(resp))
     }
 
@@ -85,11 +91,11 @@ impl CommandService for CommandProxyService {
         let machine_id = extract_machine_id(&request)?;
         let resp = super::grpc_util::forward_unary(
             &self.router,
-                &machine_id,
-                "CommandService/ListPath",
-                &request.into_inner(),
-            )
-            .await?;
+            &machine_id,
+            METHOD_LIST_PATH,
+            &request.into_inner(),
+        )
+        .await?;
         Ok(Response::new(resp))
     }
 
@@ -111,7 +117,7 @@ impl CommandService for CommandProxyService {
             .forward_stream(
                 &machine_id,
                 &request_id,
-                "CommandService/ExecuteServiceCommand",
+                METHOD_EXECUTE_SERVICE_COMMAND,
                 buf,
                 HashMap::new(),
             )
@@ -171,11 +177,11 @@ impl CommandService for CommandProxyService {
         let machine_id = extract_machine_id(&request)?;
         let resp = super::grpc_util::forward_unary(
             &self.router,
-                &machine_id,
-                "CommandService/ListPlugins",
-                &request.into_inner(),
-            )
-            .await?;
+            &machine_id,
+            METHOD_LIST_PLUGINS,
+            &request.into_inner(),
+        )
+        .await?;
         Ok(Response::new(resp))
     }
 
@@ -188,11 +194,11 @@ impl CommandService for CommandProxyService {
         let machine_id = extract_machine_id(&request)?;
         let resp = super::grpc_util::forward_unary(
             &self.router,
-                &machine_id,
-                "CommandService/GetPluginStatus",
-                &request.into_inner(),
-            )
-            .await?;
+            &machine_id,
+            METHOD_GET_PLUGIN_STATUS,
+            &request.into_inner(),
+        )
+        .await?;
         Ok(Response::new(resp))
     }
 
@@ -205,11 +211,11 @@ impl CommandService for CommandProxyService {
         let machine_id = extract_machine_id(&request)?;
         let resp = super::grpc_util::forward_unary(
             &self.router,
-                &machine_id,
-                "CommandService/AddPlugin",
-                &request.into_inner(),
-            )
-            .await?;
+            &machine_id,
+            METHOD_ADD_PLUGIN,
+            &request.into_inner(),
+        )
+        .await?;
         Ok(Response::new(resp))
     }
 
@@ -222,11 +228,11 @@ impl CommandService for CommandProxyService {
         let machine_id = extract_machine_id(&request)?;
         let resp = super::grpc_util::forward_unary(
             &self.router,
-                &machine_id,
-                "CommandService/RemovePlugin",
-                &request.into_inner(),
-            )
-            .await?;
+            &machine_id,
+            METHOD_REMOVE_PLUGIN,
+            &request.into_inner(),
+        )
+        .await?;
         Ok(Response::new(resp))
     }
 
@@ -239,11 +245,11 @@ impl CommandService for CommandProxyService {
         let machine_id = extract_machine_id(&request)?;
         let resp = super::grpc_util::forward_unary(
             &self.router,
-                &machine_id,
-                "CommandService/EnablePlugin",
-                &request.into_inner(),
-            )
-            .await?;
+            &machine_id,
+            METHOD_ENABLE_PLUGIN,
+            &request.into_inner(),
+        )
+        .await?;
         Ok(Response::new(resp))
     }
 
@@ -256,11 +262,11 @@ impl CommandService for CommandProxyService {
         let machine_id = extract_machine_id(&request)?;
         let resp = super::grpc_util::forward_unary(
             &self.router,
-                &machine_id,
-                "CommandService/DisablePlugin",
-                &request.into_inner(),
-            )
-            .await?;
+            &machine_id,
+            METHOD_DISABLE_PLUGIN,
+            &request.into_inner(),
+        )
+        .await?;
         Ok(Response::new(resp))
     }
 }

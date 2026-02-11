@@ -32,40 +32,18 @@ use crate::server::{CommandServiceImpl, GitLabServiceImpl, WorktreeServiceImpl};
 use crate::session::SessionMultiplexer;
 use crate::storage::Database;
 
-/// Methods recognized by the tunnel handler for dispatching.
-pub const METHOD_LIST_SESSIONS: &str = "AgentService/ListSessions";
-pub const METHOD_COMPACT_SESSION: &str = "AgentService/CompactSession";
-pub const METHOD_CANCEL_TURN: &str = "AgentService/CancelTurn";
-pub const METHOD_REQUEST_INPUT_LOCK: &str = "AgentService/RequestInputLock";
-pub const METHOD_CONVERSE: &str = "AgentService/Converse";
-pub const METHOD_RESUME_SESSION: &str = "AgentService/ResumeSession";
-pub const METHOD_EXCHANGE_KEYS: &str = "AgentService/ExchangeKeys";
-
-// CommandService methods
-pub const METHOD_GET_COMMAND_REGISTRY: &str = "CommandService/GetCommandRegistry";
-pub const METHOD_LIST_AGENTS: &str = "CommandService/ListAgents";
-pub const METHOD_LIST_PATH: &str = "CommandService/ListPath";
-pub const METHOD_EXECUTE_SERVICE_COMMAND: &str = "CommandService/ExecuteServiceCommand";
-pub const METHOD_LIST_PLUGINS: &str = "CommandService/ListPlugins";
-pub const METHOD_GET_PLUGIN_STATUS: &str = "CommandService/GetPluginStatus";
-pub const METHOD_ADD_PLUGIN: &str = "CommandService/AddPlugin";
-pub const METHOD_REMOVE_PLUGIN: &str = "CommandService/RemovePlugin";
-pub const METHOD_ENABLE_PLUGIN: &str = "CommandService/EnablePlugin";
-pub const METHOD_DISABLE_PLUGIN: &str = "CommandService/DisablePlugin";
-
-// GitLabService methods
-pub const METHOD_LIST_MERGE_REQUESTS: &str = "GitLabService/ListMergeRequests";
-pub const METHOD_GET_MERGE_REQUEST: &str = "GitLabService/GetMergeRequest";
-pub const METHOD_LIST_PIPELINES: &str = "GitLabService/ListPipelines";
-pub const METHOD_GET_PIPELINE: &str = "GitLabService/GetPipeline";
-pub const METHOD_LIST_ISSUES: &str = "GitLabService/ListIssues";
-pub const METHOD_GET_ISSUE: &str = "GitLabService/GetIssue";
-
-// WorktreeService methods
-pub const METHOD_CREATE_WORKTREE: &str = "WorktreeService/CreateWorktree";
-pub const METHOD_REMOVE_WORKTREE: &str = "WorktreeService/RemoveWorktree";
-pub const METHOD_LIST_WORKTREES: &str = "WorktreeService/ListWorktrees";
-pub const METHOD_GET_WORKTREE: &str = "WorktreeService/GetWorktree";
+// Re-export method constants from betcode-proto so that tests (which use `use super::*`)
+// and any other in-crate consumers continue to see them at the same path.
+pub use betcode_proto::methods::{
+    METHOD_ADD_PLUGIN, METHOD_CANCEL_TURN, METHOD_COMPACT_SESSION, METHOD_CONVERSE,
+    METHOD_CREATE_WORKTREE, METHOD_DISABLE_PLUGIN, METHOD_ENABLE_PLUGIN,
+    METHOD_EXCHANGE_KEYS, METHOD_EXECUTE_SERVICE_COMMAND, METHOD_GET_COMMAND_REGISTRY,
+    METHOD_GET_ISSUE, METHOD_GET_MERGE_REQUEST, METHOD_GET_PIPELINE, METHOD_GET_PLUGIN_STATUS,
+    METHOD_GET_WORKTREE, METHOD_LIST_AGENTS, METHOD_LIST_ISSUES, METHOD_LIST_MERGE_REQUESTS,
+    METHOD_LIST_PATH, METHOD_LIST_PIPELINES, METHOD_LIST_PLUGINS, METHOD_LIST_SESSIONS,
+    METHOD_LIST_WORKTREES, METHOD_REMOVE_PLUGIN, METHOD_REMOVE_WORKTREE,
+    METHOD_REQUEST_INPUT_LOCK, METHOD_RESUME_SESSION,
+};
 
 /// Default maximum number of sessions returned by ListSessions.
 const DEFAULT_LIST_SESSIONS_LIMIT: u32 = 50;
@@ -92,6 +70,37 @@ struct ActiveStream {
     session_id: String,
     /// Deferred session config — subprocess is only started on first UserMessage.
     pending_config: Option<crate::relay::RelaySessionConfig>,
+}
+
+/// Dispatch a unary gRPC call through the tunnel.
+///
+/// Decodes `$data` into `$req_ty`, calls `$svc.$method(...)`, and wraps the
+/// response (or error) into a `Vec<TunnelFrame>`.
+macro_rules! dispatch_rpc {
+    ($self:ident, $svc:expr, $request_id:expr, $data:expr, $relay_forwarded:expr, $req_ty:ty, $method:ident) => {{
+        let req = match <$req_ty>::decode($data) {
+            Ok(r) => r,
+            Err(e) => {
+                return vec![Self::error_response(
+                    $request_id,
+                    TunnelErrorCode::Internal,
+                    &format!("Decode error: {e}"),
+                )]
+            }
+        };
+        match $svc.$method(Request::new(req)).await {
+            Ok(resp) => vec![
+                $self
+                    .unary_response_frame($request_id, &resp.into_inner(), $relay_forwarded)
+                    .await,
+            ],
+            Err(status) => vec![Self::error_response(
+                $request_id,
+                TunnelErrorCode::Internal,
+                status.message(),
+            )],
+        }
+    }};
 }
 
 /// Handles incoming tunnel frames by dispatching to local gRPC services.
@@ -1299,41 +1308,16 @@ impl TunnelRequestHandler {
                 )]
             }
         };
-        macro_rules! rpc {
-            ($req_ty:ty, $method:ident) => {{
-                let req = match <$req_ty>::decode(data) {
-                    Ok(r) => r,
-                    Err(e) => {
-                        return vec![Self::error_response(
-                            request_id,
-                            TunnelErrorCode::Internal,
-                            &format!("Decode error: {e}"),
-                        )]
-                    }
-                };
-                match svc.$method(Request::new(req)).await {
-                    Ok(resp) => vec![
-                        self.unary_response_frame(request_id, &resp.into_inner(), relay_forwarded)
-                            .await,
-                    ],
-                    Err(status) => vec![Self::error_response(
-                        request_id,
-                        TunnelErrorCode::Internal,
-                        status.message(),
-                    )],
-                }
-            }};
-        }
         match method {
-            METHOD_GET_COMMAND_REGISTRY => rpc!(GetCommandRegistryRequest, get_command_registry),
-            METHOD_LIST_AGENTS => rpc!(ListAgentsRequest, list_agents),
-            METHOD_LIST_PATH => rpc!(ListPathRequest, list_path),
-            METHOD_LIST_PLUGINS => rpc!(ListPluginsRequest, list_plugins),
-            METHOD_GET_PLUGIN_STATUS => rpc!(GetPluginStatusRequest, get_plugin_status),
-            METHOD_ADD_PLUGIN => rpc!(AddPluginRequest, add_plugin),
-            METHOD_REMOVE_PLUGIN => rpc!(RemovePluginRequest, remove_plugin),
-            METHOD_ENABLE_PLUGIN => rpc!(EnablePluginRequest, enable_plugin),
-            METHOD_DISABLE_PLUGIN => rpc!(DisablePluginRequest, disable_plugin),
+            METHOD_GET_COMMAND_REGISTRY => dispatch_rpc!(self, svc, request_id, data, relay_forwarded, GetCommandRegistryRequest, get_command_registry),
+            METHOD_LIST_AGENTS => dispatch_rpc!(self, svc, request_id, data, relay_forwarded, ListAgentsRequest, list_agents),
+            METHOD_LIST_PATH => dispatch_rpc!(self, svc, request_id, data, relay_forwarded, ListPathRequest, list_path),
+            METHOD_LIST_PLUGINS => dispatch_rpc!(self, svc, request_id, data, relay_forwarded, ListPluginsRequest, list_plugins),
+            METHOD_GET_PLUGIN_STATUS => dispatch_rpc!(self, svc, request_id, data, relay_forwarded, GetPluginStatusRequest, get_plugin_status),
+            METHOD_ADD_PLUGIN => dispatch_rpc!(self, svc, request_id, data, relay_forwarded, AddPluginRequest, add_plugin),
+            METHOD_REMOVE_PLUGIN => dispatch_rpc!(self, svc, request_id, data, relay_forwarded, RemovePluginRequest, remove_plugin),
+            METHOD_ENABLE_PLUGIN => dispatch_rpc!(self, svc, request_id, data, relay_forwarded, EnablePluginRequest, enable_plugin),
+            METHOD_DISABLE_PLUGIN => dispatch_rpc!(self, svc, request_id, data, relay_forwarded, DisablePluginRequest, disable_plugin),
             _ => vec![Self::error_response(
                 request_id,
                 TunnelErrorCode::NotFound,
@@ -1480,38 +1464,13 @@ impl TunnelRequestHandler {
                 )]
             }
         };
-        macro_rules! rpc {
-            ($req_ty:ty, $method:ident) => {{
-                let req = match <$req_ty>::decode(data) {
-                    Ok(r) => r,
-                    Err(e) => {
-                        return vec![Self::error_response(
-                            request_id,
-                            TunnelErrorCode::Internal,
-                            &format!("Decode error: {e}"),
-                        )]
-                    }
-                };
-                match svc.$method(Request::new(req)).await {
-                    Ok(resp) => vec![
-                        self.unary_response_frame(request_id, &resp.into_inner(), relay_forwarded)
-                            .await,
-                    ],
-                    Err(status) => vec![Self::error_response(
-                        request_id,
-                        TunnelErrorCode::Internal,
-                        status.message(),
-                    )],
-                }
-            }};
-        }
         match method {
-            METHOD_LIST_MERGE_REQUESTS => rpc!(ListMergeRequestsRequest, list_merge_requests),
-            METHOD_GET_MERGE_REQUEST => rpc!(GetMergeRequestRequest, get_merge_request),
-            METHOD_LIST_PIPELINES => rpc!(ListPipelinesRequest, list_pipelines),
-            METHOD_GET_PIPELINE => rpc!(GetPipelineRequest, get_pipeline),
-            METHOD_LIST_ISSUES => rpc!(ListIssuesRequest, list_issues),
-            METHOD_GET_ISSUE => rpc!(GetIssueRequest, get_issue),
+            METHOD_LIST_MERGE_REQUESTS => dispatch_rpc!(self, svc, request_id, data, relay_forwarded, ListMergeRequestsRequest, list_merge_requests),
+            METHOD_GET_MERGE_REQUEST => dispatch_rpc!(self, svc, request_id, data, relay_forwarded, GetMergeRequestRequest, get_merge_request),
+            METHOD_LIST_PIPELINES => dispatch_rpc!(self, svc, request_id, data, relay_forwarded, ListPipelinesRequest, list_pipelines),
+            METHOD_GET_PIPELINE => dispatch_rpc!(self, svc, request_id, data, relay_forwarded, GetPipelineRequest, get_pipeline),
+            METHOD_LIST_ISSUES => dispatch_rpc!(self, svc, request_id, data, relay_forwarded, ListIssuesRequest, list_issues),
+            METHOD_GET_ISSUE => dispatch_rpc!(self, svc, request_id, data, relay_forwarded, GetIssueRequest, get_issue),
             _ => vec![Self::error_response(
                 request_id,
                 TunnelErrorCode::NotFound,
@@ -1537,36 +1496,11 @@ impl TunnelRequestHandler {
                 )]
             }
         };
-        macro_rules! rpc {
-            ($req_ty:ty, $method:ident) => {{
-                let req = match <$req_ty>::decode(data) {
-                    Ok(r) => r,
-                    Err(e) => {
-                        return vec![Self::error_response(
-                            request_id,
-                            TunnelErrorCode::Internal,
-                            &format!("Decode error: {e}"),
-                        )]
-                    }
-                };
-                match svc.$method(Request::new(req)).await {
-                    Ok(resp) => vec![
-                        self.unary_response_frame(request_id, &resp.into_inner(), relay_forwarded)
-                            .await,
-                    ],
-                    Err(status) => vec![Self::error_response(
-                        request_id,
-                        TunnelErrorCode::Internal,
-                        status.message(),
-                    )],
-                }
-            }};
-        }
         match method {
-            METHOD_CREATE_WORKTREE => rpc!(CreateWorktreeRequest, create_worktree),
-            METHOD_REMOVE_WORKTREE => rpc!(RemoveWorktreeRequest, remove_worktree),
-            METHOD_LIST_WORKTREES => rpc!(ListWorktreesRequest, list_worktrees),
-            METHOD_GET_WORKTREE => rpc!(GetWorktreeRequest, get_worktree),
+            METHOD_CREATE_WORKTREE => dispatch_rpc!(self, svc, request_id, data, relay_forwarded, CreateWorktreeRequest, create_worktree),
+            METHOD_REMOVE_WORKTREE => dispatch_rpc!(self, svc, request_id, data, relay_forwarded, RemoveWorktreeRequest, remove_worktree),
+            METHOD_LIST_WORKTREES => dispatch_rpc!(self, svc, request_id, data, relay_forwarded, ListWorktreesRequest, list_worktrees),
+            METHOD_GET_WORKTREE => dispatch_rpc!(self, svc, request_id, data, relay_forwarded, GetWorktreeRequest, get_worktree),
             _ => vec![Self::error_response(
                 request_id,
                 TunnelErrorCode::NotFound,

@@ -68,6 +68,7 @@ pub struct GrpcServer {
     multiplexer: Arc<SessionMultiplexer>,
     relay: Arc<SessionRelay>,
     command_service: CommandServiceImpl,
+    worktree_service: WorktreeServiceImpl,
 }
 
 impl GrpcServer {
@@ -112,6 +113,8 @@ impl GrpcServer {
             shutdown_tx,
         );
 
+        let worktree_service = WorktreeServiceImpl::new(WorktreeManager::new(db.clone()));
+
         Self {
             config,
             db,
@@ -119,6 +122,7 @@ impl GrpcServer {
             multiplexer,
             relay,
             command_service,
+            worktree_service,
         }
     }
 
@@ -131,7 +135,6 @@ impl GrpcServer {
         );
         let health_service =
             HealthServiceImpl::new(self.db.clone(), Arc::clone(&self.subprocess_manager));
-        let worktree_service = self.worktree_service_impl();
 
         info!(%addr, "Starting gRPC server on TCP");
 
@@ -142,7 +145,7 @@ impl GrpcServer {
             .add_service(CommandServiceServer::new(self.command_service))
             .add_service(HealthServer::new(health_service.clone()))
             .add_service(BetCodeHealthServer::new(health_service))
-            .add_service(WorktreeServiceServer::new(worktree_service))
+            .add_service(WorktreeServiceServer::new(self.worktree_service))
             .serve(addr)
             .await?;
 
@@ -172,7 +175,6 @@ impl GrpcServer {
         );
         let health_service =
             HealthServiceImpl::new(self.db.clone(), Arc::clone(&self.subprocess_manager));
-        let worktree_service = self.worktree_service_impl();
 
         info!(path = %path.display(), "Starting gRPC server on Unix socket");
 
@@ -183,7 +185,7 @@ impl GrpcServer {
             .add_service(CommandServiceServer::new(self.command_service))
             .add_service(HealthServer::new(health_service.clone()))
             .add_service(BetCodeHealthServer::new(health_service))
-            .add_service(WorktreeServiceServer::new(worktree_service))
+            .add_service(WorktreeServiceServer::new(self.worktree_service))
             .serve_with_incoming(stream)
             .await?;
 
@@ -215,9 +217,9 @@ impl GrpcServer {
         self.command_service.clone()
     }
 
-    /// Build a `WorktreeServiceImpl` backed by the same database.
+    /// Get a clone of the `WorktreeServiceImpl` that shares state with the gRPC server.
     pub fn worktree_service_impl(&self) -> WorktreeServiceImpl {
-        WorktreeServiceImpl::new(WorktreeManager::new(self.db.clone()))
+        self.worktree_service.clone()
     }
 
     /// Try to build a `GitLabServiceImpl` from environment variables.

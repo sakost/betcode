@@ -1,21 +1,150 @@
 use super::*;
 use crate::subprocess::SubprocessManager;
 
-async fn make_handler() -> TunnelRequestHandler {
-    let db = Database::open_in_memory().await.unwrap();
-    let sub = Arc::new(SubprocessManager::new(5));
-    let mux = Arc::new(SessionMultiplexer::with_defaults());
-    let relay = Arc::new(SessionRelay::new(sub, Arc::clone(&mux), db.clone()));
-    let (outbound_tx, _outbound_rx) = mpsc::channel(128);
-    TunnelRequestHandler::new(
-        "test-machine".into(),
-        relay,
-        mux,
-        db,
-        outbound_tx,
-        None,
-        None,
-    )
+// ---------------------------------------------------------------------------
+// HandlerTestBuilder – shared setup for all handler tests
+// ---------------------------------------------------------------------------
+
+struct HandlerTestBuilder {
+    max_processes: usize,
+    with_crypto: bool,
+    with_identity: bool,
+    with_command_service: bool,
+    with_gitlab_service: bool,
+    with_worktree_service: bool,
+}
+
+/// Outputs produced by [`HandlerTestBuilder::build`].
+struct HandlerTestOutput {
+    handler: TunnelRequestHandler,
+    rx: mpsc::Receiver<TunnelFrame>,
+    /// Client-side crypto session (present only when `with_crypto` was set).
+    client_crypto: Option<Arc<CryptoSession>>,
+}
+
+impl HandlerTestBuilder {
+    fn new() -> Self {
+        Self {
+            max_processes: 5,
+            with_crypto: false,
+            with_identity: false,
+            with_command_service: false,
+            with_gitlab_service: false,
+            with_worktree_service: false,
+        }
+    }
+
+    fn max_processes(mut self, n: usize) -> Self {
+        self.max_processes = n;
+        self
+    }
+
+    fn with_crypto(mut self) -> Self {
+        self.with_crypto = true;
+        self
+    }
+
+    fn with_identity(mut self) -> Self {
+        self.with_identity = true;
+        self
+    }
+
+    fn with_command_service(mut self) -> Self {
+        self.with_command_service = true;
+        self
+    }
+
+    fn with_gitlab_service(mut self) -> Self {
+        self.with_gitlab_service = true;
+        self
+    }
+
+    fn with_worktree_service(mut self) -> Self {
+        self.with_worktree_service = true;
+        self
+    }
+
+    async fn build(self) -> HandlerTestOutput {
+        let db = Database::open_in_memory().await.unwrap();
+        let sub = Arc::new(SubprocessManager::new(self.max_processes));
+        let mux = Arc::new(SessionMultiplexer::with_defaults());
+        let relay = Arc::new(SessionRelay::new(sub, Arc::clone(&mux), db.clone()));
+        let (outbound_tx, outbound_rx) = mpsc::channel(128);
+
+        let mut client_crypto = None;
+        let server_crypto = if self.with_crypto {
+            let (client_session, server_session) = betcode_crypto::test_session_pair().unwrap();
+            client_crypto = Some(Arc::new(client_session));
+            Some(Arc::new(server_session))
+        } else {
+            None
+        };
+
+        let identity = if self.with_identity {
+            Some(Arc::new(IdentityKeyPair::generate()))
+        } else {
+            None
+        };
+
+        let mut handler = TunnelRequestHandler::new(
+            "test-machine".into(),
+            relay,
+            mux,
+            db.clone(),
+            outbound_tx,
+            server_crypto,
+            identity,
+        );
+
+        if self.with_command_service {
+            use crate::commands::CommandRegistry;
+            use crate::commands::service_executor::ServiceExecutor;
+            use crate::completion::agent_lister::AgentLister;
+            use crate::completion::file_index::FileIndex;
+            use tokio::sync::RwLock;
+
+            let registry = Arc::new(RwLock::new(CommandRegistry::new()));
+            let file_index = Arc::new(RwLock::new(FileIndex::empty()));
+            let agent_lister = Arc::new(RwLock::new(AgentLister::new()));
+            let service_executor = Arc::new(RwLock::new(ServiceExecutor::new(
+                std::env::temp_dir().to_path_buf(),
+            )));
+            let (shutdown_tx, _) = tokio::sync::watch::channel(false);
+            let cmd_svc = CommandServiceImpl::new(
+                registry,
+                file_index,
+                agent_lister,
+                service_executor,
+                shutdown_tx,
+            );
+            handler.set_command_service(cmd_svc);
+        }
+
+        if self.with_gitlab_service {
+            use crate::gitlab::{GitLabClient, GitLabConfig};
+
+            let config = GitLabConfig {
+                base_url: "http://127.0.0.1:1".into(),
+                token: "test-token".into(),
+            };
+            let client = Arc::new(GitLabClient::new(&config).unwrap());
+            let gitlab_svc = Arc::new(GitLabServiceImpl::new(client));
+            handler.set_gitlab_service(gitlab_svc);
+        }
+
+        if self.with_worktree_service {
+            use crate::worktree::WorktreeManager;
+
+            let wt_svc = WorktreeServiceImpl::new(WorktreeManager::new(db));
+            handler.set_worktree_service(Arc::new(wt_svc));
+        }
+
+        HandlerTestOutput {
+            handler,
+            rx: outbound_rx,
+            client_crypto,
+        }
+    }
 }
 
 fn req_frame(rid: &str, method: &str, data: Vec<u8>) -> TunnelFrame {
@@ -46,7 +175,7 @@ fn encode<M: Message>(msg: &M) -> Vec<u8> {
 
 #[tokio::test]
 async fn control_frame_returns_empty() {
-    let h = make_handler().await;
+    let HandlerTestOutput { handler: h, .. } = HandlerTestBuilder::new().build().await;
     let f = TunnelFrame {
         request_id: "c1".into(),
         frame_type: FrameType::Control as i32,
@@ -63,7 +192,7 @@ async fn control_frame_returns_empty() {
 
 #[tokio::test]
 async fn error_frame_returns_empty() {
-    let h = make_handler().await;
+    let HandlerTestOutput { handler: h, .. } = HandlerTestBuilder::new().build().await;
     let f = TunnelFrame {
         request_id: "e1".into(),
         frame_type: FrameType::Error as i32,
@@ -81,7 +210,7 @@ async fn error_frame_returns_empty() {
 
 #[tokio::test]
 async fn request_without_payload_returns_error() {
-    let h = make_handler().await;
+    let HandlerTestOutput { handler: h, .. } = HandlerTestBuilder::new().build().await;
     let f = TunnelFrame {
         request_id: "r1".into(),
         frame_type: FrameType::Request as i32,
@@ -95,7 +224,7 @@ async fn request_without_payload_returns_error() {
 
 #[tokio::test]
 async fn unknown_method_returns_error() {
-    let h = make_handler().await;
+    let HandlerTestOutput { handler: h, .. } = HandlerTestBuilder::new().build().await;
     let r = h
         .handle_frame(req_frame("r2", "Unknown/Method", vec![]))
         .await;
@@ -105,7 +234,7 @@ async fn unknown_method_returns_error() {
 
 #[tokio::test]
 async fn unexpected_frame_type_returns_error() {
-    let h = make_handler().await;
+    let HandlerTestOutput { handler: h, .. } = HandlerTestBuilder::new().build().await;
     let f = TunnelFrame {
         request_id: "r3".into(),
         frame_type: FrameType::Response as i32,
@@ -119,7 +248,7 @@ async fn unexpected_frame_type_returns_error() {
 
 #[tokio::test]
 async fn list_sessions_empty() {
-    let h = make_handler().await;
+    let HandlerTestOutput { handler: h, .. } = HandlerTestBuilder::new().build().await;
     let req = ListSessionsRequest {
         working_directory: String::new(),
         worktree_id: String::new(),
@@ -143,7 +272,7 @@ async fn list_sessions_empty() {
 
 #[tokio::test]
 async fn cancel_turn_no_session() {
-    let h = make_handler().await;
+    let HandlerTestOutput { handler: h, .. } = HandlerTestBuilder::new().build().await;
     let req = CancelTurnRequest {
         session_id: "none".into(),
     };
@@ -163,7 +292,7 @@ async fn cancel_turn_no_session() {
 
 #[tokio::test]
 async fn compact_session_no_messages() {
-    let h = make_handler().await;
+    let HandlerTestOutput { handler: h, .. } = HandlerTestBuilder::new().build().await;
     h.db.create_session("s1", "model", "/tmp").await.unwrap();
     let req = CompactSessionRequest {
         session_id: "s1".into(),
@@ -185,7 +314,7 @@ async fn compact_session_no_messages() {
 
 #[tokio::test]
 async fn request_input_lock_grants() {
-    let h = make_handler().await;
+    let HandlerTestOutput { handler: h, .. } = HandlerTestBuilder::new().build().await;
     h.db.create_session("sl", "model", "/tmp").await.unwrap();
     let req = InputLockRequest {
         session_id: "sl".into(),
@@ -206,7 +335,7 @@ async fn request_input_lock_grants() {
 
 #[tokio::test]
 async fn malformed_data_returns_error() {
-    let h = make_handler().await;
+    let HandlerTestOutput { handler: h, .. } = HandlerTestBuilder::new().build().await;
     let r = h
         .handle_frame(req_frame("bad", METHOD_LIST_SESSIONS, vec![0xFF, 0xFF]))
         .await;
@@ -216,7 +345,7 @@ async fn malformed_data_returns_error() {
 
 #[tokio::test]
 async fn stream_data_frame_returns_empty() {
-    let h = make_handler().await;
+    let HandlerTestOutput { handler: h, .. } = HandlerTestBuilder::new().build().await;
     let f = TunnelFrame {
         request_id: "sd".into(),
         frame_type: FrameType::StreamData as i32,
@@ -227,25 +356,6 @@ async fn stream_data_frame_returns_empty() {
 }
 
 // --- Sprint 4.3: Streaming tests ---
-
-/// Helper that returns handler + outbound receiver for streaming tests.
-async fn make_handler_with_outbound() -> (TunnelRequestHandler, mpsc::Receiver<TunnelFrame>) {
-    let db = Database::open_in_memory().await.unwrap();
-    let sub = Arc::new(SubprocessManager::new(5));
-    let mux = Arc::new(SessionMultiplexer::with_defaults());
-    let relay = Arc::new(SessionRelay::new(sub, Arc::clone(&mux), db.clone()));
-    let (outbound_tx, outbound_rx) = mpsc::channel(128);
-    let handler = TunnelRequestHandler::new(
-        "test-machine".into(),
-        relay,
-        mux,
-        db,
-        outbound_tx,
-        None,
-        None,
-    );
-    (handler, outbound_rx)
-}
 
 fn make_start_request(session_id: &str) -> Vec<u8> {
     use betcode_proto::v1::{agent_request::Request, StartConversation};
@@ -265,13 +375,13 @@ fn make_start_request(session_id: &str) -> Vec<u8> {
 
 #[tokio::test]
 async fn has_active_stream_false_by_default() {
-    let h = make_handler().await;
+    let HandlerTestOutput { handler: h, .. } = HandlerTestBuilder::new().build().await;
     assert!(!h.has_active_stream("nonexistent").await);
 }
 
 #[tokio::test]
 async fn incoming_stream_data_unknown_request_is_noop() {
-    let h = make_handler().await;
+    let HandlerTestOutput { handler: h, .. } = HandlerTestBuilder::new().build().await;
     // Should not panic or error for unknown request_id
     h.handle_incoming_stream_data("unknown-req", &[1, 2, 3])
         .await;
@@ -279,7 +389,7 @@ async fn incoming_stream_data_unknown_request_is_noop() {
 
 #[tokio::test]
 async fn converse_bad_data_sends_error_on_outbound() {
-    let (h, mut rx) = make_handler_with_outbound().await;
+    let HandlerTestOutput { handler: h, mut rx, .. } = HandlerTestBuilder::new().build().await;
     let result = h
         .handle_frame(req_frame("conv1", METHOD_CONVERSE, vec![0xFF, 0xFF]))
         .await;
@@ -296,7 +406,7 @@ async fn converse_bad_data_sends_error_on_outbound() {
 
 #[tokio::test]
 async fn converse_non_start_sends_error_on_outbound() {
-    let (h, mut rx) = make_handler_with_outbound().await;
+    let HandlerTestOutput { handler: h, mut rx, .. } = HandlerTestBuilder::new().build().await;
     // Send a UserMessage instead of StartConversation
     use betcode_proto::v1::{agent_request::Request, UserMessage};
     let req = AgentRequest {
@@ -321,20 +431,8 @@ async fn converse_non_start_sends_error_on_outbound() {
 #[tokio::test]
 async fn converse_start_session_failure_sends_error_cleans_active() {
     // Use max_processes=0 so spawn always fails with PoolExhausted
-    let db = Database::open_in_memory().await.unwrap();
-    let sub = Arc::new(SubprocessManager::new(0));
-    let mux = Arc::new(SessionMultiplexer::with_defaults());
-    let relay = Arc::new(SessionRelay::new(sub, Arc::clone(&mux), db.clone()));
-    let (outbound_tx, mut rx) = mpsc::channel(128);
-    let h = TunnelRequestHandler::new(
-        "test-machine".into(),
-        relay,
-        mux,
-        db,
-        outbound_tx,
-        None,
-        None,
-    );
+    let HandlerTestOutput { handler: h, mut rx, .. } =
+        HandlerTestBuilder::new().max_processes(0).build().await;
 
     // Send StartConversation — this defers the subprocess spawn
     let data = make_start_request("sess-fail");
@@ -385,7 +483,7 @@ async fn converse_start_session_failure_sends_error_cleans_active() {
 
 #[tokio::test]
 async fn resume_session_returns_empty_vec_async() {
-    let (h, _rx) = make_handler_with_outbound().await;
+    let HandlerTestOutput { handler: h, .. } = HandlerTestBuilder::new().build().await;
     h.db().create_session("rs1", "model", "/tmp").await.unwrap();
     let req = ResumeSessionRequest {
         session_id: "rs1".into(),
@@ -400,7 +498,7 @@ async fn resume_session_returns_empty_vec_async() {
 
 #[tokio::test]
 async fn resume_session_replays_stored_messages() {
-    let (h, mut rx) = make_handler_with_outbound().await;
+    let HandlerTestOutput { handler: h, mut rx, .. } = HandlerTestBuilder::new().build().await;
     h.db().create_session("rs2", "model", "/tmp").await.unwrap();
 
     // Store some base64-encoded messages (raw bytes encoded as base64)
@@ -445,7 +543,7 @@ async fn resume_session_replays_stored_messages() {
 
 #[tokio::test]
 async fn resume_session_empty_sends_stream_end_only() {
-    let (h, mut rx) = make_handler_with_outbound().await;
+    let HandlerTestOutput { handler: h, mut rx, .. } = HandlerTestBuilder::new().build().await;
     h.db().create_session("rs3", "model", "/tmp").await.unwrap();
 
     let req = ResumeSessionRequest {
@@ -468,34 +566,6 @@ use betcode_core::db::base64_encode;
 use betcode_crypto::CryptoSession;
 
 // --- E2E encryption tests ---
-
-/// Helper that returns handler with crypto + client session + outbound receiver.
-async fn make_handler_with_crypto() -> (
-    TunnelRequestHandler,
-    Arc<CryptoSession>,
-    mpsc::Receiver<TunnelFrame>,
-) {
-    let db = Database::open_in_memory().await.unwrap();
-    let sub = Arc::new(SubprocessManager::new(5));
-    let mux = Arc::new(SessionMultiplexer::with_defaults());
-    let relay = Arc::new(SessionRelay::new(sub, Arc::clone(&mux), db.clone()));
-    let (outbound_tx, outbound_rx) = mpsc::channel(128);
-
-    let (client_session, server_session) = betcode_crypto::test_session_pair().unwrap();
-    let server_crypto = Arc::new(server_session);
-    let client_crypto = Arc::new(client_session);
-
-    let handler = TunnelRequestHandler::new(
-        "test-machine".into(),
-        relay,
-        mux,
-        db,
-        outbound_tx,
-        Some(server_crypto),
-        None,
-    );
-    (handler, client_crypto, outbound_rx)
-}
 
 fn encrypted_req_frame(
     rid: &str,
@@ -525,7 +595,9 @@ fn encrypted_req_frame(
 
 #[tokio::test]
 async fn handler_decrypts_incoming_encrypted_request() {
-    let (h, client_crypto, _rx) = make_handler_with_crypto().await;
+    let HandlerTestOutput { handler: h, client_crypto, .. } =
+        HandlerTestBuilder::new().with_crypto().build().await;
+    let client_crypto = client_crypto.unwrap();
     let req = ListSessionsRequest {
         working_directory: String::new(),
         worktree_id: String::new(),
@@ -559,7 +631,9 @@ async fn handler_decrypts_incoming_encrypted_request() {
 
 #[tokio::test]
 async fn handler_encrypts_outgoing_response() {
-    let (h, client_crypto, _rx) = make_handler_with_crypto().await;
+    let HandlerTestOutput { handler: h, client_crypto, .. } =
+        HandlerTestBuilder::new().with_crypto().build().await;
+    let client_crypto = client_crypto.unwrap();
     let req = CancelTurnRequest {
         session_id: "none".into(),
     };
@@ -589,7 +663,8 @@ async fn handler_encrypts_outgoing_response() {
 
 #[tokio::test]
 async fn handler_rejects_encrypted_with_bad_key() {
-    let (h, _client_crypto, _rx) = make_handler_with_crypto().await;
+    let HandlerTestOutput { handler: h, .. } =
+        HandlerTestBuilder::new().with_crypto().build().await;
     // Encrypt with a completely different session — handler cannot decrypt
     let (wrong_session, _) = betcode_crypto::test_session_pair().unwrap();
     let req = ListSessionsRequest {
@@ -612,7 +687,9 @@ async fn handler_rejects_encrypted_with_bad_key() {
 
 #[tokio::test]
 async fn handler_rejects_tampered_ciphertext() {
-    let (h, client_crypto, _rx) = make_handler_with_crypto().await;
+    let HandlerTestOutput { handler: h, client_crypto, .. } =
+        HandlerTestBuilder::new().with_crypto().build().await;
+    let client_crypto = client_crypto.unwrap();
     let req = ListSessionsRequest {
         working_directory: String::new(),
         worktree_id: String::new(),
@@ -638,29 +715,10 @@ async fn handler_rejects_tampered_ciphertext() {
 use betcode_crypto::{IdentityKeyPair, KeyExchangeState};
 use betcode_proto::v1::{KeyExchangeRequest, KeyExchangeResponse};
 
-/// Helper that creates a handler with identity keypair (for key exchange).
-async fn make_handler_with_identity() -> (TunnelRequestHandler, mpsc::Receiver<TunnelFrame>) {
-    let db = Database::open_in_memory().await.unwrap();
-    let sub = Arc::new(SubprocessManager::new(5));
-    let mux = Arc::new(SessionMultiplexer::with_defaults());
-    let relay = Arc::new(SessionRelay::new(sub, Arc::clone(&mux), db.clone()));
-    let (outbound_tx, outbound_rx) = mpsc::channel(128);
-    let identity = Arc::new(IdentityKeyPair::generate());
-    let handler = TunnelRequestHandler::new(
-        "test-machine".into(),
-        relay,
-        mux,
-        db,
-        outbound_tx,
-        None, // No crypto yet — will be set by key exchange
-        Some(identity),
-    );
-    (handler, outbound_rx)
-}
-
 #[tokio::test]
 async fn exchange_keys_establishes_crypto_session() {
-    let (h, _rx) = make_handler_with_identity().await;
+    let HandlerTestOutput { handler: h, .. } =
+        HandlerTestBuilder::new().with_identity().build().await;
 
     // Client generates ephemeral keypair
     let client_state = KeyExchangeState::new();
@@ -730,7 +788,8 @@ async fn exchange_keys_establishes_crypto_session() {
 
 #[tokio::test]
 async fn exchange_keys_rejects_invalid_pubkey_length() {
-    let (h, _rx) = make_handler_with_identity().await;
+    let HandlerTestOutput { handler: h, .. } =
+        HandlerTestBuilder::new().with_identity().build().await;
 
     let req = KeyExchangeRequest {
         machine_id: "test-machine".into(),
@@ -749,7 +808,7 @@ async fn exchange_keys_rejects_invalid_pubkey_length() {
 #[tokio::test]
 async fn exchange_keys_without_identity_still_works() {
     // Handler without identity keypair — key exchange still produces valid session
-    let (h, _rx) = make_handler_with_outbound().await;
+    let HandlerTestOutput { handler: h, .. } = HandlerTestBuilder::new().build().await;
 
     let client_state = KeyExchangeState::new();
     let client_pub = client_state.public_bytes();
@@ -780,7 +839,8 @@ async fn exchange_keys_without_identity_still_works() {
 
 #[tokio::test]
 async fn concurrent_key_exchanges_do_not_corrupt_session() {
-    let (h, _rx) = make_handler_with_identity().await;
+    let HandlerTestOutput { handler: h, .. } =
+        HandlerTestBuilder::new().with_identity().build().await;
     let h = Arc::new(h);
 
     // Launch 5 concurrent key exchanges
@@ -864,7 +924,7 @@ async fn concurrent_key_exchanges_do_not_corrupt_session() {
 #[tokio::test]
 async fn request_with_empty_encrypted_payload_is_handled() {
     // No crypto session — empty ciphertext should passthrough as empty data
-    let h = make_handler().await;
+    let HandlerTestOutput { handler: h, .. } = HandlerTestBuilder::new().build().await;
     let req = ListSessionsRequest {
         working_directory: String::new(),
         worktree_id: String::new(),
@@ -881,7 +941,7 @@ async fn request_with_empty_encrypted_payload_is_handled() {
 
 #[tokio::test]
 async fn request_with_none_encrypted_field_uses_empty_data() {
-    let h = make_handler().await;
+    let HandlerTestOutput { handler: h, .. } = HandlerTestBuilder::new().build().await;
     // Frame with encrypted=None — should result in empty data, which decodes
     // to default protobuf values (empty ListSessionsRequest)
     let frame = TunnelFrame {
@@ -945,7 +1005,9 @@ fn make_app_encrypted_agent_request(inner: &AgentRequest, session: &CryptoSessio
 
 #[tokio::test]
 async fn encrypted_agent_request_is_decrypted() {
-    let (h, client_crypto, _rx) = make_handler_with_crypto().await;
+    let HandlerTestOutput { handler: h, client_crypto, .. } =
+        HandlerTestBuilder::new().with_crypto().build().await;
+    let client_crypto = client_crypto.unwrap();
 
     // Start a converse session (app-layer + tunnel-layer encrypted, as the CLI does)
     h.handle_frame(encrypted_converse_frame(
@@ -1018,7 +1080,9 @@ async fn encrypted_agent_request_is_decrypted() {
 
 #[tokio::test]
 async fn encrypted_agent_request_with_wrong_key_rejected() {
-    let (h, client_crypto, _rx) = make_handler_with_crypto().await;
+    let HandlerTestOutput { handler: h, client_crypto, .. } =
+        HandlerTestBuilder::new().with_crypto().build().await;
+    let client_crypto = client_crypto.unwrap();
 
     // Start a converse session (app-layer + tunnel-layer encrypted)
     h.handle_frame(encrypted_converse_frame(
@@ -1074,7 +1138,9 @@ async fn encrypted_agent_request_with_wrong_key_rejected() {
 
 #[tokio::test]
 async fn encrypted_agent_request_with_corrupted_data_rejected() {
-    let (h, client_crypto, _rx) = make_handler_with_crypto().await;
+    let HandlerTestOutput { handler: h, client_crypto, .. } =
+        HandlerTestBuilder::new().with_crypto().build().await;
+    let client_crypto = client_crypto.unwrap();
 
     // Start a converse session (app-layer + tunnel-layer encrypted)
     h.handle_frame(encrypted_converse_frame(
@@ -1139,7 +1205,9 @@ async fn encrypted_agent_request_with_corrupted_data_rejected() {
 
 #[tokio::test]
 async fn plaintext_agent_request_rejected_when_crypto_active() {
-    let (h, client_crypto, _rx) = make_handler_with_crypto().await;
+    let HandlerTestOutput { handler: h, client_crypto, .. } =
+        HandlerTestBuilder::new().with_crypto().build().await;
+    let client_crypto = client_crypto.unwrap();
 
     // Start a valid converse session (properly encrypted)
     h.handle_frame(encrypted_converse_frame(
@@ -1180,7 +1248,9 @@ async fn plaintext_agent_request_rejected_when_crypto_active() {
 
 #[tokio::test]
 async fn plaintext_start_conversation_rejected_when_crypto_active() {
-    let (h, client_crypto, _rx) = make_handler_with_crypto().await;
+    let HandlerTestOutput { handler: h, client_crypto, .. } =
+        HandlerTestBuilder::new().with_crypto().build().await;
+    let client_crypto = client_crypto.unwrap();
 
     // Send a plaintext StartConversation that is tunnel-layer encrypted but NOT
     // app-layer encrypted. handle_converse should reject because crypto is active.
@@ -1207,7 +1277,9 @@ async fn plaintext_start_conversation_rejected_when_crypto_active() {
 
 #[tokio::test]
 async fn event_forwarder_encrypts_when_crypto_active() {
-    let (h, client_crypto, mut rx) = make_handler_with_crypto().await;
+    let HandlerTestOutput { handler: h, client_crypto, mut rx } =
+        HandlerTestBuilder::new().with_crypto().build().await;
+    let client_crypto = client_crypto.unwrap();
 
     // Create a session in DB + start converse (app-layer + tunnel-layer encrypted)
     h.db()
@@ -1280,7 +1352,7 @@ async fn event_forwarder_encrypts_when_crypto_active() {
 
 #[tokio::test]
 async fn event_forwarder_no_encryption_when_no_crypto() {
-    let (h, mut rx) = make_handler_with_outbound().await;
+    let HandlerTestOutput { handler: h, mut rx, .. } = HandlerTestBuilder::new().build().await;
 
     // Create a session in DB + start converse
     h.db()
@@ -1339,7 +1411,9 @@ async fn event_forwarder_no_encryption_when_no_crypto() {
 /// handles the actual E2E protection.
 #[tokio::test]
 async fn decrypt_payload_passthrough_on_empty_nonce_with_crypto_active() {
-    let (h, client_crypto, _rx) = make_handler_with_crypto().await;
+    let HandlerTestOutput { handler: h, client_crypto, .. } =
+        HandlerTestBuilder::new().with_crypto().build().await;
+    let client_crypto = client_crypto.unwrap();
 
     // Build an app-layer encrypted AgentRequest (as the CLI would send)
     let inner_req = AgentRequest {
@@ -1375,7 +1449,8 @@ async fn decrypt_payload_passthrough_on_empty_nonce_with_crypto_active() {
 /// but app-layer plaintext should still be rejected.
 #[tokio::test]
 async fn relay_forwarded_plaintext_request_rejected_when_crypto_active() {
-    let (h, _client_crypto, _rx) = make_handler_with_crypto().await;
+    let HandlerTestOutput { handler: h, .. } =
+        HandlerTestBuilder::new().with_crypto().build().await;
 
     // Plain (non-app-layer-encrypted) AgentRequest
     let plain_req = AgentRequest {
@@ -1409,7 +1484,9 @@ async fn relay_forwarded_plaintext_request_rejected_when_crypto_active() {
 /// the relay sees valid protobuf, not raw encrypted bytes.
 #[tokio::test]
 async fn resume_session_with_crypto_produces_decodable_frames() {
-    let (h, _client_crypto, mut rx) = make_handler_with_crypto().await;
+    let HandlerTestOutput { handler: h, client_crypto, mut rx } =
+        HandlerTestBuilder::new().with_crypto().build().await;
+    let client_crypto = client_crypto.unwrap();
 
     // Store an event in the DB the same way pipeline.rs does (base64-encoded protobuf)
     let event = AgentEvent {
@@ -1445,7 +1522,7 @@ async fn resume_session_with_crypto_produces_decodable_frames() {
             "resume1",
             "AgentService/ResumeSession",
             encode(&resume_req),
-            &_client_crypto,
+            &client_crypto,
         ))
         .await;
 
@@ -1494,20 +1571,8 @@ async fn resume_session_with_crypto_produces_decodable_frames() {
 /// Verify that resume_session WITHOUT crypto sends plain events (no encryption wrapper).
 #[tokio::test]
 async fn resume_session_without_crypto_sends_plain_events() {
-    let db = Database::open_in_memory().await.unwrap();
-    let sub = Arc::new(SubprocessManager::new(5));
-    let mux = Arc::new(SessionMultiplexer::with_defaults());
-    let relay = Arc::new(SessionRelay::new(sub, Arc::clone(&mux), db.clone()));
-    let (outbound_tx, mut rx) = mpsc::channel(128);
-    let h = TunnelRequestHandler::new(
-        "test-machine".into(),
-        relay,
-        mux,
-        db.clone(),
-        outbound_tx,
-        None,
-        None,
-    );
+    let HandlerTestOutput { handler: h, mut rx, .. } = HandlerTestBuilder::new().build().await;
+    let db = h.db().clone();
 
     // Store an event
     let event = AgentEvent {
@@ -1582,7 +1647,7 @@ async fn resume_session_without_crypto_sends_plain_events() {
 /// (not silently dropped by the catch-all `_ =>` arm).
 #[tokio::test]
 async fn question_response_is_handled_through_tunnel() {
-    let h = make_handler().await;
+    let HandlerTestOutput { handler: h, .. } = HandlerTestBuilder::new().build().await;
 
     // Send a QuestionResponse through the converse stream.
     // The session doesn't exist (no real subprocess), but the handler should
@@ -1607,55 +1672,15 @@ async fn question_response_is_handled_through_tunnel() {
 
 // --- CommandService tunnel handler tests ---
 
-use crate::commands::CommandRegistry;
-use crate::completion::agent_lister::AgentLister;
-use crate::completion::file_index::FileIndex;
-use crate::commands::service_executor::ServiceExecutor;
-use tokio::sync::RwLock;
-
 use betcode_proto::v1::{
     GetCommandRegistryResponse, ListAgentsResponse, ListPathResponse,
     ListWorktreesResponse, RemoveWorktreeResponse,
 };
 
-/// Create a handler with a wired CommandServiceImpl.
-async fn make_handler_with_command_service() -> TunnelRequestHandler {
-    let db = Database::open_in_memory().await.unwrap();
-    let sub = Arc::new(SubprocessManager::new(5));
-    let mux = Arc::new(SessionMultiplexer::with_defaults());
-    let relay = Arc::new(SessionRelay::new(sub, Arc::clone(&mux), db.clone()));
-    let (outbound_tx, _outbound_rx) = mpsc::channel(128);
-    let mut handler = TunnelRequestHandler::new(
-        "test-machine".into(),
-        relay,
-        mux,
-        db,
-        outbound_tx,
-        None,
-        None,
-    );
-
-    let registry = Arc::new(RwLock::new(CommandRegistry::new()));
-    let file_index = Arc::new(RwLock::new(FileIndex::empty()));
-    let agent_lister = Arc::new(RwLock::new(AgentLister::new()));
-    let service_executor = Arc::new(RwLock::new(ServiceExecutor::new(
-        std::env::temp_dir().to_path_buf(),
-    )));
-    let (shutdown_tx, _) = tokio::sync::watch::channel(false);
-    let cmd_svc = CommandServiceImpl::new(
-        registry,
-        file_index,
-        agent_lister,
-        service_executor,
-        shutdown_tx,
-    );
-    handler.set_command_service(cmd_svc);
-    handler
-}
-
 #[tokio::test]
 async fn get_command_registry_through_tunnel() {
-    let h = make_handler_with_command_service().await;
+    let HandlerTestOutput { handler: h, .. } =
+        HandlerTestBuilder::new().with_command_service().build().await;
     let req = GetCommandRegistryRequest {};
     let r = h
         .handle_frame(req_frame("cmd1", METHOD_GET_COMMAND_REGISTRY, encode(&req)))
@@ -1675,7 +1700,8 @@ async fn get_command_registry_through_tunnel() {
 
 #[tokio::test]
 async fn list_agents_through_tunnel() {
-    let h = make_handler_with_command_service().await;
+    let HandlerTestOutput { handler: h, .. } =
+        HandlerTestBuilder::new().with_command_service().build().await;
     let req = ListAgentsRequest {
         query: String::new(),
         max_results: 10,
@@ -1697,7 +1723,8 @@ async fn list_agents_through_tunnel() {
 
 #[tokio::test]
 async fn list_path_through_tunnel() {
-    let h = make_handler_with_command_service().await;
+    let HandlerTestOutput { handler: h, .. } =
+        HandlerTestBuilder::new().with_command_service().build().await;
     let req = ListPathRequest {
         query: std::env::temp_dir().to_string_lossy().into_owned(),
         max_results: 10,
@@ -1718,7 +1745,7 @@ async fn list_path_through_tunnel() {
 
 #[tokio::test]
 async fn command_service_not_set_returns_error() {
-    let h = make_handler().await; // No command service set
+    let HandlerTestOutput { handler: h, .. } = HandlerTestBuilder::new().build().await; // No command service set
     let req = GetCommandRegistryRequest {};
     let r = h
         .handle_frame(req_frame("cmd-err", METHOD_GET_COMMAND_REGISTRY, encode(&req)))
@@ -1734,7 +1761,8 @@ async fn command_service_not_set_returns_error() {
 
 #[tokio::test]
 async fn command_service_malformed_data_returns_error() {
-    let h = make_handler_with_command_service().await;
+    let HandlerTestOutput { handler: h, .. } =
+        HandlerTestBuilder::new().with_command_service().build().await;
     let r = h
         .handle_frame(req_frame("cmd-bad", METHOD_GET_COMMAND_REGISTRY, vec![0xFF, 0xFF]))
         .await;
@@ -1744,38 +1772,10 @@ async fn command_service_malformed_data_returns_error() {
 
 // --- GitLabService tunnel handler tests ---
 
-use crate::gitlab::{GitLabClient, GitLabConfig};
-
-/// Create a handler with a wired GitLabServiceImpl (backed by a client pointing
-/// to a non-routable address so HTTP calls fail quickly).
-async fn make_handler_with_gitlab_service() -> TunnelRequestHandler {
-    let db = Database::open_in_memory().await.unwrap();
-    let sub = Arc::new(SubprocessManager::new(5));
-    let mux = Arc::new(SessionMultiplexer::with_defaults());
-    let relay = Arc::new(SessionRelay::new(sub, Arc::clone(&mux), db.clone()));
-    let (outbound_tx, _outbound_rx) = mpsc::channel(128);
-    let mut handler = TunnelRequestHandler::new(
-        "test-machine".into(),
-        relay,
-        mux,
-        db,
-        outbound_tx,
-        None,
-        None,
-    );
-    let config = GitLabConfig {
-        base_url: "http://127.0.0.1:1".into(), // non-routable, fails fast
-        token: "test-token".into(),
-    };
-    let client = Arc::new(GitLabClient::new(&config).unwrap());
-    let gitlab_svc = Arc::new(GitLabServiceImpl::new(client));
-    handler.set_gitlab_service(gitlab_svc);
-    handler
-}
-
 #[tokio::test]
 async fn gitlab_service_dispatches_when_set() {
-    let h = make_handler_with_gitlab_service().await;
+    let HandlerTestOutput { handler: h, .. } =
+        HandlerTestBuilder::new().with_gitlab_service().build().await;
     let req = ListMergeRequestsRequest {
         project: "group/project".into(),
         state_filter: 0,
@@ -1801,7 +1801,7 @@ async fn gitlab_service_dispatches_when_set() {
 
 #[tokio::test]
 async fn gitlab_service_not_set_returns_error() {
-    let h = make_handler().await; // No gitlab service set
+    let HandlerTestOutput { handler: h, .. } = HandlerTestBuilder::new().build().await; // No gitlab service set
     let req = ListMergeRequestsRequest {
         project: String::new(),
         state_filter: 0,
@@ -1824,7 +1824,7 @@ async fn gitlab_service_not_set_returns_error() {
 async fn gitlab_malformed_data_returns_error() {
     // Even without the service set, malformed data for a GitLab method should
     // trigger the "not available" error, not a panic.
-    let h = make_handler().await;
+    let HandlerTestOutput { handler: h, .. } = HandlerTestBuilder::new().build().await;
     let r = h
         .handle_frame(req_frame("gl-bad", METHOD_LIST_MERGE_REQUESTS, vec![0xFF, 0xFF]))
         .await;
@@ -1836,7 +1836,7 @@ async fn gitlab_malformed_data_returns_error() {
 async fn gitlab_all_methods_dispatch_without_service() {
     // All 6 GitLab method constants should be recognized and hit the
     // "not available" error path (not the unknown method path).
-    let h = make_handler().await;
+    let HandlerTestOutput { handler: h, .. } = HandlerTestBuilder::new().build().await;
     let methods = [
         METHOD_LIST_MERGE_REQUESTS,
         METHOD_GET_MERGE_REQUEST,
@@ -1861,32 +1861,10 @@ async fn gitlab_all_methods_dispatch_without_service() {
 
 // --- WorktreeService tunnel handler tests ---
 
-use crate::worktree::WorktreeManager;
-
-/// Create a handler with a wired WorktreeServiceImpl.
-async fn make_handler_with_worktree_service() -> TunnelRequestHandler {
-    let db = Database::open_in_memory().await.unwrap();
-    let sub = Arc::new(SubprocessManager::new(5));
-    let mux = Arc::new(SessionMultiplexer::with_defaults());
-    let relay = Arc::new(SessionRelay::new(sub, Arc::clone(&mux), db.clone()));
-    let (outbound_tx, _outbound_rx) = mpsc::channel(128);
-    let mut handler = TunnelRequestHandler::new(
-        "test-machine".into(),
-        relay,
-        mux,
-        db.clone(),
-        outbound_tx,
-        None,
-        None,
-    );
-    let wt_svc = WorktreeServiceImpl::new(WorktreeManager::new(db));
-    handler.set_worktree_service(Arc::new(wt_svc));
-    handler
-}
-
 #[tokio::test]
 async fn list_worktrees_through_tunnel() {
-    let h = make_handler_with_worktree_service().await;
+    let HandlerTestOutput { handler: h, .. } =
+        HandlerTestBuilder::new().with_worktree_service().build().await;
     let req = ListWorktreesRequest {
         repo_path: String::new(),
     };
@@ -1908,7 +1886,8 @@ async fn list_worktrees_through_tunnel() {
 
 #[tokio::test]
 async fn remove_worktree_nonexistent_through_tunnel() {
-    let h = make_handler_with_worktree_service().await;
+    let HandlerTestOutput { handler: h, .. } =
+        HandlerTestBuilder::new().with_worktree_service().build().await;
     let req = RemoveWorktreeRequest {
         id: "nonexistent".into(),
     };
@@ -1930,7 +1909,7 @@ async fn remove_worktree_nonexistent_through_tunnel() {
 
 #[tokio::test]
 async fn worktree_service_not_set_returns_error() {
-    let h = make_handler().await; // No worktree service set
+    let HandlerTestOutput { handler: h, .. } = HandlerTestBuilder::new().build().await; // No worktree service set
     let req = ListWorktreesRequest {
         repo_path: String::new(),
     };
@@ -1948,7 +1927,7 @@ async fn worktree_service_not_set_returns_error() {
 
 #[tokio::test]
 async fn worktree_all_methods_dispatch_without_service() {
-    let h = make_handler().await;
+    let HandlerTestOutput { handler: h, .. } = HandlerTestBuilder::new().build().await;
     let methods = [
         METHOD_CREATE_WORKTREE,
         METHOD_REMOVE_WORKTREE,
@@ -1971,7 +1950,8 @@ async fn worktree_all_methods_dispatch_without_service() {
 
 #[tokio::test]
 async fn worktree_malformed_data_returns_error() {
-    let h = make_handler_with_worktree_service().await;
+    let HandlerTestOutput { handler: h, .. } =
+        HandlerTestBuilder::new().with_worktree_service().build().await;
     let r = h
         .handle_frame(req_frame("wt-bad", METHOD_LIST_WORKTREES, vec![0xFF, 0xFF]))
         .await;
@@ -1983,45 +1963,10 @@ async fn worktree_malformed_data_returns_error() {
 
 use betcode_proto::v1::{ExecuteServiceCommandRequest, ServiceCommandOutput};
 
-/// Helper: handler with CommandService + outbound receiver for streaming tests.
-async fn make_handler_with_command_service_and_outbound(
-) -> (TunnelRequestHandler, mpsc::Receiver<TunnelFrame>) {
-    let db = Database::open_in_memory().await.unwrap();
-    let sub = Arc::new(SubprocessManager::new(5));
-    let mux = Arc::new(SessionMultiplexer::with_defaults());
-    let relay = Arc::new(SessionRelay::new(sub, Arc::clone(&mux), db.clone()));
-    let (outbound_tx, outbound_rx) = mpsc::channel(128);
-    let mut handler = TunnelRequestHandler::new(
-        "test-machine".into(),
-        relay,
-        mux,
-        db,
-        outbound_tx,
-        None,
-        None,
-    );
-
-    let registry = Arc::new(RwLock::new(CommandRegistry::new()));
-    let file_index = Arc::new(RwLock::new(FileIndex::empty()));
-    let agent_lister = Arc::new(RwLock::new(AgentLister::new()));
-    let service_executor = Arc::new(RwLock::new(ServiceExecutor::new(
-        std::env::temp_dir().to_path_buf(),
-    )));
-    let (shutdown_tx, _) = tokio::sync::watch::channel(false);
-    let cmd_svc = CommandServiceImpl::new(
-        registry,
-        file_index,
-        agent_lister,
-        service_executor,
-        shutdown_tx,
-    );
-    handler.set_command_service(cmd_svc);
-    (handler, outbound_rx)
-}
-
 #[tokio::test]
 async fn execute_service_command_streams_output() {
-    let (h, mut rx) = make_handler_with_command_service_and_outbound().await;
+    let HandlerTestOutput { handler: h, mut rx, .. } =
+        HandlerTestBuilder::new().with_command_service().build().await;
     // "pwd" is a simple command that prints the working directory and exits
     let req = ExecuteServiceCommandRequest {
         command: "pwd".into(),
@@ -2093,7 +2038,7 @@ async fn execute_service_command_streams_output() {
 #[tokio::test]
 async fn execute_service_command_not_set_sends_error() {
     // Handler without command service — should send error via outbound_tx
-    let (h, mut rx) = make_handler_with_outbound().await;
+    let HandlerTestOutput { handler: h, mut rx, .. } = HandlerTestBuilder::new().build().await;
     let req = ExecuteServiceCommandRequest {
         command: "pwd".into(),
         args: vec![],
@@ -2125,7 +2070,8 @@ async fn execute_service_command_not_set_sends_error() {
 #[tokio::test]
 async fn relay_forwarded_response_has_empty_nonce_when_crypto_active() {
     // Set up handler WITH crypto active
-    let (h, _client_crypto, _rx) = make_handler_with_crypto().await;
+    let HandlerTestOutput { handler: h, .. } =
+        HandlerTestBuilder::new().with_crypto().build().await;
 
     // Build a request with empty nonce (relay-forwarded)
     let req = ListSessionsRequest {
