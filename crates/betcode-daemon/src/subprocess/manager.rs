@@ -111,8 +111,21 @@ impl SubprocessManager {
         drop(processes);
 
         // Build command
+        let working_dir = if config.working_directory.as_os_str().is_empty()
+            || !config.working_directory.exists()
+        {
+            let fallback = dirs::home_dir().unwrap_or_else(std::env::temp_dir);
+            warn!(
+                requested = %config.working_directory.display(),
+                fallback = %fallback.display(),
+                "Working directory missing or empty, using fallback"
+            );
+            fallback
+        } else {
+            config.working_directory.clone()
+        };
         let mut cmd = Command::new("claude");
-        cmd.current_dir(&config.working_directory)
+        cmd.current_dir(&working_dir)
             .arg("--output-format")
             .arg("stream-json")
             .arg("--input-format")
@@ -151,7 +164,7 @@ impl SubprocessManager {
 
         // Spawn process
         info!(
-            working_dir = %config.working_directory.display(),
+            working_dir = %working_dir.display(),
             has_prompt = config.prompt.is_some(),
             resume_session = ?config.resume_session,
             model = ?config.model,
