@@ -2,6 +2,7 @@ use anyhow::Result;
 use clap::{Parser, Subcommand};
 use tracing_subscriber::EnvFilter;
 
+use betcode_setup::cli::CliArgs;
 use betcode_setup::relay::RelayArgs;
 
 /// `BetCode` deployment setup tool.
@@ -20,6 +21,8 @@ struct Cli {
 enum Commands {
     /// Set up the betcode relay server
     Relay(RelayArgs),
+    /// Set up the betcode CLI for relay access
+    Cli(CliArgs),
 }
 
 fn main() -> Result<()> {
@@ -31,10 +34,12 @@ fn main() -> Result<()> {
 
     let cli = Cli::parse();
 
-    betcode_setup::os::ensure_ubuntu()?;
-
     match cli.command {
-        Commands::Relay(args) => betcode_setup::relay::run(args, cli.non_interactive)?,
+        Commands::Relay(args) => {
+            betcode_setup::os::ensure_ubuntu()?;
+            betcode_setup::relay::run(args, cli.non_interactive)?;
+        }
+        Commands::Cli(ref args) => betcode_setup::cli::run(args, cli.non_interactive)?,
     }
 
     Ok(())
