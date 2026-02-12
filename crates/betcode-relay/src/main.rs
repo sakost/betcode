@@ -43,7 +43,7 @@ struct Args {
     addr: SocketAddr,
 
     /// Path to `SQLite` database file.
-    #[arg(long)]
+    #[arg(long, env = "BETCODE_DB_PATH")]
     db_path: Option<PathBuf>,
 
     /// JWT secret key.

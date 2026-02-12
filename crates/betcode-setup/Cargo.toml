@@ -1,0 +1,23 @@
+[package]
+name = "betcode-setup"
+description = "BetCode deployment setup tool — interactive CLI for relay provisioning"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "betcode-setup"
+path = "src/main.rs"
+
+[dependencies]
+anyhow.workspace = true
+clap = { workspace = true, features = ["derive"] }
+dialoguer.workspace = true
+nix = { workspace = true, features = ["user"] }
+rand.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+
+[lints]
+workspace = true

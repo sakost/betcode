@@ -23,3 +23,6 @@ target/
 # Tool output directories
 jscpd-report/
 metrics/
+
+# Environment files
+.env
