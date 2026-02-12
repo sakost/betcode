@@ -16,8 +16,8 @@ betcode-core = { workspace = true }
 betcode-crypto = { workspace = true }
 prost.workspace = true
 tokio.workspace = true
-tonic = { workspace = true, features = ["tls-ring"] }
-clap.workspace = true
+tonic = { workspace = true, features = ["tls-ring", "tls-native-roots", "tls-webpki-roots"] }
+clap = { workspace = true, features = ["env"] }
 ratatui.workspace = true
 crossterm.workspace = true
 serde.workspace = true

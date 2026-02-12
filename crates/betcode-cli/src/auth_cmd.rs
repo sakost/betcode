@@ -16,10 +16,13 @@ use crate::config::{AuthConfig, CliConfig};
 /// Build a gRPC channel to the relay, with optional custom CA cert for TLS.
 async fn relay_channel(url: &str, ca_cert: Option<&Path>) -> anyhow::Result<Channel> {
     let mut endpoint = Channel::from_shared(url.to_string())?;
-    if let Some(ca_path) = ca_cert {
-        let ca_pem = std::fs::read_to_string(ca_path)
-            .map_err(|e| anyhow::anyhow!("Failed to read CA cert {}: {}", ca_path.display(), e))?;
-        let tls_config = ClientTlsConfig::new().ca_certificate(Certificate::from_pem(ca_pem));
+    if url.starts_with("https://") {
+        let mut tls_config = ClientTlsConfig::new().with_enabled_roots();
+        if let Some(ca_path) = ca_cert {
+            let ca_pem = std::fs::read_to_string(ca_path)
+                .map_err(|e| anyhow::anyhow!("Failed to read CA cert {}: {}", ca_path.display(), e))?;
+            tls_config = tls_config.ca_certificate(Certificate::from_pem(ca_pem));
+        }
         endpoint = endpoint
             .tls_config(tls_config)
             .map_err(|e| anyhow::anyhow!("TLS config error: {e}"))?;
@@ -38,8 +41,8 @@ pub enum AuthAction {
         /// Username.
         #[arg(short, long)]
         username: String,
-        /// Password.
-        #[arg(short, long)]
+        /// Password (or set `BETCODE_PASSWORD` env var).
+        #[arg(short, long, env = "BETCODE_PASSWORD")]
         password: String,
         /// Email address.
         #[arg(short, long, default_value = "")]
@@ -50,8 +53,8 @@ pub enum AuthAction {
         /// Username.
         #[arg(short, long)]
         username: String,
-        /// Password.
-        #[arg(short, long)]
+        /// Password (or set `BETCODE_PASSWORD` env var).
+        #[arg(short, long, env = "BETCODE_PASSWORD")]
         password: String,
     },
     /// Log out and revoke tokens.
