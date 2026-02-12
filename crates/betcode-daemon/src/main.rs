@@ -60,6 +60,10 @@ struct Args {
     #[arg(long, env = "BETCODE_RELAY_CA_CERT")]
     relay_ca_cert: Option<PathBuf>,
 
+    /// Base directory for git worktrees
+    #[arg(long, env = "BETCODE_WORKTREE_DIR")]
+    worktree_dir: Option<PathBuf>,
+
     /// Output logs as JSON (for structured log aggregation).
     #[arg(long)]
     log_json: bool,
@@ -113,9 +117,16 @@ async fn main() -> anyhow::Result<()> {
     // a race where a component could send the signal before we subscribe.
     let mut daemon_shutdown_rx = shutdown_tx.subscribe();
 
+    // Resolve worktree base directory
+    let worktree_dir = match args.worktree_dir {
+        Some(dir) => dir,
+        None => default_worktree_dir()?,
+    };
+
     // Create and start gRPC server
     let config = ServerConfig::tcp(args.addr).with_max_sessions(args.max_sessions);
-    let server = GrpcServer::new(config, db, subprocess_manager, shutdown_tx.clone()).await;
+    let server =
+        GrpcServer::new(config, db, subprocess_manager, shutdown_tx.clone(), worktree_dir).await;
 
     // Optionally spawn tunnel client
     let tunnel_handle = if let Some(relay_url) = &args.relay_url {
@@ -191,4 +202,11 @@ fn default_db_path() -> anyhow::Result<PathBuf> {
     let home =
         dirs::home_dir().ok_or_else(|| anyhow::anyhow!("Cannot determine home directory"))?;
     Ok(home.join(".betcode").join("daemon.db"))
+}
+
+/// Default worktree base directory: ~/.betcode/worktrees/
+fn default_worktree_dir() -> anyhow::Result<PathBuf> {
+    let home =
+        dirs::home_dir().ok_or_else(|| anyhow::anyhow!("Cannot determine home directory"))?;
+    Ok(home.join(".betcode").join("worktrees"))
 }

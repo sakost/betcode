@@ -82,6 +82,7 @@ impl GrpcServer {
         db: Database,
         subprocess_manager: SubprocessManager,
         shutdown_tx: tokio::sync::watch::Sender<bool>,
+        worktree_base_dir: std::path::PathBuf,
     ) -> Self {
         use crate::completion::agent_lister::{AgentInfo, AgentKind, AgentStatus};
 
@@ -128,7 +129,8 @@ impl GrpcServer {
             shutdown_tx,
         );
 
-        let worktree_service = WorktreeServiceImpl::new(WorktreeManager::new(db.clone()));
+        let worktree_service =
+            WorktreeServiceImpl::new(WorktreeManager::new(db.clone(), worktree_base_dir));
 
         Self {
             config,

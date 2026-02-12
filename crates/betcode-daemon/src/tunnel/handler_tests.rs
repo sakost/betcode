@@ -135,7 +135,10 @@ impl HandlerTestBuilder {
         if self.with_worktree_service {
             use crate::worktree::WorktreeManager;
 
-            let wt_svc = WorktreeServiceImpl::new(WorktreeManager::new(db));
+            let wt_svc = WorktreeServiceImpl::new(WorktreeManager::new(
+                db,
+                std::env::temp_dir().join("betcode-test-worktrees"),
+            ));
             handler.set_worktree_service(Arc::new(wt_svc));
         }
 

@@ -167,10 +167,12 @@ impl TunnelService for TunnelServiceImpl {
                                     warn!(request_id = %rid, "No pending waiter for StreamData");
                                 }
                             }
-                        } else if frame_type == FrameType::Response as i32 {
-                            // Unary response: complete the oneshot pending
+                        } else if frame_type == FrameType::Response as i32
+                            || frame_type == FrameType::Error as i32
+                        {
+                            // Unary response or error: complete the oneshot pending
                             if !conn_ref.complete_pending(&rid, frame).await {
-                                warn!(request_id = %rid, "No pending waiter for Response");
+                                warn!(request_id = %rid, frame_type, "No pending waiter for frame");
                             }
                         }
                     }

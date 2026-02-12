@@ -3,7 +3,7 @@
 use std::path::Path;
 
 use tonic::{Request, Response, Status};
-use tracing::{info, instrument};
+use tracing::{debug, info, instrument};
 
 use betcode_proto::v1::{
     worktree_service_server::WorktreeService, CreateWorktreeRequest, GetWorktreeRequest,
@@ -57,7 +57,15 @@ impl WorktreeService for WorktreeServiceImpl {
         request: Request<CreateWorktreeRequest>,
     ) -> Result<Response<WorktreeDetail>, Status> {
         let req = request.into_inner();
+        debug!(
+            name = %req.name,
+            repo_path = %req.repo_path,
+            branch = %req.branch,
+            setup_script = %req.setup_script,
+            "CreateWorktree RPC received"
+        );
 
+        let start = std::time::Instant::now();
         let setup_script = if req.setup_script.is_empty() {
             None
         } else {
@@ -73,7 +81,16 @@ impl WorktreeService for WorktreeServiceImpl {
                 setup_script,
             )
             .await
-            .map_err(|e| Status::internal(e.to_string()))?;
+            .map_err(|e| {
+                debug!(elapsed_ms = start.elapsed().as_millis(), error = %e, "CreateWorktree manager.create failed");
+                Status::internal(e.to_string())
+            })?;
+
+        debug!(
+            id = %wt.id,
+            elapsed_ms = start.elapsed().as_millis(),
+            "CreateWorktree manager.create succeeded, fetching full info"
+        );
 
         info!(
             id = %wt.id,
@@ -88,6 +105,12 @@ impl WorktreeService for WorktreeServiceImpl {
             .get(&wt.id)
             .await
             .map_err(|e| Status::internal(e.to_string()))?;
+
+        debug!(
+            id = %wt.id,
+            total_elapsed_ms = start.elapsed().as_millis(),
+            "CreateWorktree RPC complete"
+        );
 
         Ok(Response::new(to_detail(info)))
     }
@@ -160,15 +183,16 @@ mod tests {
     use crate::storage::Database;
     use crate::worktree::WorktreeManager;
 
-    async fn test_service() -> WorktreeServiceImpl {
+    async fn test_service() -> (WorktreeServiceImpl, tempfile::TempDir) {
         let db = Database::open_in_memory().await.unwrap();
-        let manager = WorktreeManager::new(db);
-        WorktreeServiceImpl::new(manager)
+        let tmp = tempfile::tempdir().unwrap();
+        let manager = WorktreeManager::new(db, tmp.path().to_path_buf());
+        (WorktreeServiceImpl::new(manager), tmp)
     }
 
     #[tokio::test]
     async fn list_empty() {
-        let svc = test_service().await;
+        let (svc, _tmp) = test_service().await;
         let resp = svc
             .list_worktrees(Request::new(ListWorktreesRequest {
                 repo_path: String::new(),
@@ -180,7 +204,7 @@ mod tests {
 
     #[tokio::test]
     async fn get_nonexistent_returns_not_found() {
-        let svc = test_service().await;
+        let (svc, _tmp) = test_service().await;
         let result = svc
             .get_worktree(Request::new(GetWorktreeRequest {
                 id: "nope".to_string(),
@@ -192,7 +216,7 @@ mod tests {
 
     #[tokio::test]
     async fn remove_nonexistent_returns_false() {
-        let svc = test_service().await;
+        let (svc, _tmp) = test_service().await;
         let resp = svc
             .remove_worktree(Request::new(RemoveWorktreeRequest {
                 id: "nope".to_string(),
@@ -204,7 +228,7 @@ mod tests {
 
     #[tokio::test]
     async fn create_with_invalid_name_returns_error() {
-        let svc = test_service().await;
+        let (svc, _tmp) = test_service().await;
         let result = svc
             .create_worktree(Request::new(CreateWorktreeRequest {
                 name: "../escape".to_string(),
