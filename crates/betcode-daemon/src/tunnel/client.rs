@@ -152,27 +152,30 @@ impl TunnelClient {
             .http2_keep_alive_interval(std::time::Duration::from_secs(30))
             .keep_alive_timeout(std::time::Duration::from_secs(10));
 
-        // Configure TLS if CA cert is provided
-        if let Some(ca_path) = &self.config.ca_cert_path {
-            let ca_pem = std::fs::read_to_string(ca_path).map_err(|e| {
-                TunnelClientError::Connection(format!(
-                    "Failed to read CA cert {}: {}",
-                    ca_path.display(),
-                    e
-                ))
-            })?;
-            let ca_cert = Certificate::from_pem(ca_pem);
-            let tls_config = ClientTlsConfig::new().ca_certificate(ca_cert);
+        // Configure TLS for https:// URLs
+        if self.config.relay_url.starts_with("https://") {
+            let mut tls_config = ClientTlsConfig::new().with_enabled_roots();
+            if let Some(ca_path) = &self.config.ca_cert_path {
+                let ca_pem = std::fs::read_to_string(ca_path).map_err(|e| {
+                    TunnelClientError::Connection(format!(
+                        "Failed to read CA cert {}: {}",
+                        ca_path.display(),
+                        e
+                    ))
+                })?;
+                tls_config = tls_config.ca_certificate(Certificate::from_pem(ca_pem));
+                info!(ca_cert = %ca_path.display(), "TLS configured with custom CA cert");
+            }
             endpoint = endpoint
                 .tls_config(tls_config)
                 .map_err(|e| TunnelClientError::Connection(e.to_string()))?;
-            info!(ca_cert = %ca_path.display(), "TLS configured for relay connection");
         }
 
-        let channel = endpoint
-            .connect()
-            .await
-            .map_err(|e| TunnelClientError::Connection(e.to_string()))?;
+        let channel = endpoint.connect().await.map_err(|e| {
+            // Log the full error chain for debugging
+            tracing::debug!(error = ?e, "connection error details");
+            TunnelClientError::Connection(format!("{e}: {}", error_chain(&e)))
+        })?;
 
         let token = self.authenticate(channel.clone()).await?;
 
@@ -363,6 +366,21 @@ impl TunnelClient {
                 }
             }
         }
+    }
+}
+
+/// Walk the `source()` chain of an error and join into a single string.
+fn error_chain(err: &dyn std::error::Error) -> String {
+    let mut chain = Vec::new();
+    let mut current = err.source();
+    while let Some(e) = current {
+        chain.push(e.to_string());
+        current = e.source();
+    }
+    if chain.is_empty() {
+        String::from("(no further details)")
+    } else {
+        chain.join(" -> ")
     }
 }
 

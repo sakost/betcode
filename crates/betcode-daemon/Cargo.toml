@@ -15,7 +15,7 @@ betcode-proto = { workspace = true }
 betcode-core = { workspace = true }
 betcode-crypto = { workspace = true }
 tokio.workspace = true
-tonic = { workspace = true, features = ["tls-ring", "tls-native-roots"] }
+tonic = { workspace = true, features = ["tls-ring", "tls-native-roots", "tls-webpki-roots"] }
 prost.workspace = true
 serde.workspace = true
 serde_json.workspace = true

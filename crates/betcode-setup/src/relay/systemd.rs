@@ -133,6 +133,32 @@ fn setup_certbot(config: &RelaySetupConfig) -> Result<()> {
         &["certonly", "--standalone", "-d", &config.domain, "--agree-tos", "--non-interactive", "--register-unsafely-without-email"],
     )?;
 
+    // Grant betcode user read access to letsencrypt dirs via ACLs
+    // (certbot defaults to 0700 root:root on /etc/letsencrypt/{live,archive})
+    if !command_exists("setfacl") {
+        run_cmd("installing acl package", "apt-get", &["install", "-y", "acl"])?;
+    }
+    for dir in &[
+        "/etc/letsencrypt/live",
+        "/etc/letsencrypt/archive",
+        &format!("/etc/letsencrypt/live/{}", config.domain),
+        &format!("/etc/letsencrypt/archive/{}", config.domain),
+    ] {
+        if Path::new(dir).exists() {
+            run_cmd(
+                &format!("setting ACL on {dir}"),
+                "setfacl",
+                &["-R", "-m", "u:betcode:rX", dir],
+            )?;
+            // Default ACL so renewed certs also get the right perms
+            run_cmd(
+                &format!("setting default ACL on {dir}"),
+                "setfacl",
+                &["-R", "-m", "d:u:betcode:rX", dir],
+            )?;
+        }
+    }
+
     // Install renewal hooks
     let hooks_dir = "/etc/letsencrypt/renewal-hooks";
     for subdir in &["pre", "post"] {
