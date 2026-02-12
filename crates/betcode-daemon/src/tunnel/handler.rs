@@ -193,6 +193,8 @@ impl TunnelRequestHandler {
                         None => Vec::new(),
                     };
                     self.handle_incoming_stream_data(&request_id, &data).await;
+                } else {
+                    warn!(request_id = %request_id, "StreamData frame missing StreamPayload");
                 }
                 vec![]
             }
@@ -272,7 +274,7 @@ impl TunnelRequestHandler {
             )];
         };
 
-        debug!(request_id = %request_id, method = %payload.method, machine_id = %self.machine_id, "Handling tunneled request");
+        info!(request_id = %request_id, method = %payload.method, machine_id = %self.machine_id, "Handling tunneled request");
 
         // ExchangeKeys is handled before decryption (no session key yet).
         if payload.method == METHOD_EXCHANGE_KEYS {
@@ -549,7 +551,9 @@ impl TunnelRequestHandler {
                 )]
             }
         };
-        let _ = self.db.update_compaction_sequence(sid, cutoff).await;
+        if let Err(e) = self.db.update_compaction_sequence(sid, cutoff).await {
+            warn!(session_id = %sid, error = %e, "Failed to update compaction sequence");
+        }
         #[allow(clippy::cast_possible_truncation)]
         let messages_after = messages_before - deleted as u32;
         #[allow(clippy::cast_possible_truncation)]
@@ -656,7 +660,7 @@ impl TunnelRequestHandler {
         let sid = {
             let stream = self.active_streams.read().await;
             if let Some(a) = stream.get(request_id) { a.session_id.clone() } else {
-                debug!(request_id = %request_id, "StreamData for unknown active stream");
+                warn!(request_id = %request_id, "StreamData for unknown active stream");
                 return;
             }
         };
@@ -789,10 +793,12 @@ impl TunnelRequestHandler {
                 }
             }
             Some(Request::Cancel(_)) => {
-                let _ = self.relay.cancel_session(&sid).await;
+                if let Err(e) = self.relay.cancel_session(&sid).await {
+                    warn!(session_id = %sid, error = %e, "Failed to cancel session");
+                }
             }
-            _ => {
-                debug!(request_id = %request_id, "Ignoring non-actionable StreamData request");
+            other => {
+                warn!(request_id = %request_id, request_type = ?other.map(|_| "unknown"), "Ignoring non-actionable StreamData request");
             }
         }
     }
@@ -915,10 +921,13 @@ impl TunnelRequestHandler {
             None
         };
 
-        let _ = self
+        if let Err(e) = self
             .db
             .update_session_status(&sid, crate::storage::SessionStatus::Active)
-            .await;
+            .await
+        {
+            warn!(session_id = %sid, error = %e, "Failed to update session status to Active");
+        }
 
         let client_id = generate_tunnel_client_id();
         let handle = match self.multiplexer.subscribe(&sid, &client_id, "tunnel").await {
@@ -986,7 +995,8 @@ impl TunnelRequestHandler {
                         let wire_bytes = if let Some(ref session) = crypto {
                             // Serialize the real event
                             let mut inner_buf = Vec::with_capacity(event.encoded_len());
-                            if event.encode(&mut inner_buf).is_err() {
+                            if let Err(e) = event.encode(&mut inner_buf) {
+                                warn!(request_id = %rid, error = %e, "Failed to encode event for app-layer encryption");
                                 continue;
                             }
                             // Encrypt the serialized event
@@ -1010,14 +1020,16 @@ impl TunnelRequestHandler {
                                 )),
                             };
                             let mut buf = Vec::with_capacity(wrapper.encoded_len());
-                            if wrapper.encode(&mut buf).is_err() {
+                            if let Err(e) = wrapper.encode(&mut buf) {
+                                warn!(request_id = %rid, error = %e, "Failed to encode encrypted wrapper event");
                                 continue;
                             }
                             buf
                         } else {
                             // No crypto: serialize event directly
                             let mut buf = Vec::with_capacity(event.encoded_len());
-                            if event.encode(&mut buf).is_err() {
+                            if let Err(e) = event.encode(&mut buf) {
+                                warn!(request_id = %rid, error = %e, "Failed to encode plaintext event");
                                 continue;
                             }
                             buf
@@ -1229,8 +1241,12 @@ impl TunnelRequestHandler {
         tokio::spawn(async move {
             let mut seq = 0u64;
             for msg in messages {
-                let Ok(raw_bytes) = base64_decode(&msg.payload) else {
-                    continue;
+                let raw_bytes = match base64_decode(&msg.payload) {
+                    Ok(b) => b,
+                    Err(e) => {
+                        warn!(request_id = %rid, session_id = %sid, error = %e, "Failed to decode base64 message payload in resume replay");
+                        continue;
+                    }
                 };
 
                 // Match the converse event forwarder: when crypto is active,
@@ -1256,7 +1272,8 @@ impl TunnelRequestHandler {
                         )),
                     };
                     let mut buf = Vec::with_capacity(wrapper.encoded_len());
-                    if wrapper.encode(&mut buf).is_err() {
+                    if let Err(e) = wrapper.encode(&mut buf) {
+                        warn!(request_id = %rid, error = %e, "Failed to encode encrypted wrapper in resume replay");
                         continue;
                     }
                     buf
@@ -1476,13 +1493,16 @@ impl TunnelRequestHandler {
                 match item {
                     Ok(output) => {
                         let mut buf = Vec::with_capacity(output.encoded_len());
-                        if output.encode(&mut buf).is_err() {
+                        if let Err(e) = output.encode(&mut buf) {
+                            warn!(request_id = %rid, error = %e, "Failed to encode command output");
                             continue;
                         }
-                        let Ok(encrypted) =
-                            make_encrypted_payload(crypto_for_response.as_deref(), &buf)
-                        else {
-                            continue;
+                        let encrypted = match make_encrypted_payload(crypto_for_response.as_deref(), &buf) {
+                            Ok(enc) => enc,
+                            Err(e) => {
+                                warn!(request_id = %rid, error = %e, "Failed to encrypt command output");
+                                continue;
+                            }
                         };
                         let frame = TunnelFrame {
                             request_id: rid.clone(),
