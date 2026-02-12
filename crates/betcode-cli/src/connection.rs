@@ -212,7 +212,9 @@ impl DaemonConnection {
                     e
                 ))
             })?;
-            let tls_config = ClientTlsConfig::new().ca_certificate(Certificate::from_pem(ca_pem));
+            let tls_config = ClientTlsConfig::new()
+                .with_enabled_roots()
+                .ca_certificate(Certificate::from_pem(ca_pem));
             endpoint = endpoint
                 .tls_config(tls_config)
                 .map_err(|e| ConnectionError::ConnectFailed(e.to_string()))?;
@@ -620,18 +622,22 @@ impl DaemonConnection {
         branch: &str,
         setup_script: Option<&str>,
     ) -> Result<WorktreeDetail, ConnectionError> {
+        let auth_token = self.config.auth_token.clone();
+        let machine_id = self.config.machine_id.clone();
         let client = self
             .worktree_client
             .as_mut()
             .ok_or(ConnectionError::NotConnected)?;
 
+        let mut request = tonic::Request::new(CreateWorktreeRequest {
+            name: name.to_string(),
+            repo_path: repo_path.to_string(),
+            branch: branch.to_string(),
+            setup_script: setup_script.unwrap_or_default().to_string(),
+        });
+        apply_relay_meta(&mut request, &auth_token, &machine_id);
         let response = client
-            .create_worktree(CreateWorktreeRequest {
-                name: name.to_string(),
-                repo_path: repo_path.to_string(),
-                branch: branch.to_string(),
-                setup_script: setup_script.unwrap_or_default().to_string(),
-            })
+            .create_worktree(request)
             .await
             .map_err(|e| ConnectionError::RpcFailed(e.to_string()))?;
 
@@ -643,13 +649,17 @@ impl DaemonConnection {
         &mut self,
         id: &str,
     ) -> Result<RemoveWorktreeResponse, ConnectionError> {
+        let auth_token = self.config.auth_token.clone();
+        let machine_id = self.config.machine_id.clone();
         let client = self
             .worktree_client
             .as_mut()
             .ok_or(ConnectionError::NotConnected)?;
 
+        let mut request = tonic::Request::new(RemoveWorktreeRequest { id: id.to_string() });
+        apply_relay_meta(&mut request, &auth_token, &machine_id);
         let response = client
-            .remove_worktree(RemoveWorktreeRequest { id: id.to_string() })
+            .remove_worktree(request)
             .await
             .map_err(|e| ConnectionError::RpcFailed(e.to_string()))?;
 
@@ -661,15 +671,19 @@ impl DaemonConnection {
         &mut self,
         repo_path: Option<&str>,
     ) -> Result<ListWorktreesResponse, ConnectionError> {
+        let auth_token = self.config.auth_token.clone();
+        let machine_id = self.config.machine_id.clone();
         let client = self
             .worktree_client
             .as_mut()
             .ok_or(ConnectionError::NotConnected)?;
 
+        let mut request = tonic::Request::new(ListWorktreesRequest {
+            repo_path: repo_path.unwrap_or_default().to_string(),
+        });
+        apply_relay_meta(&mut request, &auth_token, &machine_id);
         let response = client
-            .list_worktrees(ListWorktreesRequest {
-                repo_path: repo_path.unwrap_or_default().to_string(),
-            })
+            .list_worktrees(request)
             .await
             .map_err(|e| ConnectionError::RpcFailed(e.to_string()))?;
 
@@ -678,13 +692,17 @@ impl DaemonConnection {
 
     /// Get a single worktree.
     pub async fn get_worktree(&mut self, id: &str) -> Result<WorktreeDetail, ConnectionError> {
+        let auth_token = self.config.auth_token.clone();
+        let machine_id = self.config.machine_id.clone();
         let client = self
             .worktree_client
             .as_mut()
             .ok_or(ConnectionError::NotConnected)?;
 
+        let mut request = tonic::Request::new(GetWorktreeRequest { id: id.to_string() });
+        apply_relay_meta(&mut request, &auth_token, &machine_id);
         let response = client
-            .get_worktree(GetWorktreeRequest { id: id.to_string() })
+            .get_worktree(request)
             .await
             .map_err(|e| ConnectionError::RpcFailed(e.to_string()))?;
 
