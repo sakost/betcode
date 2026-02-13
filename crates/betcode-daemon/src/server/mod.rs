@@ -5,6 +5,7 @@
 mod agent;
 pub mod command_svc;
 mod config;
+mod config_svc;
 pub(crate) mod gitlab_convert;
 mod gitlab_svc;
 mod handler;
@@ -18,6 +19,7 @@ mod gitlab_svc_tests;
 pub use agent::AgentServiceImpl;
 pub use command_svc::CommandServiceImpl;
 pub use config::ServerConfig;
+pub use config_svc::ConfigServiceImpl;
 pub use gitlab_svc::GitLabServiceImpl;
 pub use health::HealthServiceImpl;
 pub use repo_svc::GitRepoServiceImpl;
@@ -35,6 +37,7 @@ use tokio::sync::RwLock;
 use betcode_proto::v1::agent_service_server::AgentServiceServer;
 use betcode_proto::v1::bet_code_health_server::BetCodeHealthServer;
 use betcode_proto::v1::command_service_server::CommandServiceServer;
+use betcode_proto::v1::config_service_server::ConfigServiceServer;
 use betcode_proto::v1::health_server::HealthServer;
 use betcode_proto::v1::git_repo_service_server::GitRepoServiceServer;
 use betcode_proto::v1::worktree_service_server::WorktreeServiceServer;
@@ -71,6 +74,7 @@ pub struct GrpcServer {
     multiplexer: Arc<SessionMultiplexer>,
     relay: Arc<SessionRelay>,
     command_service: CommandServiceImpl,
+    config_service: ConfigServiceImpl,
     repo_service: GitRepoServiceImpl,
     worktree_service: WorktreeServiceImpl,
 }
@@ -133,6 +137,8 @@ impl GrpcServer {
             shutdown_tx,
         );
 
+        let config_service = ConfigServiceImpl::new(config.clone());
+
         let worktree_manager = WorktreeManager::new(db.clone(), worktree_base_dir);
         let repo_service = GitRepoServiceImpl::new(db.clone(), worktree_manager.clone());
         let worktree_service = WorktreeServiceImpl::new(worktree_manager, db.clone());
@@ -144,6 +150,7 @@ impl GrpcServer {
             multiplexer,
             relay,
             command_service,
+            config_service,
             repo_service,
             worktree_service,
         }
@@ -166,6 +173,7 @@ impl GrpcServer {
             .http2_keepalive_timeout(Some(Duration::from_secs(10)))
             .add_service(AgentServiceServer::new(agent_service))
             .add_service(CommandServiceServer::new(self.command_service))
+            .add_service(ConfigServiceServer::new(self.config_service))
             .add_service(GitRepoServiceServer::new(self.repo_service))
             .add_service(HealthServer::new(health_service.clone()))
             .add_service(BetCodeHealthServer::new(health_service))
@@ -207,6 +215,7 @@ impl GrpcServer {
             .http2_keepalive_timeout(Some(Duration::from_secs(10)))
             .add_service(AgentServiceServer::new(agent_service))
             .add_service(CommandServiceServer::new(self.command_service))
+            .add_service(ConfigServiceServer::new(self.config_service))
             .add_service(GitRepoServiceServer::new(self.repo_service))
             .add_service(HealthServer::new(health_service.clone()))
             .add_service(BetCodeHealthServer::new(health_service))
@@ -240,6 +249,11 @@ impl GrpcServer {
     /// Get a clone of the `CommandServiceImpl` that shares state with the gRPC server.
     pub fn command_service_impl(&self) -> CommandServiceImpl {
         self.command_service.clone()
+    }
+
+    /// Get a clone of the `ConfigServiceImpl` that shares state with the gRPC server.
+    pub fn config_service_impl(&self) -> ConfigServiceImpl {
+        self.config_service.clone()
     }
 
     /// Get a clone of the `GitRepoServiceImpl` that shares state with the gRPC server.

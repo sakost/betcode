@@ -19,6 +19,7 @@ use betcode_proto::v1::git_lab_service_server::GitLabServiceServer;
 use betcode_proto::v1::machine_service_server::MachineServiceServer;
 use betcode_proto::v1::tunnel_service_server::TunnelServiceServer;
 use betcode_proto::v1::git_repo_service_server::GitRepoServiceServer;
+use betcode_proto::v1::config_service_server::ConfigServiceServer;
 use betcode_proto::v1::worktree_service_server::WorktreeServiceServer;
 
 use betcode_relay::auth::JwtManager;
@@ -26,8 +27,9 @@ use betcode_relay::buffer::BufferManager;
 use betcode_relay::registry::ConnectionRegistry;
 use betcode_relay::router::RequestRouter;
 use betcode_relay::server::{
-    AgentProxyService, AuthServiceImpl, CommandProxyService, GitLabProxyService,
-    GitRepoProxyService, MachineServiceImpl, TunnelServiceImpl, WorktreeProxyService,
+    AgentProxyService, AuthServiceImpl, CommandProxyService, ConfigProxyService,
+    GitLabProxyService, GitRepoProxyService, MachineServiceImpl, TunnelServiceImpl,
+    WorktreeProxyService,
 };
 use betcode_relay::storage::RelayDatabase;
 use betcode_relay::tls::TlsMode;
@@ -141,6 +143,7 @@ async fn main() -> anyhow::Result<()> {
     let command_proxy = CommandProxyService::new(Arc::clone(&router));
     let worktree_proxy = WorktreeProxyService::new(Arc::clone(&router));
     let git_repo_proxy = GitRepoProxyService::new(Arc::clone(&router));
+    let config_proxy = ConfigProxyService::new(Arc::clone(&router));
     let gitlab_proxy = GitLabProxyService::new(Arc::clone(&router));
 
     let jwt_check = betcode_relay::server::jwt_interceptor(Arc::clone(&jwt));
@@ -216,6 +219,10 @@ async fn main() -> anyhow::Result<()> {
         ))
         .add_service(GitRepoServiceServer::with_interceptor(
             git_repo_proxy,
+            jwt_check.clone(),
+        ))
+        .add_service(ConfigServiceServer::with_interceptor(
+            config_proxy,
             jwt_check.clone(),
         ))
         .add_service(GitLabServiceServer::with_interceptor(

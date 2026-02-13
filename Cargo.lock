@@ -334,6 +334,7 @@ dependencies = [
  "prost-types",
  "regex",
  "reqwest",
+ "rustls",
  "serde",
  "serde_json",
  "sqlx",

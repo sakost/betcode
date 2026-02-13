@@ -3,6 +3,7 @@
 pub mod agent_proxy;
 pub mod auth_svc;
 pub mod command_proxy;
+pub mod config_proxy;
 pub mod git_repo_proxy;
 pub mod gitlab_proxy;
 pub mod grpc_util;
@@ -21,6 +22,7 @@ pub(crate) mod test_helpers;
 pub use agent_proxy::AgentProxyService;
 pub use auth_svc::AuthServiceImpl;
 pub use command_proxy::CommandProxyService;
+pub use config_proxy::ConfigProxyService;
 pub use git_repo_proxy::GitRepoProxyService;
 pub use gitlab_proxy::GitLabProxyService;
 pub use interceptor::jwt_interceptor;

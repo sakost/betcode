@@ -11,6 +11,7 @@ use tokio_stream::StreamExt as _;
 use tonic::Request;
 
 use betcode_proto::v1::command_service_server::CommandService as CommandServiceTrait;
+use betcode_proto::v1::config_service_server::ConfigService as ConfigServiceTrait;
 use betcode_proto::v1::git_lab_service_server::GitLabService as GitLabServiceTrait;
 use betcode_proto::v1::git_repo_service_server::GitRepoService as GitRepoServiceTrait;
 use betcode_proto::v1::worktree_service_server::WorktreeService as WorktreeServiceTrait;
@@ -18,20 +19,24 @@ use betcode_proto::v1::{
     AddPluginRequest, AgentRequest, CancelTurnRequest, CancelTurnResponse, CompactSessionRequest,
     CompactSessionResponse, CreateWorktreeRequest, DisablePluginRequest, EnablePluginRequest,
     EncryptedPayload, ExecuteServiceCommandRequest, FrameType, GetCommandRegistryRequest,
-    GetIssueRequest, GetMergeRequestRequest, GetPipelineRequest, GetPluginStatusRequest,
-    GetRepoRequest, GetWorktreeRequest, InputLockRequest, InputLockResponse, KeyExchangeRequest,
-    KeyExchangeResponse, ListAgentsRequest, ListIssuesRequest, ListMergeRequestsRequest,
+    GetIssueRequest, GetMergeRequestRequest, GetPermissionsRequest, GetPipelineRequest,
+    GetPluginStatusRequest, GetRepoRequest, GetSettingsRequest, GetWorktreeRequest,
+    InputLockRequest, InputLockResponse, KeyExchangeRequest, KeyExchangeResponse,
+    ListAgentsRequest, ListIssuesRequest, ListMcpServersRequest, ListMergeRequestsRequest,
     ListPathRequest, ListPipelinesRequest, ListPluginsRequest, ListReposRequest,
     ListSessionsRequest, ListSessionsResponse, ListWorktreesRequest, RegisterRepoRequest,
     RemovePluginRequest, RemoveWorktreeRequest, ResumeSessionRequest, ScanReposRequest,
     SessionSummary, StreamPayload, TunnelError, TunnelErrorCode, TunnelFrame,
-    UnregisterRepoRequest, UpdateRepoRequest,
+    UnregisterRepoRequest, UpdateRepoRequest, UpdateSettingsRequest,
 };
 
 use betcode_crypto::{CryptoSession, IdentityKeyPair, KeyExchangeState};
 
 use crate::relay::SessionRelay;
-use crate::server::{CommandServiceImpl, GitLabServiceImpl, GitRepoServiceImpl, WorktreeServiceImpl};
+use crate::server::{
+    CommandServiceImpl, ConfigServiceImpl, GitLabServiceImpl, GitRepoServiceImpl,
+    WorktreeServiceImpl,
+};
 use crate::session::SessionMultiplexer;
 use crate::storage::Database;
 
@@ -41,12 +46,13 @@ pub use betcode_proto::methods::{
     METHOD_ADD_PLUGIN, METHOD_CANCEL_TURN, METHOD_COMPACT_SESSION, METHOD_CONVERSE,
     METHOD_CREATE_WORKTREE, METHOD_DISABLE_PLUGIN, METHOD_ENABLE_PLUGIN, METHOD_EXCHANGE_KEYS,
     METHOD_EXECUTE_SERVICE_COMMAND, METHOD_GET_COMMAND_REGISTRY, METHOD_GET_ISSUE,
-    METHOD_GET_MERGE_REQUEST, METHOD_GET_PIPELINE, METHOD_GET_PLUGIN_STATUS, METHOD_GET_REPO,
-    METHOD_GET_WORKTREE, METHOD_LIST_AGENTS, METHOD_LIST_ISSUES, METHOD_LIST_MERGE_REQUESTS,
+    METHOD_GET_MERGE_REQUEST, METHOD_GET_PERMISSIONS, METHOD_GET_PIPELINE,
+    METHOD_GET_PLUGIN_STATUS, METHOD_GET_REPO, METHOD_GET_SETTINGS, METHOD_GET_WORKTREE,
+    METHOD_LIST_AGENTS, METHOD_LIST_ISSUES, METHOD_LIST_MCP_SERVERS, METHOD_LIST_MERGE_REQUESTS,
     METHOD_LIST_PATH, METHOD_LIST_PIPELINES, METHOD_LIST_PLUGINS, METHOD_LIST_REPOS,
     METHOD_LIST_SESSIONS, METHOD_LIST_WORKTREES, METHOD_REGISTER_REPO, METHOD_REMOVE_PLUGIN,
     METHOD_REMOVE_WORKTREE, METHOD_REQUEST_INPUT_LOCK, METHOD_RESUME_SESSION, METHOD_SCAN_REPOS,
-    METHOD_UNREGISTER_REPO, METHOD_UPDATE_REPO,
+    METHOD_UNREGISTER_REPO, METHOD_UPDATE_REPO, METHOD_UPDATE_SETTINGS,
 };
 
 /// Default maximum number of sessions returned by `ListSessions`.
@@ -129,6 +135,8 @@ pub struct TunnelRequestHandler {
     repo_service: Option<Arc<GitRepoServiceImpl>>,
     /// `WorktreeService` implementation for handling worktree-related RPCs through the tunnel.
     worktree_service: Option<Arc<WorktreeServiceImpl>>,
+    /// `ConfigService` implementation for handling config RPCs through the tunnel.
+    config_service: Option<Arc<ConfigServiceImpl>>,
 }
 
 impl TunnelRequestHandler {
@@ -155,6 +163,7 @@ impl TunnelRequestHandler {
             gitlab_service: None,
             repo_service: None,
             worktree_service: None,
+            config_service: None,
         }
     }
 
@@ -176,6 +185,11 @@ impl TunnelRequestHandler {
     /// Set the `WorktreeService` implementation for handling worktree RPCs through the tunnel.
     pub fn set_worktree_service(&mut self, service: Arc<WorktreeServiceImpl>) {
         self.worktree_service = Some(service);
+    }
+
+    /// Set the `ConfigService` implementation for handling config RPCs through the tunnel.
+    pub fn set_config_service(&mut self, svc: Arc<ConfigServiceImpl>) {
+        self.config_service = Some(svc);
     }
 
     /// Process an incoming frame and produce zero or more response frames.
@@ -407,6 +421,19 @@ impl TunnelRequestHandler {
             | METHOD_LIST_WORKTREES
             | METHOD_GET_WORKTREE => {
                 self.dispatch_worktree_rpc(
+                    &request_id,
+                    payload.method.as_str(),
+                    &data,
+                    relay_forwarded,
+                )
+                .await
+            }
+            // ConfigService RPCs
+            METHOD_GET_SETTINGS
+            | METHOD_UPDATE_SETTINGS
+            | METHOD_LIST_MCP_SERVERS
+            | METHOD_GET_PERMISSIONS => {
+                self.dispatch_config_rpc(
                     &request_id,
                     payload.method.as_str(),
                     &data,
@@ -1789,6 +1816,67 @@ impl TunnelRequestHandler {
                 request_id,
                 TunnelErrorCode::NotFound,
                 &format!("Unknown Worktree method: {method}"),
+            )],
+        }
+    }
+
+    // --- ConfigService dispatch ---
+
+    async fn dispatch_config_rpc(
+        &self,
+        request_id: &str,
+        method: &str,
+        data: &[u8],
+        relay_forwarded: bool,
+    ) -> Vec<TunnelFrame> {
+        let Some(svc) = &self.config_service else {
+            return vec![Self::error_response(
+                request_id,
+                TunnelErrorCode::Internal,
+                "ConfigService not available in tunnel handler",
+            )];
+        };
+        match method {
+            METHOD_GET_SETTINGS => dispatch_rpc!(
+                self,
+                svc,
+                request_id,
+                data,
+                relay_forwarded,
+                GetSettingsRequest,
+                get_settings
+            ),
+            METHOD_UPDATE_SETTINGS => dispatch_rpc!(
+                self,
+                svc,
+                request_id,
+                data,
+                relay_forwarded,
+                UpdateSettingsRequest,
+                update_settings
+            ),
+            METHOD_LIST_MCP_SERVERS => dispatch_rpc!(
+                self,
+                svc,
+                request_id,
+                data,
+                relay_forwarded,
+                ListMcpServersRequest,
+                list_mcp_servers
+            ),
+            METHOD_GET_PERMISSIONS => dispatch_rpc!(
+                self,
+                svc,
+                request_id,
+                data,
+                relay_forwarded,
+                GetPermissionsRequest,
+                get_permissions
+            ),
+            _ => vec![Self::error_response(
+                request_id,
+                TunnelErrorCode::NotFound,
+                &format!("Unknown Config method: {method}"),
             )],
         }
     }

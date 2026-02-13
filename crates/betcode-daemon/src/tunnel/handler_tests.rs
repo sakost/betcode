@@ -13,6 +13,7 @@ struct HandlerTestBuilder {
     with_gitlab_service: bool,
     with_worktree_service: bool,
     with_repo_service: bool,
+    with_config_service: bool,
 }
 
 /// Outputs produced by [`HandlerTestBuilder::build`].
@@ -33,6 +34,7 @@ impl HandlerTestBuilder {
             with_gitlab_service: false,
             with_worktree_service: false,
             with_repo_service: false,
+            with_config_service: false,
         }
     }
 
@@ -68,6 +70,11 @@ impl HandlerTestBuilder {
 
     fn with_repo_service(mut self) -> Self {
         self.with_repo_service = true;
+        self
+    }
+
+    fn with_config_service(mut self) -> Self {
+        self.with_config_service = true;
         self
     }
 
@@ -159,6 +166,13 @@ impl HandlerTestBuilder {
             let wm = WorktreeManager::new(db.clone(), wt_dir);
             let repo_svc = GitRepoServiceImpl::new(db, wm);
             handler.set_repo_service(Arc::new(repo_svc));
+        }
+
+        if self.with_config_service {
+            use crate::server::{ConfigServiceImpl, ServerConfig};
+
+            let config_svc = ConfigServiceImpl::new(ServerConfig::default());
+            handler.set_config_service(Arc::new(config_svc));
         }
 
         HandlerTestOutput {
@@ -2418,4 +2432,81 @@ async fn repo_malformed_data_returns_error() {
         .await;
     assert_eq!(r.len(), 1);
     assert_eq!(r[0].frame_type, FrameType::Error as i32);
+}
+
+// --- ConfigService tunnel handler tests ---
+
+use betcode_proto::v1::Settings;
+
+#[tokio::test]
+async fn config_service_dispatches_when_set() {
+    let HandlerTestOutput { handler: h, .. } = HandlerTestBuilder::new()
+        .with_config_service()
+        .build()
+        .await;
+    let req = betcode_proto::v1::GetSettingsRequest {
+        scope: String::new(),
+    };
+    let r = h
+        .handle_frame(req_frame("cfg-ok", METHOD_GET_SETTINGS, encode(&req)))
+        .await;
+    assert_eq!(r.len(), 1);
+    assert_eq!(r[0].frame_type, FrameType::Response as i32);
+    if let Some(betcode_proto::v1::tunnel_frame::Payload::StreamData(p)) = &r[0].payload {
+        let resp =
+            Settings::decode(p.encrypted.as_ref().unwrap().ciphertext.as_slice()).unwrap();
+        // Should contain daemon settings from default ServerConfig
+        assert!(resp.daemon.is_some());
+    } else {
+        panic!("wrong payload");
+    }
+}
+
+#[tokio::test]
+async fn config_service_not_set_returns_error() {
+    let HandlerTestOutput { handler: h, .. } = HandlerTestBuilder::new().build().await; // No config service set
+    let req = betcode_proto::v1::GetSettingsRequest {
+        scope: String::new(),
+    };
+    let r = h
+        .handle_frame(req_frame("cfg-err", METHOD_GET_SETTINGS, encode(&req)))
+        .await;
+    assert_eq!(r.len(), 1);
+    assert_eq!(r[0].frame_type, FrameType::Error as i32);
+    if let Some(betcode_proto::v1::tunnel_frame::Payload::Error(e)) = &r[0].payload {
+        assert!(
+            e.message.contains("ConfigService not available"),
+            "Expected 'ConfigService not available', got: {}",
+            e.message
+        );
+    } else {
+        panic!("expected error payload");
+    }
+}
+
+#[tokio::test]
+async fn config_all_methods_dispatch() {
+    // All 4 ConfigService method constants should be recognized and hit the
+    // "ConfigService not available" error path (not the "Unknown method" path).
+    let HandlerTestOutput { handler: h, .. } = HandlerTestBuilder::new().build().await;
+    let methods = [
+        METHOD_GET_SETTINGS,
+        METHOD_UPDATE_SETTINGS,
+        METHOD_LIST_MCP_SERVERS,
+        METHOD_GET_PERMISSIONS,
+    ];
+    for method in methods {
+        let r = h
+            .handle_frame(req_frame("cfg-dispatch", method, vec![]))
+            .await;
+        assert_eq!(r.len(), 1, "method: {method}");
+        assert_eq!(r[0].frame_type, FrameType::Error as i32, "method: {method}");
+        if let Some(betcode_proto::v1::tunnel_frame::Payload::Error(e)) = &r[0].payload {
+            assert!(
+                e.message.contains("ConfigService not available"),
+                "method {method} should hit 'not available', got: {}",
+                e.message
+            );
+        }
+    }
 }

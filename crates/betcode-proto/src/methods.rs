@@ -122,3 +122,19 @@ pub const METHOD_UPDATE_REPO: &str = "GitRepoService/UpdateRepo";
 
 /// `GitRepoService/ScanRepos`
 pub const METHOD_SCAN_REPOS: &str = "GitRepoService/ScanRepos";
+
+// ---------------------------------------------------------------------------
+// ConfigService
+// ---------------------------------------------------------------------------
+
+/// `ConfigService/GetSettings`
+pub const METHOD_GET_SETTINGS: &str = "ConfigService/GetSettings";
+
+/// `ConfigService/UpdateSettings`
+pub const METHOD_UPDATE_SETTINGS: &str = "ConfigService/UpdateSettings";
+
+/// `ConfigService/ListMcpServers`
+pub const METHOD_LIST_MCP_SERVERS: &str = "ConfigService/ListMcpServers";
+
+/// `ConfigService/GetPermissions`
+pub const METHOD_GET_PERMISSIONS: &str = "ConfigService/GetPermissions";

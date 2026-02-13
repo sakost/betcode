@@ -23,7 +23,10 @@ use super::error::TunnelClientError;
 use super::handler::TunnelRequestHandler;
 
 use crate::relay::SessionRelay;
-use crate::server::{CommandServiceImpl, GitLabServiceImpl, GitRepoServiceImpl, WorktreeServiceImpl};
+use crate::server::{
+    CommandServiceImpl, ConfigServiceImpl, GitLabServiceImpl, GitRepoServiceImpl,
+    WorktreeServiceImpl,
+};
 use crate::session::SessionMultiplexer;
 use crate::storage::Database;
 
@@ -43,6 +46,8 @@ pub struct TunnelClient {
     repo_service: Option<Arc<GitRepoServiceImpl>>,
     /// Optional `WorktreeServiceImpl` for handling worktree RPCs through the tunnel.
     worktree_service: Option<Arc<WorktreeServiceImpl>>,
+    /// Optional `ConfigServiceImpl` for handling config RPCs through the tunnel.
+    config_service: Option<Arc<ConfigServiceImpl>>,
 }
 
 impl TunnelClient {
@@ -67,6 +72,7 @@ impl TunnelClient {
             gitlab_service: None,
             repo_service: None,
             worktree_service: None,
+            config_service: None,
         })
     }
 
@@ -88,6 +94,11 @@ impl TunnelClient {
     /// Set the `WorktreeService` implementation for handling worktree RPCs through the tunnel.
     pub fn set_worktree_service(&mut self, service: Arc<WorktreeServiceImpl>) {
         self.worktree_service = Some(service);
+    }
+
+    /// Set the `ConfigService` implementation for handling config RPCs through the tunnel.
+    pub fn set_config_service(&mut self, service: Arc<ConfigServiceImpl>) {
+        self.config_service = Some(service);
     }
 
     /// Load or generate the X25519 identity keypair.
@@ -213,6 +224,9 @@ impl TunnelClient {
         }
         if let Some(worktree_svc) = &self.worktree_service {
             handler.set_worktree_service(Arc::clone(worktree_svc));
+        }
+        if let Some(config_svc) = &self.config_service {
+            handler.set_config_service(Arc::clone(config_svc));
         }
         let handler = Arc::new(handler);
 
