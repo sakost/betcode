@@ -15,6 +15,7 @@ betcode-proto = { workspace = true }
 betcode-core = { workspace = true }
 tokio.workspace = true
 tonic = { workspace = true, features = ["tls-ring", "tls-native-roots"] }
+tonic-health.workspace = true
 prost.workspace = true
 prost-types.workspace = true
 serde.workspace = true

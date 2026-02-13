@@ -168,9 +168,16 @@ impl GrpcServer {
 
         info!(%addr, "Starting gRPC server on TCP");
 
+        // Standard grpc.health.v1 health service
+        let (grpc_health_reporter, grpc_health_service) = tonic_health::server::health_reporter();
+        grpc_health_reporter
+            .set_serving::<AgentServiceServer<AgentServiceImpl>>()
+            .await;
+
         Server::builder()
             .http2_keepalive_interval(Some(Duration::from_secs(30)))
             .http2_keepalive_timeout(Some(Duration::from_secs(10)))
+            .add_service(grpc_health_service)
             .add_service(AgentServiceServer::new(agent_service))
             .add_service(CommandServiceServer::new(self.command_service))
             .add_service(ConfigServiceServer::new(self.config_service))
@@ -208,11 +215,18 @@ impl GrpcServer {
         let health_service =
             HealthServiceImpl::new(self.db.clone(), Arc::clone(&self.subprocess_manager));
 
+        // Standard grpc.health.v1 health service
+        let (grpc_health_reporter, grpc_health_service) = tonic_health::server::health_reporter();
+        grpc_health_reporter
+            .set_serving::<AgentServiceServer<AgentServiceImpl>>()
+            .await;
+
         info!(path = %path.display(), "Starting gRPC server on Unix socket");
 
         Server::builder()
             .http2_keepalive_interval(Some(Duration::from_secs(30)))
             .http2_keepalive_timeout(Some(Duration::from_secs(10)))
+            .add_service(grpc_health_service)
             .add_service(AgentServiceServer::new(agent_service))
             .add_service(CommandServiceServer::new(self.command_service))
             .add_service(ConfigServiceServer::new(self.config_service))

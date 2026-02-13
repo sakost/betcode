@@ -195,7 +195,14 @@ async fn main() -> anyhow::Result<()> {
         }
     });
 
+    // Standard grpc.health.v1 health service (no auth — used by load balancers/K8s)
+    let (grpc_health_reporter, grpc_health_service) = tonic_health::server::health_reporter();
+    grpc_health_reporter
+        .set_serving::<AuthServiceServer<AuthServiceImpl>>()
+        .await;
+
     let grpc_router = builder
+        .add_service(grpc_health_service)
         .add_service(AuthServiceServer::new(auth))
         .add_service(TunnelServiceServer::with_interceptor(
             tunnel,
