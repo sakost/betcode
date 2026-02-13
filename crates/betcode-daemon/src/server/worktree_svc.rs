@@ -21,7 +21,7 @@ pub struct WorktreeServiceImpl {
 
 impl WorktreeServiceImpl {
     /// Create a new `WorktreeService`.
-    pub fn new(manager: WorktreeManager, db: Database) -> Self {
+    pub const fn new(manager: WorktreeManager, db: Database) -> Self {
         Self { manager, db }
     }
 }

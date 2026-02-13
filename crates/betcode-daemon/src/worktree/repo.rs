@@ -56,9 +56,10 @@ impl From<GitRepoRow> for GitRepo {
         let worktree_mode = match row.worktree_mode.as_str() {
             "local" => WorktreeMode::Local,
             "custom" => WorktreeMode::Custom(
-                row.custom_path
-                    .map(PathBuf::from)
-                    .unwrap_or_else(|| PathBuf::from("/tmp/betcode-worktrees")),
+                row.custom_path.map_or_else(
+                    || PathBuf::from("/tmp/betcode-worktrees"),
+                    PathBuf::from,
+                ),
             ),
             _ => WorktreeMode::Global,
         };
@@ -79,7 +80,7 @@ impl From<GitRepoRow> for GitRepo {
 
 impl GitRepo {
     /// Convert back to DB fields for insert/update.
-    pub fn worktree_mode_str(&self) -> &'static str {
+    pub const fn worktree_mode_str(&self) -> &'static str {
         match &self.worktree_mode {
             WorktreeMode::Global => "global",
             WorktreeMode::Local => "local",

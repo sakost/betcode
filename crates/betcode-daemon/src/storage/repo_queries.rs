@@ -54,7 +54,7 @@ impl Database {
             .ok_or_else(|| DatabaseError::NotFound(format!("GitRepo {id}")))
     }
 
-    /// Get a git repo by repo_path.
+    /// Get a git repo by `repo_path`.
     pub async fn get_git_repo_by_path(&self, repo_path: &str) -> Result<GitRepoRow, DatabaseError> {
         sqlx::query_as::<_, GitRepoRow>("SELECT * FROM git_repos WHERE repo_path = ?")
             .bind(repo_path)
