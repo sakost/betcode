@@ -3,6 +3,7 @@ mod systemd;
 mod templates;
 mod validate;
 
+use std::net::SocketAddr;
 use std::path::PathBuf;
 
 use anyhow::{Context, Result};
@@ -34,6 +35,10 @@ pub struct RelayArgs {
     /// If omitted, uses the existing binary at /usr/local/bin/betcode-relay.
     #[arg(long)]
     pub relay_binary: Option<PathBuf>,
+
+    /// Listen address for the relay server.
+    #[arg(long, default_value = "0.0.0.0:443")]
+    pub addr: SocketAddr,
 }
 
 fn parse_mode(s: &str) -> Result<DeploymentMode, String> {
@@ -78,6 +83,7 @@ pub fn run(args: RelayArgs, non_interactive: bool) -> Result<()> {
                     .with_context(|| format!("relay binary not found: {}", p.display()))
             })
             .transpose()?,
+        addr: args.addr,
     };
 
     config.validate()?;
@@ -87,8 +93,12 @@ pub fn run(args: RelayArgs, non_interactive: bool) -> Result<()> {
     match config.deployment_mode {
         DeploymentMode::Systemd => {
             crate::escalate::escalate_if_needed(non_interactive)?;
-            validate::check_systemd_prereqs()?;
-            systemd::deploy(&config)?;
+            let is_update = std::path::Path::new(systemd::SERVICE_UNIT_PATH).exists();
+            if is_update {
+                tracing::info!("existing installation detected — running in update mode");
+            }
+            validate::check_systemd_prereqs(config.addr, is_update)?;
+            systemd::deploy(&config, is_update)?;
         }
         DeploymentMode::Docker => {
             let compose_cmd = validate::detect_compose_command()?;

@@ -399,6 +399,7 @@ dependencies = [
  "dialoguer",
  "nix 0.31.1",
  "rand 0.10.0",
+ "tempfile",
  "tracing",
  "tracing-subscriber",
 ]

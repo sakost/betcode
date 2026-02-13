@@ -1,4 +1,5 @@
 use std::fmt;
+use std::net::SocketAddr;
 use std::path::PathBuf;
 
 use anyhow::{bail, Result};
@@ -27,6 +28,7 @@ pub struct RelaySetupConfig {
     pub db_path: PathBuf,
     pub deployment_mode: DeploymentMode,
     pub relay_binary_path: Option<PathBuf>,
+    pub addr: SocketAddr,
 }
 
 impl RelaySetupConfig {

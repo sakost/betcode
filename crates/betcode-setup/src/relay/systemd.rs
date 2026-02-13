@@ -9,16 +9,22 @@ use crate::config::RelaySetupConfig;
 
 use super::templates;
 
+/// Path to the systemd service unit file.
+pub const SERVICE_UNIT_PATH: &str = "/etc/systemd/system/betcode-relay.service";
+
+/// Path to the environment file.
+const ENV_FILE_PATH: &str = "/etc/betcode/relay.env";
+
 /// Deploy the relay using systemd.
 /// Assumes we are running as root (enforced by escalate).
-pub fn deploy(config: &RelaySetupConfig) -> Result<()> {
+pub fn deploy(config: &RelaySetupConfig, is_update: bool) -> Result<()> {
     create_system_user()?;
     create_directories(config)?;
-    write_env_file(config)?;
+    write_env_file(config, is_update)?;
     write_systemd_unit(config)?;
     install_relay_binary(config)?;
-    setup_certbot(config)?;
-    enable_and_start()?;
+    setup_certbot(config, is_update)?;
+    enable_and_start(is_update)?;
     Ok(())
 }
 
@@ -68,22 +74,36 @@ fn create_directories(config: &RelaySetupConfig) -> Result<()> {
     Ok(())
 }
 
-fn write_env_file(config: &RelaySetupConfig) -> Result<()> {
-    let path = "/etc/betcode/relay.env";
+fn write_env_file(config: &RelaySetupConfig, is_update: bool) -> Result<()> {
+    write_env_file_inner(config, is_update, ENV_FILE_PATH)
+}
+
+fn write_env_file_inner(config: &RelaySetupConfig, is_update: bool, path: &str) -> Result<()> {
+    if is_update && Path::new(path).exists() {
+        tracing::warn!(
+            "existing {path} preserved — to regenerate, delete it and re-run setup"
+        );
+        return Ok(());
+    }
+
     tracing::info!("writing environment file: {path}");
     let content = templates::env_file(config);
     fs::write(path, content).context("failed to write relay.env")?;
 
-    // 0640 — root can read/write, betcode group can read
-    fs::set_permissions(path, fs::Permissions::from_mode(0o640))
-        .context("failed to set permissions on relay.env")?;
+    // Skip chown/chmod in tests (requires root)
+    #[cfg(not(test))]
+    {
+        // 0640 — root can read/write, betcode group can read
+        fs::set_permissions(path, fs::Permissions::from_mode(0o640))
+            .context("failed to set permissions on relay.env")?;
 
-    run_cmd("setting ownership on relay.env", "chown", &["root:betcode", path])?;
+        run_cmd("setting ownership on relay.env", "chown", &["root:betcode", path])?;
+    }
     Ok(())
 }
 
 fn write_systemd_unit(config: &RelaySetupConfig) -> Result<()> {
-    let path = "/etc/systemd/system/betcode-relay.service";
+    let path = SERVICE_UNIT_PATH;
     tracing::info!("writing systemd unit: {path}");
     let content = templates::systemd_unit(config);
     fs::write(path, content).context("failed to write systemd unit")?;
@@ -118,7 +138,21 @@ fn install_relay_binary(config: &RelaySetupConfig) -> Result<()> {
     Ok(())
 }
 
-fn setup_certbot(config: &RelaySetupConfig) -> Result<()> {
+/// Check whether certbot setup should be skipped.
+fn should_skip_certbot(is_update: bool, cert_path: &str) -> bool {
+    is_update && Path::new(cert_path).exists()
+}
+
+fn setup_certbot(config: &RelaySetupConfig, is_update: bool) -> Result<()> {
+    let cert_path = format!("/etc/letsencrypt/live/{}/fullchain.pem", config.domain);
+    if should_skip_certbot(is_update, &cert_path) {
+        tracing::info!("TLS certificate already exists — skipping certbot setup");
+        return Ok(());
+    }
+    if is_update {
+        tracing::info!("TLS certificate not found — running certbot despite update mode");
+    }
+
     if !command_exists("certbot") {
         run_cmd(
             "installing certbot",
@@ -182,12 +216,21 @@ fn setup_certbot(config: &RelaySetupConfig) -> Result<()> {
     Ok(())
 }
 
-fn enable_and_start() -> Result<()> {
-    run_cmd(
-        "enabling and starting betcode-relay",
-        "systemctl",
-        &["enable", "--now", "betcode-relay"],
-    )?;
+/// Determine systemctl arguments for starting or restarting the service.
+fn start_command_args(is_update: bool) -> (&'static str, Vec<&'static str>) {
+    if is_update {
+        ("restarting betcode-relay", vec!["restart", "betcode-relay"])
+    } else {
+        (
+            "enabling and starting betcode-relay",
+            vec!["enable", "--now", "betcode-relay"],
+        )
+    }
+}
+
+fn enable_and_start(is_update: bool) -> Result<()> {
+    let (description, args) = start_command_args(is_update);
+    run_cmd(description, "systemctl", &args)?;
 
     // Verify service is active
     let result = run_cmd("verifying service status", "systemctl", &["is-active", "betcode-relay"]);
@@ -197,4 +240,116 @@ fn enable_and_start() -> Result<()> {
 
     tracing::info!("betcode-relay is deployed and running");
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::{DeploymentMode, RelaySetupConfig};
+    use std::net::SocketAddr;
+    use std::path::PathBuf;
+
+    fn test_config() -> RelaySetupConfig {
+        RelaySetupConfig {
+            domain: "relay.example.com".into(),
+            jwt_secret: "a".repeat(48),
+            db_path: PathBuf::from("/var/lib/betcode/relay.db"),
+            deployment_mode: DeploymentMode::Systemd,
+            relay_binary_path: None,
+            addr: "0.0.0.0:443".parse::<SocketAddr>().expect("valid addr"),
+        }
+    }
+
+    // --- service_unit_exists ---
+
+    #[test]
+    fn service_unit_path_is_systemd_location() {
+        assert_eq!(SERVICE_UNIT_PATH, "/etc/systemd/system/betcode-relay.service");
+    }
+
+    // --- write_env_file_inner ---
+
+    #[test]
+    fn write_env_file_skips_existing_on_update() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let env_path = dir.path().join("relay.env");
+        std::fs::write(&env_path, "BETCODE_JWT_SECRET=original-secret\n").expect("write");
+
+        let config = test_config();
+        let result = write_env_file_inner(&config, true, env_path.to_str().expect("path"));
+        assert!(result.is_ok());
+
+        let content = std::fs::read_to_string(&env_path).expect("read");
+        assert!(
+            content.contains("original-secret"),
+            "env file must be preserved on update"
+        );
+    }
+
+    #[test]
+    fn write_env_file_creates_on_fresh_install() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let env_path = dir.path().join("relay.env");
+
+        let config = test_config();
+        let result = write_env_file_inner(&config, false, env_path.to_str().expect("path"));
+        assert!(result.is_ok());
+
+        let content = std::fs::read_to_string(&env_path).expect("read");
+        assert!(content.contains("BETCODE_JWT_SECRET="));
+        assert!(content.contains("BETCODE_DB_PATH="));
+    }
+
+    #[test]
+    fn write_env_file_creates_on_update_when_missing() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let env_path = dir.path().join("relay.env");
+
+        let config = test_config();
+        let result = write_env_file_inner(&config, true, env_path.to_str().expect("path"));
+        assert!(result.is_ok());
+
+        let content = std::fs::read_to_string(&env_path).expect("read");
+        assert!(
+            content.contains("BETCODE_JWT_SECRET="),
+            "env file should be created even on update if it doesn't exist"
+        );
+    }
+
+    // --- should_skip_certbot ---
+
+    #[test]
+    fn skip_certbot_when_cert_exists_on_update() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let cert_path = dir.path().join("fullchain.pem");
+        std::fs::write(&cert_path, "dummy cert").expect("write");
+
+        assert!(should_skip_certbot(true, cert_path.to_str().expect("path")));
+    }
+
+    #[test]
+    fn certbot_runs_on_fresh_install() {
+        assert!(!should_skip_certbot(false, "/nonexistent/fullchain.pem"));
+    }
+
+    #[test]
+    fn certbot_runs_on_update_when_cert_missing() {
+        assert!(!should_skip_certbot(true, "/nonexistent/fullchain.pem"));
+    }
+
+    // --- start_command_args ---
+
+    #[test]
+    fn start_args_for_fresh_install() {
+        let (desc, args) = start_command_args(false);
+        assert!(desc.contains("enabling"));
+        assert_eq!(args, vec!["enable", "--now", "betcode-relay"]);
+    }
+
+    #[test]
+    fn start_args_for_update() {
+        let (desc, args) = start_command_args(true);
+        assert!(desc.contains("restarting"));
+        assert_eq!(args, vec!["restart", "betcode-relay"]);
+    }
 }

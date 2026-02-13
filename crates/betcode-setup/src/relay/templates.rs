@@ -3,6 +3,20 @@ use crate::config::RelaySetupConfig;
 /// Generate the systemd unit file content.
 pub fn systemd_unit(config: &RelaySetupConfig) -> String {
     let domain = &config.domain;
+    let port = config.addr.port();
+
+    let addr_flag = if port == 443 {
+        String::new()
+    } else {
+        format!(" \\\n  --addr {}", config.addr)
+    };
+
+    let cap_lines = if port < 1024 {
+        "AmbientCapabilities=CAP_NET_BIND_SERVICE\nCapabilityBoundingSet=CAP_NET_BIND_SERVICE"
+    } else {
+        ""
+    };
+
     format!(
         r"[Unit]
 Description=BetCode Relay Server
@@ -16,7 +30,7 @@ Group=betcode
 EnvironmentFile=/etc/betcode/relay.env
 ExecStart=/usr/local/bin/betcode-relay \
   --tls-cert /etc/letsencrypt/live/{domain}/fullchain.pem \
-  --tls-key /etc/letsencrypt/live/{domain}/privkey.pem
+  --tls-key /etc/letsencrypt/live/{domain}/privkey.pem{addr_flag}
 Restart=on-failure
 RestartSec=5
 
@@ -27,8 +41,7 @@ ProtectHome=true
 ReadWritePaths=/var/lib/betcode
 ReadOnlyPaths=/etc/betcode /etc/letsencrypt
 PrivateTmp=true
-AmbientCapabilities=CAP_NET_BIND_SERVICE
-CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+{cap_lines}
 
 [Install]
 WantedBy=multi-user.target
@@ -77,6 +90,7 @@ ENTRYPOINT ["betcode-relay"]
 /// Generate the docker-compose.yml content.
 pub fn docker_compose(config: &RelaySetupConfig) -> String {
     let domain = &config.domain;
+    let port = config.addr.port();
     format!(
         r#"services:
   certbot-init:
@@ -92,7 +106,7 @@ pub fn docker_compose(config: &RelaySetupConfig) -> String {
     build: .
     restart: unless-stopped
     ports:
-      - "443:443"
+      - "{port}:{port}"
     env_file:
       - .env
     volumes:
@@ -126,4 +140,92 @@ BETCODE_DB_PATH={}
         config.jwt_secret,
         config.db_path.display()
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::{DeploymentMode, RelaySetupConfig};
+    use std::net::SocketAddr;
+    use std::path::PathBuf;
+
+    fn test_config(addr: SocketAddr) -> RelaySetupConfig {
+        RelaySetupConfig {
+            domain: "relay.example.com".into(),
+            jwt_secret: "a".repeat(48),
+            db_path: PathBuf::from("/var/lib/betcode/relay.db"),
+            deployment_mode: DeploymentMode::Systemd,
+            relay_binary_path: None,
+            addr,
+        }
+    }
+
+    #[test]
+    fn systemd_unit_custom_port_contains_addr_flag() {
+        let config = test_config("0.0.0.0:8443".parse().unwrap());
+        let unit = systemd_unit(&config);
+        assert!(
+            unit.contains("--addr 0.0.0.0:8443"),
+            "unit must contain --addr flag for non-default port"
+        );
+    }
+
+    #[test]
+    fn systemd_unit_default_port_omits_addr() {
+        let config = test_config("0.0.0.0:443".parse().unwrap());
+        let unit = systemd_unit(&config);
+        assert!(
+            !unit.contains("--addr"),
+            "default port should not emit --addr"
+        );
+    }
+
+    #[test]
+    fn systemd_unit_privileged_port_has_cap() {
+        let config = test_config("0.0.0.0:443".parse().unwrap());
+        let unit = systemd_unit(&config);
+        assert!(unit.contains("CAP_NET_BIND_SERVICE"));
+    }
+
+    #[test]
+    fn systemd_unit_unprivileged_port_no_cap() {
+        let config = test_config("0.0.0.0:8443".parse().unwrap());
+        let unit = systemd_unit(&config);
+        assert!(
+            !unit.contains("CAP_NET_BIND_SERVICE"),
+            "unprivileged port should not require CAP_NET_BIND_SERVICE"
+        );
+    }
+
+    #[test]
+    fn systemd_unit_contains_domain() {
+        let config = test_config("0.0.0.0:443".parse().unwrap());
+        let unit = systemd_unit(&config);
+        assert!(unit.contains("relay.example.com"));
+    }
+
+    #[test]
+    fn env_file_contains_expected_keys() {
+        let config = test_config("0.0.0.0:443".parse().unwrap());
+        let content = env_file(&config);
+        assert!(content.contains("BETCODE_JWT_SECRET="));
+        assert!(content.contains("BETCODE_DB_PATH="));
+    }
+
+    #[test]
+    fn docker_compose_uses_configured_port() {
+        let config = test_config("0.0.0.0:8443".parse().unwrap());
+        let compose = docker_compose(&config);
+        assert!(
+            compose.contains("\"8443:8443\""),
+            "compose must map configured port"
+        );
+    }
+
+    #[test]
+    fn docker_compose_default_port() {
+        let config = test_config("0.0.0.0:443".parse().unwrap());
+        let compose = docker_compose(&config);
+        assert!(compose.contains("\"443:443\""));
+    }
 }
