@@ -105,7 +105,7 @@ fn write_detail(w: &mut impl Write, wt: &betcode_proto::v1::WorktreeDetail) -> i
     writeln!(w, "  Name:     {}", wt.name)?;
     writeln!(w, "  Branch:   {}", wt.branch)?;
     writeln!(w, "  Path:     {}", wt.path)?;
-    writeln!(w, "  Repo:     {}", wt.repo_path)?;
+    writeln!(w, "  Repo ID:  {}", wt.repo_id)?;
     if !wt.setup_script.is_empty() {
         writeln!(w, "  Setup:    {}", wt.setup_script)?;
     }

@@ -6,6 +6,7 @@ use thiserror::Error;
 use tracing::{debug, info, warn};
 
 use crate::storage::{Database, DatabaseError, Worktree};
+use super::repo::{GitRepo, WorktreeMode};
 
 /// Errors from worktree operations.
 #[derive(Debug, Error)]
@@ -105,30 +106,24 @@ impl WorktreeManager {
     pub async fn create(
         &self,
         name: &str,
-        repo_path: &Path,
+        repo: &GitRepo,
         branch: &str,
         setup_script: Option<&str>,
     ) -> Result<Worktree, WorktreeError> {
-        debug!(name, repo_path = %repo_path.display(), branch, ?setup_script, "create: validating inputs");
+        debug!(name, repo_path = %repo.repo_path.display(), branch, ?setup_script, "create: validating inputs");
         validate_name(name)?;
         validate_branch(branch)?;
 
-        if !repo_path.exists() {
+        if !repo.repo_path.exists() {
             return Err(WorktreeError::NotFound(format!(
                 "Repository not found at {} on this machine",
-                repo_path.display()
+                repo.repo_path.display()
             )));
         }
 
-        // Compute worktree path under dedicated base directory:
-        // <worktree_base_dir>/<repo_name>/<worktree_id>/
-        let repo_name = repo_path
-            .file_name()
-            .and_then(|n| n.to_str())
-            .unwrap_or("unknown");
-
+        // Compute worktree path using the GitRepo's worktree mode
+        let worktree_dir = repo.worktree_base_dir(&self.worktree_base_dir);
         let id = uuid::Uuid::new_v4().to_string();
-        let worktree_dir = self.worktree_base_dir.join(repo_name);
         let worktree_path = worktree_dir.join(&id);
         debug!(worktree_path = %worktree_path.display(), "create: computed worktree path");
 
@@ -141,9 +136,33 @@ impl WorktreeManager {
         // Ensure parent directory exists
         tokio::fs::create_dir_all(&worktree_dir).await?;
 
+        // Auto-gitignore for local mode
+        if matches!(repo.worktree_mode, WorktreeMode::Local) && repo.auto_gitignore {
+            let gitignore_path = repo.repo_path.join(".gitignore");
+            let subfolder_name = repo.local_subfolder.to_string_lossy();
+            let needs_add = if gitignore_path.exists() {
+                let content = tokio::fs::read_to_string(&gitignore_path).await?;
+                !content.lines().any(|line| line.trim() == subfolder_name.as_ref())
+            } else {
+                true
+            };
+            if needs_add {
+                use tokio::io::AsyncWriteExt;
+                let mut file = tokio::fs::OpenOptions::new()
+                    .create(true)
+                    .append(true)
+                    .truncate(false)
+                    .open(&gitignore_path)
+                    .await?;
+                file.write_all(format!("\n{subfolder_name}\n").as_bytes())
+                    .await?;
+                info!(path = %gitignore_path.display(), subfolder = %subfolder_name, "Added worktree subfolder to .gitignore");
+            }
+        }
+
         // Run git worktree add
         debug!(
-            repo_path = %repo_path.display(),
+            repo_path = %repo.repo_path.display(),
             worktree_path = %worktree_path.display(),
             branch,
             "create: spawning git worktree add"
@@ -152,7 +171,7 @@ impl WorktreeManager {
         let output = tokio::process::Command::new("git")
             .args(["worktree", "add", "-b", branch])
             .arg(&worktree_path)
-            .current_dir(repo_path)
+            .current_dir(&repo.repo_path)
             .output()
             .await?;
         let elapsed = start.elapsed();
@@ -176,6 +195,9 @@ impl WorktreeManager {
             "create: git worktree add completed"
         );
 
+        // Use repo's default setup script if none provided explicitly
+        let effective_script = setup_script.or(repo.setup_script.as_deref());
+
         info!(
             name,
             path = %worktree_path.display(),
@@ -191,14 +213,14 @@ impl WorktreeManager {
                 name,
                 &worktree_path.to_string_lossy(),
                 branch,
-                &repo_path.to_string_lossy(),
-                setup_script,
+                &repo.id,
+                effective_script,
             )
             .await?;
         debug!(elapsed_ms = db_start.elapsed().as_millis(), "create: database insert completed");
 
         // Run setup script if provided; clean up on failure
-        if let Some(script) = setup_script {
+        if let Some(script) = effective_script {
             debug!(script, "create: running setup script");
             let script_start = std::time::Instant::now();
             if let Err(e) = self.run_setup_script(&worktree_path, script).await {
@@ -222,10 +244,20 @@ impl WorktreeManager {
 
         // Remove via git if the path exists
         if path.exists() {
+            // Look up the repo to get the actual repo path for git commands
+            let repo_path = self
+                .db
+                .get_git_repo(&wt.repo_id)
+                .await
+                .ok()
+                .map(|r| PathBuf::from(r.repo_path));
+
+            let current_dir = repo_path.as_deref().unwrap_or(path);
+
             let output = tokio::process::Command::new("git")
                 .args(["worktree", "remove", "--force"])
                 .arg(path)
-                .current_dir(&wt.repo_path)
+                .current_dir(current_dir)
                 .output()
                 .await?;
 
@@ -244,8 +276,8 @@ impl WorktreeManager {
     }
 
     /// List worktrees with on-disk status and session counts.
-    pub async fn list(&self, repo_path: Option<&str>) -> Result<Vec<WorktreeInfo>, WorktreeError> {
-        let worktrees = self.db.list_worktrees(repo_path).await?;
+    pub async fn list(&self, repo_id: Option<&str>) -> Result<Vec<WorktreeInfo>, WorktreeError> {
+        let worktrees = self.db.list_worktrees(repo_id).await?;
 
         let mut infos = Vec::with_capacity(worktrees.len());
         for wt in worktrees {
@@ -367,11 +399,14 @@ mod tests {
     async fn list_with_db_records() {
         let db = Database::open_in_memory().await.unwrap();
         let tmp = tempfile::tempdir().unwrap();
-        // Insert directly into DB to test list without git
-        db.create_worktree("wt-1", "feat-a", "/tmp/wt-1", "feat-a", "/repo", None)
+        db.create_git_repo("r1", "repo", "/repo", "global", ".worktree", None, None, true)
             .await
             .unwrap();
-        db.create_worktree("wt-2", "feat-b", "/tmp/wt-2", "feat-b", "/repo", None)
+        // Insert directly into DB to test list without git
+        db.create_worktree("wt-1", "feat-a", "/tmp/wt-1", "feat-a", "r1", None)
+            .await
+            .unwrap();
+        db.create_worktree("wt-2", "feat-b", "/tmp/wt-2", "feat-b", "r1", None)
             .await
             .unwrap();
 
@@ -390,7 +425,10 @@ mod tests {
     async fn list_with_session_counts() {
         let db = Database::open_in_memory().await.unwrap();
         let tmp = tempfile::tempdir().unwrap();
-        db.create_worktree("wt-1", "feat", "/tmp/wt-1", "feat", "/repo", None)
+        db.create_git_repo("r1", "repo", "/repo", "global", ".worktree", None, None, true)
+            .await
+            .unwrap();
+        db.create_worktree("wt-1", "feat", "/tmp/wt-1", "feat", "r1", None)
             .await
             .unwrap();
         db.create_session("s1", "claude-sonnet-4", "/tmp/wt-1")
@@ -412,7 +450,10 @@ mod tests {
     async fn remove_cleans_db() {
         let db = Database::open_in_memory().await.unwrap();
         let tmp = tempfile::tempdir().unwrap();
-        db.create_worktree("wt-1", "feat", "/tmp/nonexistent-wt", "feat", "/repo", None)
+        db.create_git_repo("r1", "repo", "/repo", "global", ".worktree", None, None, true)
+            .await
+            .unwrap();
+        db.create_worktree("wt-1", "feat", "/tmp/nonexistent-wt", "feat", "r1", None)
             .await
             .unwrap();
 
@@ -460,6 +501,20 @@ mod tests {
         assert!(validate_branch("..").is_err());
     }
 
+    fn make_test_repo(repo_path: PathBuf) -> GitRepo {
+        GitRepo {
+            id: "r1".into(),
+            name: "testrepo".into(),
+            repo_path,
+            worktree_mode: WorktreeMode::Global,
+            local_subfolder: PathBuf::from(".worktree"),
+            setup_script: None,
+            auto_gitignore: true,
+            created_at: 0,
+            last_active: 0,
+        }
+    }
+
     #[tokio::test]
     async fn create_uses_dedicated_dir() {
         let db = Database::open_in_memory().await.unwrap();
@@ -482,9 +537,16 @@ mod tests {
             .unwrap();
         assert!(status.status.success(), "git commit failed");
 
+        // Register the repo in DB (needed for FK)
+        db.create_git_repo(
+            "r1", "testrepo", &repo_dir.path().to_string_lossy(),
+            "global", ".worktree", None, None, true,
+        ).await.unwrap();
+
+        let repo = make_test_repo(repo_dir.path().to_path_buf());
         let mgr = WorktreeManager::new(db, wt_base.path().to_path_buf());
         let wt = mgr
-            .create("feat", repo_dir.path(), "feat", None)
+            .create("feat", &repo, "feat", None)
             .await
             .unwrap();
 
@@ -496,26 +558,16 @@ mod tests {
             wt_base.path().display()
         );
 
-        // Worktree path should contain the repo directory name
-        let repo_name = repo_dir
-            .path()
-            .file_name()
-            .unwrap()
-            .to_str()
-            .unwrap();
-        assert!(
-            wt.path.contains(repo_name),
-            "worktree path {} should contain repo name {}",
-            wt.path,
-            repo_name
-        );
+        // Should have repo_id set
+        assert_eq!(wt.repo_id, "r1");
     }
 
     #[tokio::test]
     async fn create_nonexistent_repo_returns_not_found() {
         let (mgr, _tmp) = test_manager().await;
+        let repo = make_test_repo(PathBuf::from("/nonexistent/repo/path"));
         let result = mgr
-            .create("feat", Path::new("/nonexistent/repo/path"), "feat", None)
+            .create("feat", &repo, "feat", None)
             .await;
         assert!(result.is_err());
         match result.unwrap_err() {
@@ -533,7 +585,8 @@ mod tests {
         // `/` exists but has no file_name() component — should use "unknown" fallback.
         // The git command will fail since `/` is not a git repo, but we can verify
         // the directory was created with the "unknown" fallback name.
-        let result = mgr.create("feat", Path::new("/"), "feat", None).await;
+        let repo = make_test_repo(PathBuf::from("/"));
+        let result = mgr.create("feat", &repo, "feat", None).await;
         // Git will fail, but the directory should have been created
         assert!(result.is_err());
         assert!(

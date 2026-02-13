@@ -236,19 +236,19 @@ impl Database {
         name: &str,
         path: &str,
         branch: &str,
-        repo_path: &str,
+        repo_id: &str,
         setup_script: Option<&str>,
     ) -> Result<Worktree, DatabaseError> {
         let now = unix_timestamp();
 
         sqlx::query(
-            "INSERT INTO worktrees (id, name, path, branch, repo_path, setup_script, created_at, last_active) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO worktrees (id, name, path, branch, repo_id, setup_script, created_at, last_active) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(id)
         .bind(name)
         .bind(path)
         .bind(branch)
-        .bind(repo_path)
+        .bind(repo_id)
         .bind(setup_script)
         .bind(now)
         .bind(now)
@@ -267,16 +267,16 @@ impl Database {
             .ok_or_else(|| DatabaseError::NotFound(format!("Worktree {id}")))
     }
 
-    /// List worktrees, optionally filtered by repository path.
+    /// List worktrees, optionally filtered by repo ID.
     pub async fn list_worktrees(
         &self,
-        repo_path: Option<&str>,
+        repo_id: Option<&str>,
     ) -> Result<Vec<Worktree>, DatabaseError> {
-        let worktrees = if let Some(rp) = repo_path {
+        let worktrees = if let Some(rid) = repo_id {
             sqlx::query_as::<_, Worktree>(
-                "SELECT * FROM worktrees WHERE repo_path = ? ORDER BY last_active DESC",
+                "SELECT * FROM worktrees WHERE repo_id = ? ORDER BY last_active DESC",
             )
-            .bind(rp)
+            .bind(rid)
             .fetch_all(self.pool())
             .await?
         } else {
@@ -557,6 +557,9 @@ mod tests {
     #[tokio::test]
     async fn create_and_get_worktree() {
         let db = Database::open_in_memory().await.unwrap();
+        db.create_git_repo("r1", "repo", "/repo", "global", ".worktree", None, None, true)
+            .await
+            .unwrap();
 
         let wt = db
             .create_worktree(
@@ -564,7 +567,7 @@ mod tests {
                 "feature-x",
                 "/repo/wt-1",
                 "feature-x",
-                "/repo",
+                "r1",
                 None,
             )
             .await
@@ -573,13 +576,16 @@ mod tests {
         assert_eq!(wt.id, "wt-1");
         assert_eq!(wt.name, "feature-x");
         assert_eq!(wt.branch, "feature-x");
-        assert_eq!(wt.repo_path, "/repo");
+        assert_eq!(wt.repo_id, "r1");
         assert!(wt.setup_script.is_none());
     }
 
     #[tokio::test]
     async fn worktree_with_setup_script() {
         let db = Database::open_in_memory().await.unwrap();
+        db.create_git_repo("r1", "repo", "/repo", "global", ".worktree", None, None, true)
+            .await
+            .unwrap();
 
         let wt = db
             .create_worktree(
@@ -587,7 +593,7 @@ mod tests {
                 "feature-x",
                 "/repo/wt-1",
                 "feature-x",
-                "/repo",
+                "r1",
                 Some("npm install"),
             )
             .await
@@ -599,25 +605,34 @@ mod tests {
     #[tokio::test]
     async fn list_worktrees_by_repo() {
         let db = Database::open_in_memory().await.unwrap();
-        db.create_worktree("wt-1", "a", "/repo-a/wt-1", "a", "/repo-a", None)
+        db.create_git_repo("ra", "repo-a", "/repo-a", "global", ".worktree", None, None, true)
             .await
             .unwrap();
-        db.create_worktree("wt-2", "b", "/repo-b/wt-2", "b", "/repo-b", None)
+        db.create_git_repo("rb", "repo-b", "/repo-b", "global", ".worktree", None, None, true)
             .await
             .unwrap();
-        db.create_worktree("wt-3", "c", "/repo-a/wt-3", "c", "/repo-a", None)
+        db.create_worktree("wt-1", "a", "/repo-a/wt-1", "a", "ra", None)
+            .await
+            .unwrap();
+        db.create_worktree("wt-2", "b", "/repo-b/wt-2", "b", "rb", None)
+            .await
+            .unwrap();
+        db.create_worktree("wt-3", "c", "/repo-a/wt-3", "c", "ra", None)
             .await
             .unwrap();
 
-        assert_eq!(db.list_worktrees(Some("/repo-a")).await.unwrap().len(), 2);
-        assert_eq!(db.list_worktrees(Some("/repo-b")).await.unwrap().len(), 1);
+        assert_eq!(db.list_worktrees(Some("ra")).await.unwrap().len(), 2);
+        assert_eq!(db.list_worktrees(Some("rb")).await.unwrap().len(), 1);
         assert_eq!(db.list_worktrees(None).await.unwrap().len(), 3);
     }
 
     #[tokio::test]
     async fn remove_worktree_clears_session_binding() {
         let db = Database::open_in_memory().await.unwrap();
-        db.create_worktree("wt-1", "feat", "/repo/wt-1", "feat", "/repo", None)
+        db.create_git_repo("r1", "repo", "/repo", "global", ".worktree", None, None, true)
+            .await
+            .unwrap();
+        db.create_worktree("wt-1", "feat", "/repo/wt-1", "feat", "r1", None)
             .await
             .unwrap();
         db.create_session("s1", "claude-sonnet-4", "/repo/wt-1")
@@ -649,7 +664,10 @@ mod tests {
     #[tokio::test]
     async fn bind_session_to_worktree_and_query() {
         let db = Database::open_in_memory().await.unwrap();
-        db.create_worktree("wt-1", "feat", "/repo/wt-1", "feat", "/repo", None)
+        db.create_git_repo("r1", "repo", "/repo", "global", ".worktree", None, None, true)
+            .await
+            .unwrap();
+        db.create_worktree("wt-1", "feat", "/repo/wt-1", "feat", "r1", None)
             .await
             .unwrap();
         db.create_session("s1", "claude-sonnet-4", "/repo/wt-1")

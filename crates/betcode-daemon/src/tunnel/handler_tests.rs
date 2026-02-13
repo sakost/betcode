@@ -135,10 +135,13 @@ impl HandlerTestBuilder {
         if self.with_worktree_service {
             use crate::worktree::WorktreeManager;
 
-            let wt_svc = WorktreeServiceImpl::new(WorktreeManager::new(
+            let wt_svc = WorktreeServiceImpl::new(
+                WorktreeManager::new(
+                    db.clone(),
+                    std::env::temp_dir().join("betcode-test-worktrees"),
+                ),
                 db,
-                std::env::temp_dir().join("betcode-test-worktrees"),
-            ));
+            );
             handler.set_worktree_service(Arc::new(wt_svc));
         }
 
@@ -1943,7 +1946,7 @@ async fn list_worktrees_through_tunnel() {
         .build()
         .await;
     let req = ListWorktreesRequest {
-        repo_path: String::new(),
+        repo_id: String::new(),
     };
     let r = h
         .handle_frame(req_frame("wt1", METHOD_LIST_WORKTREES, encode(&req)))
@@ -1988,7 +1991,7 @@ async fn remove_worktree_nonexistent_through_tunnel() {
 async fn worktree_service_not_set_returns_error() {
     let HandlerTestOutput { handler: h, .. } = HandlerTestBuilder::new().build().await; // No worktree service set
     let req = ListWorktreesRequest {
-        repo_path: String::new(),
+        repo_id: String::new(),
     };
     let r = h
         .handle_frame(req_frame("wt-err", METHOD_LIST_WORKTREES, encode(&req)))

@@ -53,7 +53,7 @@ async fn list_worktrees_routes_to_machine() {
     );
     let req = make_request(
         ListWorktreesRequest {
-            repo_path: "/repo".into(),
+            repo_id: "/repo".into(),
         },
         "m1",
     );
@@ -78,7 +78,7 @@ async fn create_worktree_routes_to_machine() {
     let req = make_request(
         CreateWorktreeRequest {
             name: "feature".into(),
-            repo_path: "/repo".into(),
+            repo_id: "/repo".into(),
             branch: "feature-branch".into(),
             setup_script: String::new(),
         },
@@ -121,7 +121,7 @@ async fn machine_offline_returns_unavailable() {
     let svc = setup_offline().await;
     let req = make_request(
         ListWorktreesRequest {
-            repo_path: String::new(),
+            repo_id: String::new(),
         },
         "m-off",
     );
@@ -133,7 +133,7 @@ async fn machine_offline_returns_unavailable() {
 async fn missing_machine_id_returns_invalid_argument() {
     let (svc, _router, _rx) = setup_with_machine("m1").await;
     let mut req = Request::new(ListWorktreesRequest {
-        repo_path: String::new(),
+        repo_id: String::new(),
     });
     req.extensions_mut().insert(test_claims());
     let err = svc.list_worktrees(req).await.unwrap_err();
@@ -144,7 +144,7 @@ async fn missing_machine_id_returns_invalid_argument() {
 async fn missing_claims_returns_internal() {
     let (svc, _router, _rx) = setup_with_machine("m1").await;
     let mut req = Request::new(ListWorktreesRequest {
-        repo_path: String::new(),
+        repo_id: String::new(),
     });
     req.metadata_mut()
         .insert("x-machine-id", "m1".parse().unwrap());
@@ -160,7 +160,7 @@ async fn daemon_error_propagated_to_client() {
     spawn_error_responder(&router, "m1", rx, "daemon error");
     let req = make_request(
         ListWorktreesRequest {
-            repo_path: String::new(),
+            repo_id: String::new(),
         },
         "m1",
     );

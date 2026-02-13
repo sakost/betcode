@@ -12,23 +12,26 @@ use tonic::Request;
 
 use betcode_proto::v1::command_service_server::CommandService as CommandServiceTrait;
 use betcode_proto::v1::git_lab_service_server::GitLabService as GitLabServiceTrait;
+use betcode_proto::v1::git_repo_service_server::GitRepoService as GitRepoServiceTrait;
 use betcode_proto::v1::worktree_service_server::WorktreeService as WorktreeServiceTrait;
 use betcode_proto::v1::{
     AddPluginRequest, AgentRequest, CancelTurnRequest, CancelTurnResponse, CompactSessionRequest,
     CompactSessionResponse, CreateWorktreeRequest, DisablePluginRequest, EnablePluginRequest,
     EncryptedPayload, ExecuteServiceCommandRequest, FrameType, GetCommandRegistryRequest,
     GetIssueRequest, GetMergeRequestRequest, GetPipelineRequest, GetPluginStatusRequest,
-    GetWorktreeRequest, InputLockRequest, InputLockResponse, KeyExchangeRequest,
+    GetRepoRequest, GetWorktreeRequest, InputLockRequest, InputLockResponse, KeyExchangeRequest,
     KeyExchangeResponse, ListAgentsRequest, ListIssuesRequest, ListMergeRequestsRequest,
-    ListPathRequest, ListPipelinesRequest, ListPluginsRequest, ListSessionsRequest,
-    ListSessionsResponse, ListWorktreesRequest, RemovePluginRequest, RemoveWorktreeRequest,
-    ResumeSessionRequest, SessionSummary, StreamPayload, TunnelError, TunnelErrorCode, TunnelFrame,
+    ListPathRequest, ListPipelinesRequest, ListPluginsRequest, ListReposRequest,
+    ListSessionsRequest, ListSessionsResponse, ListWorktreesRequest, RegisterRepoRequest,
+    RemovePluginRequest, RemoveWorktreeRequest, ResumeSessionRequest, ScanReposRequest,
+    SessionSummary, StreamPayload, TunnelError, TunnelErrorCode, TunnelFrame,
+    UnregisterRepoRequest, UpdateRepoRequest,
 };
 
 use betcode_crypto::{CryptoSession, IdentityKeyPair, KeyExchangeState};
 
 use crate::relay::SessionRelay;
-use crate::server::{CommandServiceImpl, GitLabServiceImpl, WorktreeServiceImpl};
+use crate::server::{CommandServiceImpl, GitLabServiceImpl, GitRepoServiceImpl, WorktreeServiceImpl};
 use crate::session::SessionMultiplexer;
 use crate::storage::Database;
 
@@ -38,10 +41,12 @@ pub use betcode_proto::methods::{
     METHOD_ADD_PLUGIN, METHOD_CANCEL_TURN, METHOD_COMPACT_SESSION, METHOD_CONVERSE,
     METHOD_CREATE_WORKTREE, METHOD_DISABLE_PLUGIN, METHOD_ENABLE_PLUGIN, METHOD_EXCHANGE_KEYS,
     METHOD_EXECUTE_SERVICE_COMMAND, METHOD_GET_COMMAND_REGISTRY, METHOD_GET_ISSUE,
-    METHOD_GET_MERGE_REQUEST, METHOD_GET_PIPELINE, METHOD_GET_PLUGIN_STATUS, METHOD_GET_WORKTREE,
-    METHOD_LIST_AGENTS, METHOD_LIST_ISSUES, METHOD_LIST_MERGE_REQUESTS, METHOD_LIST_PATH,
-    METHOD_LIST_PIPELINES, METHOD_LIST_PLUGINS, METHOD_LIST_SESSIONS, METHOD_LIST_WORKTREES,
-    METHOD_REMOVE_PLUGIN, METHOD_REMOVE_WORKTREE, METHOD_REQUEST_INPUT_LOCK, METHOD_RESUME_SESSION,
+    METHOD_GET_MERGE_REQUEST, METHOD_GET_PIPELINE, METHOD_GET_PLUGIN_STATUS, METHOD_GET_REPO,
+    METHOD_GET_WORKTREE, METHOD_LIST_AGENTS, METHOD_LIST_ISSUES, METHOD_LIST_MERGE_REQUESTS,
+    METHOD_LIST_PATH, METHOD_LIST_PIPELINES, METHOD_LIST_PLUGINS, METHOD_LIST_REPOS,
+    METHOD_LIST_SESSIONS, METHOD_LIST_WORKTREES, METHOD_REGISTER_REPO, METHOD_REMOVE_PLUGIN,
+    METHOD_REMOVE_WORKTREE, METHOD_REQUEST_INPUT_LOCK, METHOD_RESUME_SESSION, METHOD_SCAN_REPOS,
+    METHOD_UNREGISTER_REPO, METHOD_UPDATE_REPO,
 };
 
 /// Default maximum number of sessions returned by `ListSessions`.
@@ -120,6 +125,8 @@ pub struct TunnelRequestHandler {
     command_service: Option<Arc<CommandServiceImpl>>,
     /// `GitLabService` implementation for handling GitLab-related RPCs through the tunnel.
     gitlab_service: Option<Arc<GitLabServiceImpl>>,
+    /// `GitRepoService` implementation for handling repo RPCs through the tunnel.
+    repo_service: Option<Arc<GitRepoServiceImpl>>,
     /// `WorktreeService` implementation for handling worktree-related RPCs through the tunnel.
     worktree_service: Option<Arc<WorktreeServiceImpl>>,
 }
@@ -146,6 +153,7 @@ impl TunnelRequestHandler {
             identity,
             command_service: None,
             gitlab_service: None,
+            repo_service: None,
             worktree_service: None,
         }
     }
@@ -158,6 +166,11 @@ impl TunnelRequestHandler {
     /// Set the `GitLabService` implementation for handling GitLab RPCs through the tunnel.
     pub fn set_gitlab_service(&mut self, service: Arc<GitLabServiceImpl>) {
         self.gitlab_service = Some(service);
+    }
+
+    /// Set the `GitRepoService` implementation for handling repo RPCs through the tunnel.
+    pub fn set_repo_service(&mut self, service: Arc<GitRepoServiceImpl>) {
+        self.repo_service = Some(service);
     }
 
     /// Set the `WorktreeService` implementation for handling worktree RPCs through the tunnel.
@@ -366,6 +379,21 @@ impl TunnelRequestHandler {
             | METHOD_LIST_ISSUES
             | METHOD_GET_ISSUE => {
                 self.dispatch_gitlab_rpc(
+                    &request_id,
+                    payload.method.as_str(),
+                    &data,
+                    relay_forwarded,
+                )
+                .await
+            }
+            // GitRepoService RPCs
+            METHOD_REGISTER_REPO
+            | METHOD_UNREGISTER_REPO
+            | METHOD_LIST_REPOS
+            | METHOD_GET_REPO
+            | METHOD_UPDATE_REPO
+            | METHOD_SCAN_REPOS => {
+                self.dispatch_repo_rpc(
                     &request_id,
                     payload.method.as_str(),
                     &data,
@@ -1625,6 +1653,83 @@ impl TunnelRequestHandler {
                 request_id,
                 TunnelErrorCode::NotFound,
                 &format!("Unknown GitLab method: {method}"),
+            )],
+        }
+    }
+
+    async fn dispatch_repo_rpc(
+        &self,
+        request_id: &str,
+        method: &str,
+        data: &[u8],
+        relay_forwarded: bool,
+    ) -> Vec<TunnelFrame> {
+        let Some(svc) = &self.repo_service else {
+            return vec![Self::error_response(
+                request_id,
+                TunnelErrorCode::Internal,
+                "GitRepoService not available in tunnel handler",
+            )];
+        };
+        match method {
+            METHOD_REGISTER_REPO => dispatch_rpc!(
+                self,
+                svc,
+                request_id,
+                data,
+                relay_forwarded,
+                RegisterRepoRequest,
+                register_repo
+            ),
+            METHOD_UNREGISTER_REPO => dispatch_rpc!(
+                self,
+                svc,
+                request_id,
+                data,
+                relay_forwarded,
+                UnregisterRepoRequest,
+                unregister_repo
+            ),
+            METHOD_LIST_REPOS => dispatch_rpc!(
+                self,
+                svc,
+                request_id,
+                data,
+                relay_forwarded,
+                ListReposRequest,
+                list_repos
+            ),
+            METHOD_GET_REPO => dispatch_rpc!(
+                self,
+                svc,
+                request_id,
+                data,
+                relay_forwarded,
+                GetRepoRequest,
+                get_repo
+            ),
+            METHOD_UPDATE_REPO => dispatch_rpc!(
+                self,
+                svc,
+                request_id,
+                data,
+                relay_forwarded,
+                UpdateRepoRequest,
+                update_repo
+            ),
+            METHOD_SCAN_REPOS => dispatch_rpc!(
+                self,
+                svc,
+                request_id,
+                data,
+                relay_forwarded,
+                ScanReposRequest,
+                scan_repos
+            ),
+            _ => vec![Self::error_response(
+                request_id,
+                TunnelErrorCode::NotFound,
+                &format!("Unknown GitRepo method: {method}"),
             )],
         }
     }

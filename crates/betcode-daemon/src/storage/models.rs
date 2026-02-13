@@ -39,8 +39,23 @@ pub struct Worktree {
     pub name: String,
     pub path: String,
     pub branch: String,
-    pub repo_path: String,
+    pub repo_id: String,
     pub setup_script: Option<String>,
+    pub created_at: i64,
+    pub last_active: i64,
+}
+
+/// Git repository record from the database.
+#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
+pub struct GitRepoRow {
+    pub id: String,
+    pub name: String,
+    pub repo_path: String,
+    pub worktree_mode: String,
+    pub local_subfolder: String,
+    pub custom_path: Option<String>,
+    pub setup_script: Option<String>,
+    pub auto_gitignore: i64,
     pub created_at: i64,
     pub last_active: i64,
 }

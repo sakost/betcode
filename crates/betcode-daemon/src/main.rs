@@ -159,6 +159,7 @@ async fn main() -> anyhow::Result<()> {
             server.db().clone(),
         )?;
         tunnel_client.set_command_service(Arc::new(server.command_service_impl()));
+        tunnel_client.set_repo_service(Arc::new(server.repo_service_impl()));
         tunnel_client.set_worktree_service(Arc::new(server.worktree_service_impl()));
         if let Some(gitlab_svc) = GrpcServer::gitlab_service_impl_from_env() {
             info!("GitLab service configured for tunnel");

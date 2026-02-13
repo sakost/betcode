@@ -618,7 +618,7 @@ impl DaemonConnection {
     pub async fn create_worktree(
         &mut self,
         name: &str,
-        repo_path: &str,
+        repo_id: &str,
         branch: &str,
         setup_script: Option<&str>,
     ) -> Result<WorktreeDetail, ConnectionError> {
@@ -631,7 +631,7 @@ impl DaemonConnection {
 
         let mut request = tonic::Request::new(CreateWorktreeRequest {
             name: name.to_string(),
-            repo_path: repo_path.to_string(),
+            repo_id: repo_id.to_string(),
             branch: branch.to_string(),
             setup_script: setup_script.unwrap_or_default().to_string(),
         });
@@ -669,7 +669,7 @@ impl DaemonConnection {
     /// List worktrees.
     pub async fn list_worktrees(
         &mut self,
-        repo_path: Option<&str>,
+        repo_id: Option<&str>,
     ) -> Result<ListWorktreesResponse, ConnectionError> {
         let auth_token = self.config.auth_token.clone();
         let machine_id = self.config.machine_id.clone();
@@ -679,7 +679,7 @@ impl DaemonConnection {
             .ok_or(ConnectionError::NotConnected)?;
 
         let mut request = tonic::Request::new(ListWorktreesRequest {
-            repo_path: repo_path.unwrap_or_default().to_string(),
+            repo_id: repo_id.unwrap_or_default().to_string(),
         });
         apply_relay_meta(&mut request, &auth_token, &machine_id);
         let response = client

@@ -1,7 +1,5 @@
 //! `WorktreeService` gRPC implementation.
 
-use std::path::Path;
-
 use tonic::{Request, Response, Status};
 use tracing::{debug, info, instrument};
 
@@ -11,18 +9,20 @@ use betcode_proto::v1::{
     WorktreeDetail,
 };
 
-use crate::worktree::{WorktreeInfo, WorktreeManager};
+use crate::storage::Database;
+use crate::worktree::{GitRepo, WorktreeInfo, WorktreeManager};
 
 /// `WorktreeService` implementation backed by `WorktreeManager`.
 #[derive(Clone)]
 pub struct WorktreeServiceImpl {
     manager: WorktreeManager,
+    db: Database,
 }
 
 impl WorktreeServiceImpl {
     /// Create a new `WorktreeService`.
-    pub const fn new(manager: WorktreeManager) -> Self {
-        Self { manager }
+    pub fn new(manager: WorktreeManager, db: Database) -> Self {
+        Self { manager, db }
     }
 }
 
@@ -33,7 +33,7 @@ fn to_detail(info: WorktreeInfo) -> WorktreeDetail {
         name: info.worktree.name,
         path: info.worktree.path,
         branch: info.worktree.branch,
-        repo_path: info.worktree.repo_path,
+        repo_id: info.worktree.repo_id,
         setup_script: info.worktree.setup_script.unwrap_or_default(),
         exists_on_disk: info.exists_on_disk,
         #[allow(clippy::cast_possible_truncation)]
@@ -59,13 +59,22 @@ impl WorktreeService for WorktreeServiceImpl {
         let req = request.into_inner();
         debug!(
             name = %req.name,
-            repo_path = %req.repo_path,
+            repo_id = %req.repo_id,
             branch = %req.branch,
             setup_script = %req.setup_script,
             "CreateWorktree RPC received"
         );
 
         let start = std::time::Instant::now();
+
+        // Look up the registered repo
+        let repo_row = self
+            .db
+            .get_git_repo(&req.repo_id)
+            .await
+            .map_err(|e| Status::not_found(format!("Repository not found: {e}")))?;
+        let repo = GitRepo::from(repo_row);
+
         let setup_script = if req.setup_script.is_empty() {
             None
         } else {
@@ -74,12 +83,7 @@ impl WorktreeService for WorktreeServiceImpl {
 
         let wt = self
             .manager
-            .create(
-                &req.name,
-                Path::new(&req.repo_path),
-                &req.branch,
-                setup_script,
-            )
+            .create(&req.name, &repo, &req.branch, setup_script)
             .await
             .map_err(|e| {
                 debug!(elapsed_ms = start.elapsed().as_millis(), error = %e, "CreateWorktree manager.create failed");
@@ -142,15 +146,15 @@ impl WorktreeService for WorktreeServiceImpl {
     ) -> Result<Response<ListWorktreesResponse>, Status> {
         let req = request.into_inner();
 
-        let repo_path = if req.repo_path.is_empty() {
+        let repo_id = if req.repo_id.is_empty() {
             None
         } else {
-            Some(req.repo_path.as_str())
+            Some(req.repo_id.as_str())
         };
 
         let infos = self
             .manager
-            .list(repo_path)
+            .list(repo_id)
             .await
             .map_err(|e| Status::internal(e.to_string()))?;
 
@@ -186,8 +190,8 @@ mod tests {
     async fn test_service() -> (WorktreeServiceImpl, tempfile::TempDir) {
         let db = Database::open_in_memory().await.unwrap();
         let tmp = tempfile::tempdir().unwrap();
-        let manager = WorktreeManager::new(db, tmp.path().to_path_buf());
-        (WorktreeServiceImpl::new(manager), tmp)
+        let manager = WorktreeManager::new(db.clone(), tmp.path().to_path_buf());
+        (WorktreeServiceImpl::new(manager, db), tmp)
     }
 
     #[tokio::test]
@@ -195,7 +199,7 @@ mod tests {
         let (svc, _tmp) = test_service().await;
         let resp = svc
             .list_worktrees(Request::new(ListWorktreesRequest {
-                repo_path: String::new(),
+                repo_id: String::new(),
             }))
             .await
             .unwrap();
@@ -229,10 +233,15 @@ mod tests {
     #[tokio::test]
     async fn create_with_invalid_name_returns_error() {
         let (svc, _tmp) = test_service().await;
+        // Register a repo first
+        svc.db
+            .create_git_repo("r1", "repo", "/tmp/repo", "global", ".worktree", None, None, true)
+            .await
+            .unwrap();
         let result = svc
             .create_worktree(Request::new(CreateWorktreeRequest {
                 name: "../escape".to_string(),
-                repo_path: "/tmp/repo".to_string(),
+                repo_id: "r1".to_string(),
                 branch: "main".to_string(),
                 setup_script: String::new(),
             }))

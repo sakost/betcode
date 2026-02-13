@@ -100,3 +100,25 @@ pub const METHOD_LIST_WORKTREES: &str = "WorktreeService/ListWorktrees";
 
 /// `WorktreeService/GetWorktree`
 pub const METHOD_GET_WORKTREE: &str = "WorktreeService/GetWorktree";
+
+// ---------------------------------------------------------------------------
+// GitRepoService
+// ---------------------------------------------------------------------------
+
+/// `GitRepoService/RegisterRepo`
+pub const METHOD_REGISTER_REPO: &str = "GitRepoService/RegisterRepo";
+
+/// `GitRepoService/UnregisterRepo`
+pub const METHOD_UNREGISTER_REPO: &str = "GitRepoService/UnregisterRepo";
+
+/// `GitRepoService/ListRepos`
+pub const METHOD_LIST_REPOS: &str = "GitRepoService/ListRepos";
+
+/// `GitRepoService/GetRepo`
+pub const METHOD_GET_REPO: &str = "GitRepoService/GetRepo";
+
+/// `GitRepoService/UpdateRepo`
+pub const METHOD_UPDATE_REPO: &str = "GitRepoService/UpdateRepo";
+
+/// `GitRepoService/ScanRepos`
+pub const METHOD_SCAN_REPOS: &str = "GitRepoService/ScanRepos";

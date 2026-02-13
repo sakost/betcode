@@ -23,7 +23,7 @@ use super::error::TunnelClientError;
 use super::handler::TunnelRequestHandler;
 
 use crate::relay::SessionRelay;
-use crate::server::{CommandServiceImpl, GitLabServiceImpl, WorktreeServiceImpl};
+use crate::server::{CommandServiceImpl, GitLabServiceImpl, GitRepoServiceImpl, WorktreeServiceImpl};
 use crate::session::SessionMultiplexer;
 use crate::storage::Database;
 
@@ -39,6 +39,8 @@ pub struct TunnelClient {
     command_service: Option<Arc<CommandServiceImpl>>,
     /// Optional `GitLabServiceImpl` for handling GitLab RPCs through the tunnel.
     gitlab_service: Option<Arc<GitLabServiceImpl>>,
+    /// Optional `GitRepoServiceImpl` for handling repo RPCs through the tunnel.
+    repo_service: Option<Arc<GitRepoServiceImpl>>,
     /// Optional `WorktreeServiceImpl` for handling worktree RPCs through the tunnel.
     worktree_service: Option<Arc<WorktreeServiceImpl>>,
 }
@@ -63,6 +65,7 @@ impl TunnelClient {
             identity,
             command_service: None,
             gitlab_service: None,
+            repo_service: None,
             worktree_service: None,
         })
     }
@@ -75,6 +78,11 @@ impl TunnelClient {
     /// Set the `GitLabService` implementation for handling GitLab RPCs through the tunnel.
     pub fn set_gitlab_service(&mut self, service: Arc<GitLabServiceImpl>) {
         self.gitlab_service = Some(service);
+    }
+
+    /// Set the `GitRepoService` implementation for handling repo RPCs through the tunnel.
+    pub fn set_repo_service(&mut self, service: Arc<GitRepoServiceImpl>) {
+        self.repo_service = Some(service);
     }
 
     /// Set the `WorktreeService` implementation for handling worktree RPCs through the tunnel.
@@ -199,6 +207,9 @@ impl TunnelClient {
         }
         if let Some(gitlab_svc) = &self.gitlab_service {
             handler.set_gitlab_service(Arc::clone(gitlab_svc));
+        }
+        if let Some(repo_svc) = &self.repo_service {
+            handler.set_repo_service(Arc::clone(repo_svc));
         }
         if let Some(worktree_svc) = &self.worktree_service {
             handler.set_worktree_service(Arc::clone(worktree_svc));

@@ -5,6 +5,7 @@
 mod db;
 mod models;
 mod queries;
+mod repo_queries;
 
 pub use db::{Database, DatabaseError};
 pub use models::*;
