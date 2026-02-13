@@ -340,14 +340,22 @@ impl TunnelClient {
                 frame_result = inbound.next() => {
                     match frame_result {
                         Some(Ok(frame)) => {
-                            let responses = handler.handle_frame(frame).await;
-                            for response in responses {
-                                if outbound_tx.send(response).await.is_err() {
-                                    return Err(TunnelClientError::Connection(
-                                        "Outbound channel closed".into(),
-                                    ));
+                            // Spawn frame processing as a task so the tunnel
+                            // loop stays responsive for heartbeats and other
+                            // concurrent frames. Without this, a slow RPC
+                            // (e.g. git worktree add on a large repo) blocks
+                            // the entire tunnel and causes relay timeouts.
+                            let h = Arc::clone(&handler);
+                            let tx = outbound_tx.clone();
+                            tokio::spawn(async move {
+                                let responses = h.handle_frame(frame).await;
+                                for response in responses {
+                                    if tx.send(response).await.is_err() {
+                                        warn!("Outbound channel closed while sending response");
+                                        break;
+                                    }
                                 }
-                            }
+                            });
                         }
                         Some(Err(e)) => {
                             return Err(TunnelClientError::Stream(e.to_string()));

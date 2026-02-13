@@ -173,12 +173,21 @@ impl WorktreeManager {
             "create: spawning git worktree add"
         );
         let start = std::time::Instant::now();
-        let output = tokio::process::Command::new("git")
-            .args(["worktree", "add", "-b", branch])
-            .arg(&worktree_path)
-            .current_dir(&repo.repo_path)
-            .output()
-            .await?;
+        let output = tokio::time::timeout(
+            std::time::Duration::from_secs(120),
+            tokio::process::Command::new("git")
+                .args(["worktree", "add", "-b", branch])
+                .arg(&worktree_path)
+                .current_dir(&repo.repo_path)
+                .output(),
+        )
+        .await
+        .map_err(|_| {
+            WorktreeError::Git(format!(
+                "git worktree add timed out after 120s for repo {}",
+                repo.repo_path.display()
+            ))
+        })??;
         let elapsed = start.elapsed();
 
         if !output.status.success() {
