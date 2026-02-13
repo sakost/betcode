@@ -3,26 +3,53 @@
 use std::path::Path;
 
 use tonic::{Request, Response, Status};
-use tracing::{info, instrument};
+use tracing::{info, instrument, warn};
 
 use betcode_proto::v1::{
     git_repo_service_server::GitRepoService, GetRepoRequest, GitRepoDetail, ListReposRequest,
     ListReposResponse, RegisterRepoRequest, ScanReposRequest, UnregisterRepoRequest,
-    UnregisterRepoResponse, UpdateRepoRequest,
+    UnregisterRepoResponse, UpdateRepoRequest, WorktreeMode,
 };
 
-use crate::storage::{Database, GitRepoRow};
+use crate::storage::{Database, DatabaseError, GitRepoRow};
+use crate::worktree::WorktreeManager;
 
 /// `GitRepoService` implementation backed by `Database`.
 #[derive(Clone)]
 pub struct GitRepoServiceImpl {
     db: Database,
+    worktree_manager: WorktreeManager,
 }
 
 impl GitRepoServiceImpl {
     /// Create a new `GitRepoService`.
-    pub fn new(db: Database) -> Self {
-        Self { db }
+    pub const fn new(db: Database, worktree_manager: WorktreeManager) -> Self {
+        Self { db, worktree_manager }
+    }
+}
+
+/// Convert a DB `worktree_mode` string to the proto `WorktreeMode` i32 value.
+fn worktree_mode_to_proto(s: &str) -> i32 {
+    match s {
+        "global" => WorktreeMode::Global as i32,
+        "local" => WorktreeMode::Local as i32,
+        "custom" => WorktreeMode::Custom as i32,
+        other => {
+            warn!(worktree_mode = other, "Unknown worktree_mode in database, defaulting to Unspecified");
+            WorktreeMode::Unspecified as i32
+        }
+    }
+}
+
+/// Convert a proto `WorktreeMode` i32 value to the DB string representation.
+fn worktree_mode_to_str(mode: i32) -> Result<&'static str, Status> {
+    match WorktreeMode::try_from(mode) {
+        Ok(WorktreeMode::Global | WorktreeMode::Unspecified) => Ok("global"),
+        Ok(WorktreeMode::Local) => Ok("local"),
+        Ok(WorktreeMode::Custom) => Ok("custom"),
+        Err(_) => Err(Status::invalid_argument(format!(
+            "Invalid worktree_mode value: {mode}"
+        ))),
     }
 }
 
@@ -32,7 +59,7 @@ fn to_detail(row: GitRepoRow, worktree_count: u32) -> GitRepoDetail {
         id: row.id,
         name: row.name,
         repo_path: row.repo_path,
-        worktree_mode: row.worktree_mode,
+        worktree_mode: worktree_mode_to_proto(&row.worktree_mode),
         local_subfolder: row.local_subfolder,
         custom_path: row.custom_path.unwrap_or_default(),
         setup_script: row.setup_script.unwrap_or_default(),
@@ -63,6 +90,19 @@ impl GitRepoService for GitRepoServiceImpl {
             return Err(Status::invalid_argument("repo_path is required"));
         }
 
+        // Validate the path is a git repository
+        let path = Path::new(repo_path);
+        if !path.is_dir() {
+            return Err(Status::invalid_argument(format!(
+                "Directory not found: {repo_path}"
+            )));
+        }
+        if !path.join(".git").exists() {
+            return Err(Status::invalid_argument(format!(
+                "Not a git repository (no .git): {repo_path}"
+            )));
+        }
+
         // Default name to last path component
         let name = if req.name.is_empty() {
             Path::new(repo_path)
@@ -74,11 +114,7 @@ impl GitRepoService for GitRepoServiceImpl {
             req.name
         };
 
-        let worktree_mode = if req.worktree_mode.is_empty() {
-            "global"
-        } else {
-            req.worktree_mode.as_str()
-        };
+        let worktree_mode = worktree_mode_to_str(req.worktree_mode)?;
 
         let local_subfolder = if req.local_subfolder.is_empty() {
             ".worktree"
@@ -137,6 +173,15 @@ impl GitRepoService for GitRepoServiceImpl {
         #[allow(clippy::cast_possible_truncation)]
         let worktrees_removed = worktrees.len() as u32;
 
+        if req.remove_worktrees {
+            // Remove worktrees from disk + DB via WorktreeManager
+            for wt in &worktrees {
+                if let Err(e) = self.worktree_manager.remove(&wt.id).await {
+                    tracing::warn!(id = %wt.id, error = %e, "Failed to remove worktree during repo unregistration");
+                }
+            }
+        }
+
         let removed = self
             .db
             .remove_git_repo(&req.id)
@@ -153,30 +198,41 @@ impl GitRepoService for GitRepoServiceImpl {
         }))
     }
 
-    #[instrument(skip(self, _request), fields(rpc = "ListRepos"))]
+    #[instrument(skip(self, request), fields(rpc = "ListRepos"))]
     async fn list_repos(
         &self,
-        _request: Request<ListReposRequest>,
+        request: Request<ListReposRequest>,
     ) -> Result<Response<ListReposResponse>, Status> {
-        let rows = self
+        let req = request.into_inner();
+
+        let total_count = self
             .db
-            .list_git_repos()
+            .count_git_repos()
             .await
             .map_err(|e| Status::internal(e.to_string()))?;
 
-        let mut repos = Vec::with_capacity(rows.len());
-        for row in rows {
-            let wt_count = self
-                .db
-                .list_worktrees(Some(&row.id))
+        let rows = if req.limit > 0 || req.offset > 0 {
+            self.db
+                .list_git_repos_paginated(req.limit, req.offset)
                 .await
-                .map(|v| v.len())
-                .unwrap_or(0);
-            #[allow(clippy::cast_possible_truncation)]
-            repos.push(to_detail(row, wt_count as u32));
-        }
+                .map_err(|e| Status::internal(e.to_string()))?
+        } else {
+            self.db
+                .list_git_repos()
+                .await
+                .map_err(|e| Status::internal(e.to_string()))?
+        };
 
-        Ok(Response::new(ListReposResponse { repos }))
+        let wt_counts = self.db.count_worktrees_by_repo().await.unwrap_or_default();
+        let repos = rows
+            .into_iter()
+            .map(|row| {
+                let wt_count = wt_counts.get(&row.id).copied().unwrap_or(0);
+                to_detail(row, wt_count)
+            })
+            .collect();
+
+        Ok(Response::new(ListReposResponse { repos, total_count }))
     }
 
     #[instrument(skip(self, request), fields(rpc = "GetRepo"))]
@@ -190,17 +246,14 @@ impl GitRepoService for GitRepoServiceImpl {
             .db
             .get_git_repo(&req.id)
             .await
-            .map_err(|e| Status::not_found(e.to_string()))?;
+            .map_err(|e| match e {
+                DatabaseError::NotFound(_) => Status::not_found(e.to_string()),
+                _ => Status::internal(e.to_string()),
+            })?;
 
-        let wt_count = self
-            .db
-            .list_worktrees(Some(&row.id))
-            .await
-            .map(|v| v.len())
-            .unwrap_or(0);
+        let wt_count = self.db.count_worktrees_for_repo(&row.id).await.unwrap_or(0);
 
-        #[allow(clippy::cast_possible_truncation)]
-        Ok(Response::new(to_detail(row, wt_count as u32)))
+        Ok(Response::new(to_detail(row, wt_count)))
     }
 
     #[instrument(skip(self, request), fields(rpc = "UpdateRepo"))]
@@ -210,43 +263,46 @@ impl GitRepoService for GitRepoServiceImpl {
     ) -> Result<Response<GitRepoDetail>, Status> {
         let req = request.into_inner();
 
-        let custom_path = if req.custom_path.is_empty() {
-            None
-        } else {
-            Some(req.custom_path.as_str())
-        };
+        // Convert proto worktree_mode i32 → &str (only when provided).
+        let wt_mode_str: Option<String> = req
+            .worktree_mode
+            .map(|m| worktree_mode_to_str(m).map(String::from))
+            .transpose()?;
 
-        let setup_script = if req.setup_script.is_empty() {
-            None
-        } else {
-            Some(req.setup_script.as_str())
-        };
+        // Map proto optional-string semantics into the storage layer's
+        // `Option<Option<&str>>`:
+        //   proto None       → None            (don't change)
+        //   proto Some("")   → Some(None)      (clear / NULL)
+        //   proto Some("v")  → Some(Some("v")) (set)
+        let custom_path: Option<Option<&str>> = req.custom_path.as_deref().map(|s| {
+            if s.is_empty() { None } else { Some(s) }
+        });
+        let setup_script: Option<Option<&str>> = req.setup_script.as_deref().map(|s| {
+            if s.is_empty() { None } else { Some(s) }
+        });
 
         let row = self
             .db
-            .update_git_repo(
+            .update_git_repo_partial(
                 &req.id,
-                &req.name,
-                &req.worktree_mode,
-                &req.local_subfolder,
+                req.name.as_deref(),
+                wt_mode_str.as_deref(),
+                req.local_subfolder.as_deref(),
                 custom_path,
                 setup_script,
                 req.auto_gitignore,
             )
             .await
-            .map_err(|e| Status::not_found(e.to_string()))?;
+            .map_err(|e| match e {
+                DatabaseError::NotFound(_) => Status::not_found(e.to_string()),
+                _ => Status::internal(e.to_string()),
+            })?;
 
         info!(id = %row.id, "Repository updated via gRPC");
 
-        let wt_count = self
-            .db
-            .list_worktrees(Some(&row.id))
-            .await
-            .map(|v| v.len())
-            .unwrap_or(0);
+        let wt_count = self.db.count_worktrees_for_repo(&row.id).await.unwrap_or(0);
 
-        #[allow(clippy::cast_possible_truncation)]
-        Ok(Response::new(to_detail(row, wt_count as u32)))
+        Ok(Response::new(to_detail(row, wt_count)))
     }
 
     #[instrument(skip(self, request), fields(rpc = "ScanRepos"))]
@@ -270,8 +326,14 @@ impl GitRepoService for GitRepoServiceImpl {
 
         let max_depth = if req.max_depth == 0 { 2 } else { req.max_depth };
 
-        let mut repos = Vec::new();
-        scan_for_repos(scan_path, max_depth, &mut repos);
+        let scan_path_owned = scan_path.to_path_buf();
+        let repos = tokio::task::spawn_blocking(move || {
+            let mut results = Vec::new();
+            scan_for_repos(&scan_path_owned, max_depth, &mut results);
+            results
+        })
+        .await
+        .map_err(|e| Status::internal(format!("Scan task failed: {e}")))?;
 
         let mut registered = Vec::new();
         for repo_path in repos {
@@ -304,7 +366,12 @@ impl GitRepoService for GitRepoServiceImpl {
             }
         }
 
-        Ok(Response::new(ListReposResponse { repos: registered }))
+        // total_count = total repos in system after scan
+        let total_count = self.db.count_git_repos().await.unwrap_or(0);
+        Ok(Response::new(ListReposResponse {
+            repos: registered,
+            total_count,
+        }))
     }
 }
 
@@ -339,20 +406,32 @@ mod tests {
     use super::*;
     use crate::storage::Database;
 
-    async fn test_service() -> GitRepoServiceImpl {
+    /// Create a test service with a temp dir for fake repos.
+    async fn test_service() -> (GitRepoServiceImpl, tempfile::TempDir) {
         let db = Database::open_in_memory().await.unwrap();
-        GitRepoServiceImpl::new(db)
+        let tmp = tempfile::tempdir().unwrap();
+        let wt_dir = tmp.path().join("worktrees");
+        let wm = WorktreeManager::new(db.clone(), wt_dir);
+        (GitRepoServiceImpl::new(db, wm), tmp)
+    }
+
+    /// Create a fake git repo directory (with .git subdir).
+    fn make_fake_repo(parent: &std::path::Path, name: &str) -> String {
+        let repo = parent.join(name);
+        std::fs::create_dir_all(repo.join(".git")).unwrap();
+        repo.to_string_lossy().into()
     }
 
     #[tokio::test]
     async fn register_and_get_repo() {
-        let svc = test_service().await;
+        let (svc, tmp) = test_service().await;
+        let repo_path = make_fake_repo(tmp.path(), "my-repo");
 
         let resp = svc
             .register_repo(Request::new(RegisterRepoRequest {
-                repo_path: "/tmp/my-repo".into(),
+                repo_path: repo_path.clone(),
                 name: "my-repo".into(),
-                worktree_mode: "global".into(),
+                worktree_mode: WorktreeMode::Global as i32,
                 local_subfolder: String::new(),
                 custom_path: String::new(),
                 setup_script: String::new(),
@@ -363,8 +442,8 @@ mod tests {
 
         let detail = resp.into_inner();
         assert_eq!(detail.name, "my-repo");
-        assert_eq!(detail.repo_path, "/tmp/my-repo");
-        assert_eq!(detail.worktree_mode, "global");
+        assert_eq!(detail.repo_path, repo_path);
+        assert_eq!(detail.worktree_mode, WorktreeMode::Global as i32);
         assert!(detail.auto_gitignore);
 
         // Get by ID
@@ -379,13 +458,14 @@ mod tests {
 
     #[tokio::test]
     async fn register_defaults_name_from_path() {
-        let svc = test_service().await;
+        let (svc, tmp) = test_service().await;
+        let repo_path = make_fake_repo(tmp.path(), "cool-project");
 
         let resp = svc
             .register_repo(Request::new(RegisterRepoRequest {
-                repo_path: "/home/user/projects/cool-project".into(),
+                repo_path,
                 name: String::new(), // should default
-                worktree_mode: String::new(),
+                worktree_mode: WorktreeMode::Unspecified as i32,
                 local_subfolder: String::new(),
                 custom_path: String::new(),
                 setup_script: String::new(),
@@ -398,14 +478,78 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn register_nonexistent_path_returns_error() {
+        let (svc, _tmp) = test_service().await;
+
+        let result = svc
+            .register_repo(Request::new(RegisterRepoRequest {
+                repo_path: "/nonexistent/path".into(),
+                name: String::new(),
+                worktree_mode: WorktreeMode::Unspecified as i32,
+                local_subfolder: String::new(),
+                custom_path: String::new(),
+                setup_script: String::new(),
+                auto_gitignore: false,
+            }))
+            .await;
+
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err().code(), tonic::Code::InvalidArgument);
+    }
+
+    #[tokio::test]
+    async fn register_non_git_dir_returns_error() {
+        let (svc, tmp) = test_service().await;
+        // Directory exists but no .git
+        let path = tmp.path().join("not-a-repo");
+        std::fs::create_dir_all(&path).unwrap();
+
+        let result = svc
+            .register_repo(Request::new(RegisterRepoRequest {
+                repo_path: path.to_string_lossy().into(),
+                name: String::new(),
+                worktree_mode: WorktreeMode::Unspecified as i32,
+                local_subfolder: String::new(),
+                custom_path: String::new(),
+                setup_script: String::new(),
+                auto_gitignore: false,
+            }))
+            .await;
+
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err().code(), tonic::Code::InvalidArgument);
+    }
+
+    #[tokio::test]
+    async fn register_invalid_worktree_mode_returns_error() {
+        let (svc, tmp) = test_service().await;
+        let repo_path = make_fake_repo(tmp.path(), "repo");
+
+        let result = svc
+            .register_repo(Request::new(RegisterRepoRequest {
+                repo_path,
+                name: "repo".into(),
+                worktree_mode: 99, // invalid enum value
+                local_subfolder: String::new(),
+                custom_path: String::new(),
+                setup_script: String::new(),
+                auto_gitignore: false,
+            }))
+            .await;
+
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err().code(), tonic::Code::InvalidArgument);
+    }
+
+    #[tokio::test]
     async fn register_empty_path_returns_error() {
-        let svc = test_service().await;
+        let (svc, _tmp) = test_service().await;
 
         let result = svc
             .register_repo(Request::new(RegisterRepoRequest {
                 repo_path: String::new(),
                 name: String::new(),
-                worktree_mode: String::new(),
+                worktree_mode: WorktreeMode::Unspecified as i32,
                 local_subfolder: String::new(),
                 custom_path: String::new(),
                 setup_script: String::new(),
@@ -421,10 +565,36 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn list_repos_empty() {
-        let svc = test_service().await;
+    async fn register_repo_unspecified_mode_defaults_to_global() {
+        let (svc, tmp) = test_service().await;
+        let repo_path = make_fake_repo(tmp.path(), "unspecified-mode");
+
         let resp = svc
-            .list_repos(Request::new(ListReposRequest {}))
+            .register_repo(Request::new(RegisterRepoRequest {
+                repo_path,
+                name: "unspecified-mode".into(),
+                worktree_mode: WorktreeMode::Unspecified as i32,
+                local_subfolder: String::new(),
+                custom_path: String::new(),
+                setup_script: String::new(),
+                auto_gitignore: true,
+            }))
+            .await
+            .unwrap();
+
+        let detail = resp.into_inner();
+        // Unspecified (0) is stored as "global" in DB and returned as Global
+        assert_eq!(detail.worktree_mode, WorktreeMode::Global as i32);
+    }
+
+    #[tokio::test]
+    async fn list_repos_empty() {
+        let (svc, _tmp) = test_service().await;
+        let resp = svc
+            .list_repos(Request::new(ListReposRequest {
+                limit: 0,
+                offset: 0,
+            }))
             .await
             .unwrap();
         assert!(resp.into_inner().repos.is_empty());
@@ -432,12 +602,14 @@ mod tests {
 
     #[tokio::test]
     async fn list_repos_returns_registered() {
-        let svc = test_service().await;
+        let (svc, tmp) = test_service().await;
+        let path_a = make_fake_repo(tmp.path(), "repo-a");
+        let path_b = make_fake_repo(tmp.path(), "repo-b");
 
         svc.register_repo(Request::new(RegisterRepoRequest {
-            repo_path: "/tmp/repo-a".into(),
+            repo_path: path_a,
             name: "a".into(),
-            worktree_mode: "global".into(),
+            worktree_mode: WorktreeMode::Global as i32,
             local_subfolder: String::new(),
             custom_path: String::new(),
             setup_script: String::new(),
@@ -447,9 +619,9 @@ mod tests {
         .unwrap();
 
         svc.register_repo(Request::new(RegisterRepoRequest {
-            repo_path: "/tmp/repo-b".into(),
+            repo_path: path_b,
             name: "b".into(),
-            worktree_mode: "local".into(),
+            worktree_mode: WorktreeMode::Local as i32,
             local_subfolder: ".wt".into(),
             custom_path: String::new(),
             setup_script: String::new(),
@@ -459,21 +631,77 @@ mod tests {
         .unwrap();
 
         let resp = svc
-            .list_repos(Request::new(ListReposRequest {}))
+            .list_repos(Request::new(ListReposRequest {
+                limit: 0,
+                offset: 0,
+            }))
             .await
             .unwrap();
         assert_eq!(resp.into_inner().repos.len(), 2);
     }
 
     #[tokio::test]
+    async fn list_repos_with_pagination() {
+        let (svc, tmp) = test_service().await;
+
+        // Register 3 repos
+        for i in 0..3 {
+            let name = format!("repo-{i}");
+            let path = make_fake_repo(tmp.path(), &name);
+            svc.register_repo(Request::new(RegisterRepoRequest {
+                repo_path: path,
+                name: name.clone(),
+                worktree_mode: WorktreeMode::Global as i32,
+                local_subfolder: String::new(),
+                custom_path: String::new(),
+                setup_script: String::new(),
+                auto_gitignore: true,
+            }))
+            .await
+            .unwrap();
+        }
+
+        // Get first page (limit 2)
+        let resp = svc
+            .list_repos(Request::new(ListReposRequest {
+                limit: 2,
+                offset: 0,
+            }))
+            .await
+            .unwrap();
+        assert_eq!(resp.into_inner().repos.len(), 2);
+
+        // Get second page (limit 2, offset 2)
+        let resp = svc
+            .list_repos(Request::new(ListReposRequest {
+                limit: 2,
+                offset: 2,
+            }))
+            .await
+            .unwrap();
+        assert_eq!(resp.into_inner().repos.len(), 1);
+
+        // Offset past all results
+        let resp = svc
+            .list_repos(Request::new(ListReposRequest {
+                limit: 10,
+                offset: 10,
+            }))
+            .await
+            .unwrap();
+        assert!(resp.into_inner().repos.is_empty());
+    }
+
+    #[tokio::test]
     async fn unregister_repo() {
-        let svc = test_service().await;
+        let (svc, tmp) = test_service().await;
+        let repo_path = make_fake_repo(tmp.path(), "to-remove");
 
         let reg = svc
             .register_repo(Request::new(RegisterRepoRequest {
-                repo_path: "/tmp/to-remove".into(),
+                repo_path,
                 name: "to-remove".into(),
-                worktree_mode: "global".into(),
+                worktree_mode: WorktreeMode::Global as i32,
                 local_subfolder: String::new(),
                 custom_path: String::new(),
                 setup_script: String::new(),
@@ -495,7 +723,7 @@ mod tests {
 
     #[tokio::test]
     async fn unregister_nonexistent_returns_false() {
-        let svc = test_service().await;
+        let (svc, _tmp) = test_service().await;
         let resp = svc
             .unregister_repo(Request::new(UnregisterRepoRequest {
                 id: "nope".into(),
@@ -507,8 +735,61 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn unregister_repo_with_remove_worktrees() {
+        let db = Database::open_in_memory().await.unwrap();
+        let tmp = tempfile::tempdir().unwrap();
+        let repo_path = make_fake_repo(tmp.path(), "wt-repo");
+
+        let wt_dir = tmp.path().join("worktrees");
+        let wm = WorktreeManager::new(db.clone(), wt_dir);
+        let svc = GitRepoServiceImpl::new(db.clone(), wm);
+
+        // Register a repo
+        let reg = svc
+            .register_repo(Request::new(RegisterRepoRequest {
+                repo_path: repo_path.clone(),
+                name: "wt-repo".into(),
+                worktree_mode: WorktreeMode::Global as i32,
+                local_subfolder: String::new(),
+                custom_path: String::new(),
+                setup_script: String::new(),
+                auto_gitignore: true,
+            }))
+            .await
+            .unwrap();
+        let repo_id = reg.into_inner().id;
+
+        // Create worktree DB records (simulating created worktrees)
+        db.create_worktree("wt1", "feat-a", "/tmp/nonexistent-wt-a", "feat-a", &repo_id, None)
+            .await
+            .unwrap();
+        db.create_worktree("wt2", "feat-b", "/tmp/nonexistent-wt-b", "feat-b", &repo_id, None)
+            .await
+            .unwrap();
+
+        // Unregister with remove_worktrees=true
+        let resp = svc
+            .unregister_repo(Request::new(UnregisterRepoRequest {
+                id: repo_id.clone(),
+                remove_worktrees: true,
+            }))
+            .await
+            .unwrap();
+
+        let inner = resp.into_inner();
+        assert!(inner.removed);
+        assert_eq!(inner.worktrees_removed, 2);
+
+        // Repo should be gone from DB
+        assert!(db.get_git_repo(&repo_id).await.is_err());
+        // Worktree DB records should also be gone
+        assert!(db.get_worktree("wt1").await.is_err());
+        assert!(db.get_worktree("wt2").await.is_err());
+    }
+
+    #[tokio::test]
     async fn get_nonexistent_returns_not_found() {
-        let svc = test_service().await;
+        let (svc, _tmp) = test_service().await;
         let result = svc
             .get_repo(Request::new(GetRepoRequest {
                 id: "nope".into(),
@@ -520,13 +801,14 @@ mod tests {
 
     #[tokio::test]
     async fn update_repo() {
-        let svc = test_service().await;
+        let (svc, tmp) = test_service().await;
+        let repo_path = make_fake_repo(tmp.path(), "updatable");
 
         let reg = svc
             .register_repo(Request::new(RegisterRepoRequest {
-                repo_path: "/tmp/updatable".into(),
+                repo_path,
                 name: "old-name".into(),
-                worktree_mode: "global".into(),
+                worktree_mode: WorktreeMode::Global as i32,
                 local_subfolder: String::new(),
                 custom_path: String::new(),
                 setup_script: String::new(),
@@ -540,26 +822,68 @@ mod tests {
         let resp = svc
             .update_repo(Request::new(UpdateRepoRequest {
                 id: id.clone(),
-                name: "new-name".into(),
-                worktree_mode: "custom".into(),
-                local_subfolder: ".worktree".into(),
-                custom_path: "/custom/path".into(),
-                setup_script: "make build".into(),
-                auto_gitignore: false,
+                name: Some("new-name".into()),
+                worktree_mode: Some(WorktreeMode::Custom as i32),
+                local_subfolder: Some(".worktree".into()),
+                custom_path: Some("/custom/path".into()),
+                setup_script: Some("make build".into()),
+                auto_gitignore: Some(false),
             }))
             .await
             .unwrap();
 
         let detail = resp.into_inner();
         assert_eq!(detail.name, "new-name");
-        assert_eq!(detail.worktree_mode, "custom");
+        assert_eq!(detail.worktree_mode, WorktreeMode::Custom as i32);
         assert_eq!(detail.custom_path, "/custom/path");
         assert!(!detail.auto_gitignore);
     }
 
     #[tokio::test]
+    async fn update_repo_partial_fields() {
+        let (svc, tmp) = test_service().await;
+        let repo_path = make_fake_repo(tmp.path(), "partial-update");
+
+        let reg = svc
+            .register_repo(Request::new(RegisterRepoRequest {
+                repo_path,
+                name: "original-name".into(),
+                worktree_mode: WorktreeMode::Global as i32,
+                local_subfolder: ".worktree".into(),
+                custom_path: String::new(),
+                setup_script: String::new(),
+                auto_gitignore: true,
+            }))
+            .await
+            .unwrap();
+
+        let id = reg.into_inner().id;
+
+        // Only update name, leave everything else unchanged
+        let resp = svc
+            .update_repo(Request::new(UpdateRepoRequest {
+                id: id.clone(),
+                name: Some("updated-name".into()),
+                worktree_mode: None,
+                local_subfolder: None,
+                custom_path: None,
+                setup_script: None,
+                auto_gitignore: None,
+            }))
+            .await
+            .unwrap();
+
+        let detail = resp.into_inner();
+        assert_eq!(detail.name, "updated-name");
+        // All other fields should remain at their original values
+        assert_eq!(detail.worktree_mode, WorktreeMode::Global as i32);
+        assert_eq!(detail.local_subfolder, ".worktree");
+        assert!(detail.auto_gitignore);
+    }
+
+    #[tokio::test]
     async fn scan_repos_empty_path_returns_error() {
-        let svc = test_service().await;
+        let (svc, _tmp) = test_service().await;
         let result = svc
             .scan_repos(Request::new(ScanReposRequest {
                 scan_path: String::new(),
@@ -575,7 +899,7 @@ mod tests {
 
     #[tokio::test]
     async fn scan_repos_discovers_git_repos() {
-        let svc = test_service().await;
+        let (svc, _tmp) = test_service().await;
         let tmp = tempfile::tempdir().unwrap();
 
         // Create fake git repos
@@ -603,7 +927,7 @@ mod tests {
 
     #[tokio::test]
     async fn scan_repos_skips_already_registered() {
-        let svc = test_service().await;
+        let (svc, _tmp) = test_service().await;
         let tmp = tempfile::tempdir().unwrap();
 
         let repo = tmp.path().join("existing");
@@ -613,7 +937,7 @@ mod tests {
         svc.register_repo(Request::new(RegisterRepoRequest {
             repo_path: repo.to_string_lossy().into(),
             name: "existing".into(),
-            worktree_mode: "global".into(),
+            worktree_mode: WorktreeMode::Global as i32,
             local_subfolder: String::new(),
             custom_path: String::new(),
             setup_script: String::new(),

@@ -7,6 +7,7 @@ use std::io::{self, Write};
 use clap::Subcommand;
 
 use crate::connection::DaemonConnection;
+use crate::gitlab_fmt::truncate;
 
 /// Worktree subcommand actions.
 #[derive(Subcommand, Debug)]
@@ -15,7 +16,7 @@ pub enum WorktreeAction {
     Create {
         /// Worktree name (used as directory name)
         name: String,
-        /// Path to the git repository root
+        /// ID of the registered git repository
         #[arg(short, long)]
         repo: String,
         /// Branch name to create
@@ -27,7 +28,7 @@ pub enum WorktreeAction {
     },
     /// List all worktrees
     List {
-        /// Filter by repository path
+        /// Filter by repository ID
         #[arg(short, long)]
         repo: Option<String>,
     },
@@ -122,14 +123,4 @@ fn write_detail(w: &mut impl Write, wt: &betcode_proto::v1::WorktreeDetail) -> i
         writeln!(w, "  Active:   {} (unix)", ts.seconds)?;
     }
     Ok(())
-}
-
-/// Truncate a string to max display characters with ellipsis.
-fn truncate(s: &str, max: usize) -> String {
-    let char_count = s.chars().count();
-    if char_count <= max {
-        s.to_string()
-    } else {
-        format!("{}…", s.chars().take(max - 1).collect::<String>())
-    }
 }

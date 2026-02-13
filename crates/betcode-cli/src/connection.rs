@@ -11,19 +11,22 @@ use tracing::{error, info, warn};
 
 use betcode_proto::v1::{
     agent_service_client::AgentServiceClient, command_service_client::CommandServiceClient,
-    git_lab_service_client::GitLabServiceClient, worktree_service_client::WorktreeServiceClient,
-    AddPluginRequest, AddPluginResponse, AgentEvent, AgentRequest, CancelTurnRequest,
-    CancelTurnResponse, CreateWorktreeRequest, DisablePluginRequest, DisablePluginResponse,
-    EnablePluginRequest, EnablePluginResponse, ExecuteServiceCommandRequest,
-    GetCommandRegistryResponse, GetIssueRequest, GetIssueResponse, GetMergeRequestRequest,
-    GetMergeRequestResponse, GetPipelineRequest, GetPipelineResponse, GetPluginStatusRequest,
-    GetPluginStatusResponse, GetWorktreeRequest, KeyExchangeRequest, ListAgentsRequest,
-    ListAgentsResponse, ListIssuesRequest, ListIssuesResponse, ListMergeRequestsRequest,
-    ListMergeRequestsResponse, ListPathRequest, ListPathResponse, ListPipelinesRequest,
-    ListPipelinesResponse, ListPluginsRequest, ListPluginsResponse, ListSessionsRequest,
-    ListSessionsResponse, ListWorktreesRequest, ListWorktreesResponse, RemovePluginRequest,
-    RemovePluginResponse, RemoveWorktreeRequest, RemoveWorktreeResponse, ResumeSessionRequest,
-    ServiceCommandOutput, WorktreeDetail,
+    git_lab_service_client::GitLabServiceClient,
+    git_repo_service_client::GitRepoServiceClient,
+    worktree_service_client::WorktreeServiceClient, AddPluginRequest, AddPluginResponse,
+    AgentEvent, AgentRequest, CancelTurnRequest, CancelTurnResponse, CreateWorktreeRequest,
+    DisablePluginRequest, DisablePluginResponse, EnablePluginRequest, EnablePluginResponse,
+    ExecuteServiceCommandRequest, GetCommandRegistryResponse, GetIssueRequest, GetIssueResponse,
+    GetMergeRequestRequest, GetMergeRequestResponse, GetPipelineRequest, GetPipelineResponse,
+    GetPluginStatusRequest, GetPluginStatusResponse, GetRepoRequest, GetWorktreeRequest,
+    GitRepoDetail, KeyExchangeRequest, ListAgentsRequest, ListAgentsResponse, ListIssuesRequest,
+    ListIssuesResponse, ListMergeRequestsRequest, ListMergeRequestsResponse, ListPathRequest,
+    ListPathResponse, ListPipelinesRequest, ListPipelinesResponse, ListPluginsRequest,
+    ListPluginsResponse, ListReposRequest, ListReposResponse, ListSessionsRequest,
+    ListSessionsResponse, ListWorktreesRequest, ListWorktreesResponse, RegisterRepoRequest,
+    RemovePluginRequest, RemovePluginResponse, RemoveWorktreeRequest, RemoveWorktreeResponse,
+    ResumeSessionRequest, ScanReposRequest, ServiceCommandOutput, UnregisterRepoRequest,
+    UnregisterRepoResponse, UpdateRepoRequest, WorktreeDetail,
 };
 
 use betcode_crypto::{
@@ -130,6 +133,7 @@ pub struct DaemonConnection {
     client: Option<AgentServiceClient<Channel>>,
     worktree_client: Option<WorktreeServiceClient<Channel>>,
     gitlab_client: Option<GitLabServiceClient<Channel>>,
+    git_repo_client: Option<GitRepoServiceClient<Channel>>,
     command_client: Option<CommandServiceClient<Channel>>,
     state: ConnectionState,
     /// E2E crypto session, established via key exchange for relay connections.
@@ -160,6 +164,7 @@ impl DaemonConnection {
             client: None,
             worktree_client: None,
             gitlab_client: None,
+            git_repo_client: None,
             command_client: None,
             state: ConnectionState::Disconnected,
             crypto: None,
@@ -229,6 +234,7 @@ impl DaemonConnection {
         self.client = Some(AgentServiceClient::new(channel.clone()));
         self.worktree_client = Some(WorktreeServiceClient::new(channel.clone()));
         self.gitlab_client = Some(GitLabServiceClient::new(channel.clone()));
+        self.git_repo_client = Some(GitRepoServiceClient::new(channel.clone()));
         self.command_client = Some(CommandServiceClient::new(channel));
         self.state = ConnectionState::Connected;
 
@@ -703,6 +709,178 @@ impl DaemonConnection {
         apply_relay_meta(&mut request, &auth_token, &machine_id);
         let response = client
             .get_worktree(request)
+            .await
+            .map_err(|e| ConnectionError::RpcFailed(e.to_string()))?;
+
+        Ok(response.into_inner())
+    }
+
+    // =========================================================================
+    // Git repo operations
+    // =========================================================================
+
+    /// Register a new git repository.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn register_repo(
+        &mut self,
+        repo_path: &str,
+        name: &str,
+        worktree_mode: i32,
+        local_subfolder: &str,
+        custom_path: &str,
+        setup_script: &str,
+        auto_gitignore: bool,
+    ) -> Result<GitRepoDetail, ConnectionError> {
+        let auth_token = self.config.auth_token.clone();
+        let machine_id = self.config.machine_id.clone();
+        let client = self
+            .git_repo_client
+            .as_mut()
+            .ok_or(ConnectionError::NotConnected)?;
+
+        let mut request = tonic::Request::new(RegisterRepoRequest {
+            repo_path: repo_path.to_string(),
+            name: name.to_string(),
+            worktree_mode,
+            local_subfolder: local_subfolder.to_string(),
+            custom_path: custom_path.to_string(),
+            setup_script: setup_script.to_string(),
+            auto_gitignore,
+        });
+        apply_relay_meta(&mut request, &auth_token, &machine_id);
+        let response = client
+            .register_repo(request)
+            .await
+            .map_err(|e| ConnectionError::RpcFailed(e.to_string()))?;
+
+        Ok(response.into_inner())
+    }
+
+    /// Unregister a repository.
+    pub async fn unregister_repo(
+        &mut self,
+        id: &str,
+        remove_worktrees: bool,
+    ) -> Result<UnregisterRepoResponse, ConnectionError> {
+        let auth_token = self.config.auth_token.clone();
+        let machine_id = self.config.machine_id.clone();
+        let client = self
+            .git_repo_client
+            .as_mut()
+            .ok_or(ConnectionError::NotConnected)?;
+
+        let mut request = tonic::Request::new(UnregisterRepoRequest {
+            id: id.to_string(),
+            remove_worktrees,
+        });
+        apply_relay_meta(&mut request, &auth_token, &machine_id);
+        let response = client
+            .unregister_repo(request)
+            .await
+            .map_err(|e| ConnectionError::RpcFailed(e.to_string()))?;
+
+        Ok(response.into_inner())
+    }
+
+    /// List registered repositories.
+    pub async fn list_repos(
+        &mut self,
+        limit: u32,
+        offset: u32,
+    ) -> Result<ListReposResponse, ConnectionError> {
+        let auth_token = self.config.auth_token.clone();
+        let machine_id = self.config.machine_id.clone();
+        let client = self
+            .git_repo_client
+            .as_mut()
+            .ok_or(ConnectionError::NotConnected)?;
+
+        let mut request = tonic::Request::new(ListReposRequest { limit, offset });
+        apply_relay_meta(&mut request, &auth_token, &machine_id);
+        let response = client
+            .list_repos(request)
+            .await
+            .map_err(|e| ConnectionError::RpcFailed(e.to_string()))?;
+
+        Ok(response.into_inner())
+    }
+
+    /// Get a single repository by ID.
+    pub async fn get_repo(&mut self, id: &str) -> Result<GitRepoDetail, ConnectionError> {
+        let auth_token = self.config.auth_token.clone();
+        let machine_id = self.config.machine_id.clone();
+        let client = self
+            .git_repo_client
+            .as_mut()
+            .ok_or(ConnectionError::NotConnected)?;
+
+        let mut request = tonic::Request::new(GetRepoRequest { id: id.to_string() });
+        apply_relay_meta(&mut request, &auth_token, &machine_id);
+        let response = client
+            .get_repo(request)
+            .await
+            .map_err(|e| ConnectionError::RpcFailed(e.to_string()))?;
+
+        Ok(response.into_inner())
+    }
+
+    /// Update repository configuration.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn update_repo(
+        &mut self,
+        id: &str,
+        name: Option<&str>,
+        worktree_mode: Option<i32>,
+        local_subfolder: Option<&str>,
+        custom_path: Option<&str>,
+        setup_script: Option<&str>,
+        auto_gitignore: Option<bool>,
+    ) -> Result<GitRepoDetail, ConnectionError> {
+        let auth_token = self.config.auth_token.clone();
+        let machine_id = self.config.machine_id.clone();
+        let client = self
+            .git_repo_client
+            .as_mut()
+            .ok_or(ConnectionError::NotConnected)?;
+
+        let mut request = tonic::Request::new(UpdateRepoRequest {
+            id: id.to_string(),
+            name: name.map(String::from),
+            worktree_mode,
+            local_subfolder: local_subfolder.map(String::from),
+            custom_path: custom_path.map(String::from),
+            setup_script: setup_script.map(String::from),
+            auto_gitignore,
+        });
+        apply_relay_meta(&mut request, &auth_token, &machine_id);
+        let response = client
+            .update_repo(request)
+            .await
+            .map_err(|e| ConnectionError::RpcFailed(e.to_string()))?;
+
+        Ok(response.into_inner())
+    }
+
+    /// Scan a directory for git repositories.
+    pub async fn scan_repos(
+        &mut self,
+        scan_path: &str,
+        max_depth: u32,
+    ) -> Result<ListReposResponse, ConnectionError> {
+        let auth_token = self.config.auth_token.clone();
+        let machine_id = self.config.machine_id.clone();
+        let client = self
+            .git_repo_client
+            .as_mut()
+            .ok_or(ConnectionError::NotConnected)?;
+
+        let mut request = tonic::Request::new(ScanReposRequest {
+            scan_path: scan_path.to_string(),
+            max_depth,
+        });
+        apply_relay_meta(&mut request, &auth_token, &machine_id);
+        let response = client
+            .scan_repos(request)
             .await
             .map_err(|e| ConnectionError::RpcFailed(e.to_string()))?;
 

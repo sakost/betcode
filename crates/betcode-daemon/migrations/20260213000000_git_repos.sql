@@ -24,7 +24,7 @@ CREATE TABLE IF NOT EXISTS worktrees (
     name            TEXT NOT NULL,
     path            TEXT NOT NULL UNIQUE,
     branch          TEXT NOT NULL,
-    repo_id         TEXT NOT NULL REFERENCES git_repos(id),
+    repo_id         TEXT NOT NULL REFERENCES git_repos(id) ON DELETE CASCADE,
     setup_script    TEXT,
     created_at      INTEGER NOT NULL,
     last_active     INTEGER NOT NULL

@@ -133,9 +133,9 @@ impl GrpcServer {
             shutdown_tx,
         );
 
-        let repo_service = GitRepoServiceImpl::new(db.clone());
-        let worktree_service =
-            WorktreeServiceImpl::new(WorktreeManager::new(db.clone(), worktree_base_dir), db.clone());
+        let worktree_manager = WorktreeManager::new(db.clone(), worktree_base_dir);
+        let repo_service = GitRepoServiceImpl::new(db.clone(), worktree_manager.clone());
+        let worktree_service = WorktreeServiceImpl::new(worktree_manager, db.clone());
 
         Self {
             config,

@@ -15,4 +15,5 @@ pub mod headless;
 pub mod machine_cmd;
 pub mod tui;
 pub mod ui;
+pub mod repo_cmd;
 pub mod worktree_cmd;

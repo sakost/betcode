@@ -15,6 +15,7 @@ use betcode_cli::connection::{ConnectionConfig, DaemonConnection};
 use betcode_cli::gitlab_cmd::{self, GitLabAction};
 use betcode_cli::headless::{self, HeadlessConfig};
 use betcode_cli::machine_cmd::{self, MachineAction};
+use betcode_cli::repo_cmd::{self, RepoAction};
 use betcode_cli::worktree_cmd::{self, WorktreeAction};
 
 #[derive(Parser, Debug)]
@@ -73,6 +74,11 @@ enum Commands {
     Worktree {
         #[command(subcommand)]
         action: WorktreeAction,
+    },
+    /// Manage registered git repositories
+    Repo {
+        #[command(subcommand)]
+        action: RepoAction,
     },
     /// Authenticate with a relay server
     Auth {
@@ -212,6 +218,8 @@ async fn main() -> anyhow::Result<()> {
     // Dispatch remaining subcommands or chat mode
     if let Some(Commands::Worktree { action }) = cli.command {
         worktree_cmd::run(&mut conn, action).await?;
+    } else if let Some(Commands::Repo { action }) = cli.command {
+        repo_cmd::run(&mut conn, action).await?;
     } else if let Some(Commands::Gitlab { action }) = cli.command {
         gitlab_cmd::run(&mut conn, action).await?;
     } else if let Some(prompt) = cli.prompt {

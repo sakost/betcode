@@ -140,11 +140,12 @@ impl WorktreeManager {
         if matches!(repo.worktree_mode, WorktreeMode::Local) && repo.auto_gitignore {
             let gitignore_path = repo.repo_path.join(".gitignore");
             let subfolder_name = repo.local_subfolder.to_string_lossy();
-            let needs_add = if gitignore_path.exists() {
+            let (needs_add, is_new) = if gitignore_path.exists() {
                 let content = tokio::fs::read_to_string(&gitignore_path).await?;
-                !content.lines().any(|line| line.trim() == subfolder_name.as_ref())
+                let found = content.lines().any(|line| line.trim() == subfolder_name.as_ref());
+                (!found, false)
             } else {
-                true
+                (true, true)
             };
             if needs_add {
                 use tokio::io::AsyncWriteExt;
@@ -154,8 +155,12 @@ impl WorktreeManager {
                     .truncate(false)
                     .open(&gitignore_path)
                     .await?;
-                file.write_all(format!("\n{subfolder_name}\n").as_bytes())
-                    .await?;
+                let entry = if is_new {
+                    format!("{subfolder_name}\n")
+                } else {
+                    format!("\n{subfolder_name}\n")
+                };
+                file.write_all(entry.as_bytes()).await?;
                 info!(path = %gitignore_path.display(), subfolder = %subfolder_name, "Added worktree subfolder to .gitignore");
             }
         }

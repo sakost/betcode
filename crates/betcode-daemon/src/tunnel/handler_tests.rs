@@ -12,6 +12,7 @@ struct HandlerTestBuilder {
     with_command_service: bool,
     with_gitlab_service: bool,
     with_worktree_service: bool,
+    with_repo_service: bool,
 }
 
 /// Outputs produced by [`HandlerTestBuilder::build`].
@@ -31,6 +32,7 @@ impl HandlerTestBuilder {
             with_command_service: false,
             with_gitlab_service: false,
             with_worktree_service: false,
+            with_repo_service: false,
         }
     }
 
@@ -61,6 +63,11 @@ impl HandlerTestBuilder {
 
     fn with_worktree_service(mut self) -> Self {
         self.with_worktree_service = true;
+        self
+    }
+
+    fn with_repo_service(mut self) -> Self {
+        self.with_repo_service = true;
         self
     }
 
@@ -140,9 +147,18 @@ impl HandlerTestBuilder {
                     db.clone(),
                     std::env::temp_dir().join("betcode-test-worktrees"),
                 ),
-                db,
+                db.clone(),
             );
             handler.set_worktree_service(Arc::new(wt_svc));
+        }
+
+        if self.with_repo_service {
+            use crate::worktree::WorktreeManager;
+
+            let wt_dir = std::env::temp_dir().join("betcode-test-repo-worktrees");
+            let wm = WorktreeManager::new(db.clone(), wt_dir);
+            let repo_svc = GitRepoServiceImpl::new(db, wm);
+            handler.set_repo_service(Arc::new(repo_svc));
         }
 
         HandlerTestOutput {
@@ -1725,8 +1741,8 @@ async fn question_response_is_handled_through_tunnel() {
 // --- CommandService tunnel handler tests ---
 
 use betcode_proto::v1::{
-    GetCommandRegistryResponse, ListAgentsResponse, ListPathResponse, ListWorktreesResponse,
-    RemoveWorktreeResponse,
+    GetCommandRegistryResponse, ListAgentsResponse, ListPathResponse, ListReposResponse,
+    ListWorktreesResponse, RemoveWorktreeResponse, UnregisterRepoResponse,
 };
 
 #[tokio::test]
@@ -2297,4 +2313,109 @@ async fn relay_forwarded_response_has_empty_nonce_when_crypto_active() {
     } else {
         panic!("Expected StreamData payload in response");
     }
+}
+
+// --- GitRepoService tunnel handler tests ---
+
+#[tokio::test]
+async fn list_repos_through_tunnel() {
+    let HandlerTestOutput { handler: h, .. } = HandlerTestBuilder::new()
+        .with_repo_service()
+        .build()
+        .await;
+    let req = ListReposRequest { limit: 0, offset: 0 };
+    let r = h
+        .handle_frame(req_frame("repo1", METHOD_LIST_REPOS, encode(&req)))
+        .await;
+    assert_eq!(r.len(), 1);
+    assert_eq!(r[0].frame_type, FrameType::Response as i32);
+    if let Some(betcode_proto::v1::tunnel_frame::Payload::StreamData(p)) = &r[0].payload {
+        let resp =
+            ListReposResponse::decode(p.encrypted.as_ref().unwrap().ciphertext.as_slice())
+                .unwrap();
+        assert!(resp.repos.is_empty());
+    } else {
+        panic!("wrong payload");
+    }
+}
+
+#[tokio::test]
+async fn unregister_repo_nonexistent_through_tunnel() {
+    let HandlerTestOutput { handler: h, .. } = HandlerTestBuilder::new()
+        .with_repo_service()
+        .build()
+        .await;
+    let req = UnregisterRepoRequest {
+        id: "nonexistent".into(),
+        remove_worktrees: false,
+    };
+    let r = h
+        .handle_frame(req_frame("repo2", METHOD_UNREGISTER_REPO, encode(&req)))
+        .await;
+    assert_eq!(r.len(), 1);
+    assert_eq!(r[0].frame_type, FrameType::Response as i32);
+    if let Some(betcode_proto::v1::tunnel_frame::Payload::StreamData(p)) = &r[0].payload {
+        let resp =
+            UnregisterRepoResponse::decode(p.encrypted.as_ref().unwrap().ciphertext.as_slice())
+                .unwrap();
+        assert!(!resp.removed);
+    } else {
+        panic!("wrong payload");
+    }
+}
+
+#[tokio::test]
+async fn repo_service_not_set_returns_error() {
+    let HandlerTestOutput { handler: h, .. } = HandlerTestBuilder::new().build().await; // No repo service set
+    let req = ListReposRequest { limit: 0, offset: 0 };
+    let r = h
+        .handle_frame(req_frame("repo-err", METHOD_LIST_REPOS, encode(&req)))
+        .await;
+    assert_eq!(r.len(), 1);
+    assert_eq!(r[0].frame_type, FrameType::Error as i32);
+    if let Some(betcode_proto::v1::tunnel_frame::Payload::Error(e)) = &r[0].payload {
+        assert!(e.message.contains("GitRepoService not available"));
+    } else {
+        panic!("expected error payload");
+    }
+}
+
+#[tokio::test]
+async fn repo_all_methods_dispatch_without_service() {
+    let HandlerTestOutput { handler: h, .. } = HandlerTestBuilder::new().build().await;
+    let methods = [
+        METHOD_REGISTER_REPO,
+        METHOD_UNREGISTER_REPO,
+        METHOD_LIST_REPOS,
+        METHOD_GET_REPO,
+        METHOD_UPDATE_REPO,
+        METHOD_SCAN_REPOS,
+    ];
+    for method in methods {
+        let r = h
+            .handle_frame(req_frame("repo-dispatch", method, vec![]))
+            .await;
+        assert_eq!(r.len(), 1, "method: {method}");
+        assert_eq!(r[0].frame_type, FrameType::Error as i32, "method: {method}");
+        if let Some(betcode_proto::v1::tunnel_frame::Payload::Error(e)) = &r[0].payload {
+            assert!(
+                e.message.contains("GitRepoService not available"),
+                "method {method} should hit 'not available', got: {}",
+                e.message
+            );
+        }
+    }
+}
+
+#[tokio::test]
+async fn repo_malformed_data_returns_error() {
+    let HandlerTestOutput { handler: h, .. } = HandlerTestBuilder::new()
+        .with_repo_service()
+        .build()
+        .await;
+    let r = h
+        .handle_frame(req_frame("repo-bad", METHOD_LIST_REPOS, vec![0xFF, 0xFF]))
+        .await;
+    assert_eq!(r.len(), 1);
+    assert_eq!(r[0].frame_type, FrameType::Error as i32);
 }
