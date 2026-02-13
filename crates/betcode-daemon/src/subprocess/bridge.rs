@@ -313,6 +313,26 @@ impl EventBridge {
     fn handle_result(&mut self, result: SessionResult) -> Vec<AgentEvent> {
         let mut events = Vec::new();
 
+        // If Claude reported an error, emit an ErrorEvent before the status change
+        if result.is_error {
+            let error_message = if result.errors.is_empty() {
+                format!("Claude exited with error (subtype: {:?})", result.subtype)
+            } else {
+                result.errors.join("; ")
+            };
+            warn!(errors = ?result.errors, "Claude result indicates error");
+            let mut error_event = self.next_event();
+            error_event.event = Some(proto::agent_event::Event::Error(
+                proto::ErrorEvent {
+                    code: "session_error".to_string(),
+                    message: error_message,
+                    is_fatal: true,
+                    details: HashMap::default(),
+                },
+            ));
+            events.push(error_event);
+        }
+
         // Emit usage report
         let mut usage_event = self.next_event();
         usage_event.event = Some(proto::agent_event::Event::Usage(UsageReport {
@@ -939,5 +959,85 @@ mod tests {
             event_type: StreamEventType::ContentBlockStop { index: 0 },
         }));
         assert_eq!(bridge.sequence(), 2);
+    }
+
+    #[test]
+    fn handle_result_error_emits_error_event() {
+        use betcode_core::ndjson::{ResultSubtype, Usage};
+
+        let mut bridge = EventBridge::new();
+        let result = SessionResult {
+            subtype: ResultSubtype::Unknown("error_during_execution".to_string()),
+            session_id: "sess-err".to_string(),
+            duration_ms: 0,
+            cost_usd: Some(0.0),
+            usage: Usage::default(),
+            is_error: true,
+            errors: vec!["No conversation found with session ID: abc-123".to_string()],
+        };
+
+        let events = bridge.convert(Message::Result(result));
+        // Should produce 3 events: ErrorEvent, UsageReport, StatusChange(Idle)
+        assert_eq!(events.len(), 3, "expected error + usage + status events");
+
+        // First event: ErrorEvent
+        match &events[0].event {
+            Some(proto::agent_event::Event::Error(e)) => {
+                assert_eq!(e.code, "session_error");
+                assert!(
+                    e.message.contains("No conversation found"),
+                    "error message should contain the original error"
+                );
+                assert!(e.is_fatal);
+            }
+            other => panic!("Expected ErrorEvent, got {:?}", other),
+        }
+
+        // Second event: UsageReport
+        assert!(matches!(
+            &events[1].event,
+            Some(proto::agent_event::Event::Usage(_))
+        ));
+
+        // Third event: StatusChange(Idle)
+        match &events[2].event {
+            Some(proto::agent_event::Event::StatusChange(sc)) => {
+                assert_eq!(sc.status, i32::from(AgentStatus::Idle));
+            }
+            other => panic!("Expected StatusChange, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn handle_result_success_no_error_event() {
+        use betcode_core::ndjson::{ResultSubtype, Usage};
+
+        let mut bridge = EventBridge::new();
+        let result = SessionResult {
+            subtype: ResultSubtype::Success,
+            session_id: "sess-ok".to_string(),
+            duration_ms: 1000,
+            cost_usd: Some(0.01),
+            usage: Usage {
+                input_tokens: 100,
+                output_tokens: 50,
+                ..Default::default()
+            },
+            is_error: false,
+            errors: vec![],
+        };
+
+        let events = bridge.convert(Message::Result(result));
+        // Should produce only 2 events: UsageReport, StatusChange(Idle) — no ErrorEvent
+        assert_eq!(events.len(), 2, "expected usage + status events only");
+
+        assert!(matches!(
+            &events[0].event,
+            Some(proto::agent_event::Event::Usage(_))
+        ));
+        assert!(matches!(
+            &events[1].event,
+            Some(proto::agent_event::Event::StatusChange(_))
+        ));
     }
 }

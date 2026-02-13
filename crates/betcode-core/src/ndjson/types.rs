@@ -143,6 +143,8 @@ pub struct SessionResult {
     pub duration_ms: u64,
     pub cost_usd: Option<f64>,
     pub usage: Usage,
+    pub is_error: bool,
+    pub errors: Vec<String>,
 }
 
 /// Result subtype.

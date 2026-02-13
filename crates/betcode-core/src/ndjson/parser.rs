@@ -270,6 +270,16 @@ fn parse_result(raw: &Value) -> Message {
     let duration_ms = raw.get("duration_ms").and_then(serde_json::Value::as_u64).unwrap_or(0);
     let cost_usd = raw.get("total_cost_usd").and_then(serde_json::Value::as_f64);
     let usage = parse_usage(raw.get("usage"));
+    let is_error = raw.get("is_error").and_then(serde_json::Value::as_bool).unwrap_or(false);
+    let errors = raw
+        .get("errors")
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| v.as_str().map(String::from))
+                .collect()
+        })
+        .unwrap_or_default();
 
     Message::Result(SessionResult {
         subtype,
@@ -277,6 +287,8 @@ fn parse_result(raw: &Value) -> Message {
         duration_ms,
         cost_usd,
         usage,
+        is_error,
+        errors,
     })
 }
 
@@ -309,5 +321,34 @@ mod tests {
         let json = r#"{"type":"future_type","data":"something"}"#;
         let msg = parse_line(json).unwrap();
         assert!(matches!(msg, Message::Unknown { .. }));
+    }
+
+    #[test]
+    fn parse_result_error_during_execution() {
+        let json = r#"{"type":"result","subtype":"error_during_execution","duration_ms":0,"is_error":true,"errors":["No conversation found with session ID: abc-123"],"session_id":"new-session","total_cost_usd":0,"usage":{"input_tokens":0,"output_tokens":0}}"#;
+        let msg = parse_line(json).expect("should parse");
+        match msg {
+            Message::Result(r) => {
+                assert!(r.is_error);
+                assert_eq!(r.errors, vec!["No conversation found with session ID: abc-123"]);
+                assert!(matches!(r.subtype, ResultSubtype::Unknown(s) if s == "error_during_execution"));
+                assert_eq!(r.session_id, "new-session");
+            }
+            other => panic!("expected Result, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_result_success_has_no_errors() {
+        let json = r#"{"type":"result","subtype":"success","duration_ms":1234,"session_id":"s1","total_cost_usd":0.01,"usage":{"input_tokens":100,"output_tokens":50}}"#;
+        let msg = parse_line(json).expect("should parse");
+        match msg {
+            Message::Result(r) => {
+                assert!(!r.is_error);
+                assert!(r.errors.is_empty());
+                assert!(matches!(r.subtype, ResultSubtype::Success));
+            }
+            other => panic!("expected Result, got {other:?}"),
+        }
     }
 }

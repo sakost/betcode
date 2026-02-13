@@ -336,6 +336,7 @@ fn spawn_stdout_pipeline(ctx: StdoutPipelineContext) {
         let start_seq = sequence_counter.load(Ordering::Acquire);
         let mut bridge = EventBridge::with_start_sequence(start_seq);
         let mut event_count = 0u64;
+        let mut had_session_error = false;
 
         while let Some(line) = stdout_rx.recv().await {
             let msg = match ndjson::parse_line(&line) {
@@ -399,6 +400,13 @@ fn spawn_stdout_pipeline(ctx: StdoutPipelineContext) {
                     }
                 }
 
+                // Track if we received a session error (e.g. resume failure)
+                if let Some(betcode_proto::v1::agent_event::Event::Error(ref err)) = event.event {
+                    if err.code == "session_error" {
+                        had_session_error = true;
+                    }
+                }
+
                 if let Err(e) = store_event(&db, &sid, &event).await {
                     warn!(session_id = %sid, error = %e, "Failed to store event");
                 }
@@ -411,19 +419,32 @@ fn spawn_stdout_pipeline(ctx: StdoutPipelineContext) {
             // Sync the shared counter so send_user_message sees the latest sequence.
             sequence_counter.store(bridge.sequence(), Ordering::Release);
 
-            // Update subprocess and DB with Claude's session ID from SystemInit
+            // Update subprocess and DB with Claude's session ID from SystemInit.
+            // Skip if we had a session error (e.g. resume failure) — the new session
+            // Claude started has no context, so don't persist its ID for future resumes.
             if let Some(info) = bridge.session_info() {
-                if let Some(handle) = sessions.write().await.get_mut(&sid) {
-                    if let Err(e) = subprocess_manager
-                        .set_session_id(&handle.process_id, info.session_id.clone())
-                        .await
-                    {
-                        warn!(session_id = %sid, error = %e, "Failed to set subprocess session ID");
+                if had_session_error {
+                    warn!(
+                        session_id = %sid,
+                        "Skipping claude_session_id update — session error was detected"
+                    );
+                    // Clear stale session ID so next attempt starts fresh
+                    if let Err(e) = db.update_claude_session_id(&sid, "").await {
+                        warn!(session_id = %sid, error = %e, "Failed to clear claude_session_id");
                     }
-                }
-                // Persist Claude session ID for future resume operations
-                if let Err(e) = db.update_claude_session_id(&sid, &info.session_id).await {
-                    warn!(session_id = %sid, error = %e, "Failed to update claude_session_id");
+                } else {
+                    if let Some(handle) = sessions.write().await.get_mut(&sid) {
+                        if let Err(e) = subprocess_manager
+                            .set_session_id(&handle.process_id, info.session_id.clone())
+                            .await
+                        {
+                            warn!(session_id = %sid, error = %e, "Failed to set subprocess session ID");
+                        }
+                    }
+                    // Persist Claude session ID for future resume operations
+                    if let Err(e) = db.update_claude_session_id(&sid, &info.session_id).await {
+                        warn!(session_id = %sid, error = %e, "Failed to update claude_session_id");
+                    }
                 }
             }
         }
