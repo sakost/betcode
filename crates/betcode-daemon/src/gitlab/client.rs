@@ -51,6 +51,10 @@ impl GitLabClient {
             .map_err(|_| GitLabError::Config("Invalid token format".into()))?;
         headers.insert(AUTHORIZATION, token_val);
 
+        // Ensure a TLS crypto provider is installed (reqwest uses rustls-no-provider).
+        // The `Err` case just means it was already installed — safe to ignore.
+        let _ = rustls::crypto::ring::default_provider().install_default();
+
         let http = reqwest::Client::builder()
             .default_headers(headers)
             .build()?;
