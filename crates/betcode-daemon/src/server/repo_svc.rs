@@ -163,21 +163,21 @@ impl GitRepoService for GitRepoServiceImpl {
     ) -> Result<Response<UnregisterRepoResponse>, Status> {
         let req = request.into_inner();
 
-        // Count worktrees before removal
-        let worktrees = self
-            .db
-            .list_worktrees(Some(&req.id))
-            .await
-            .unwrap_or_default();
-
-        #[allow(clippy::cast_possible_truncation)]
-        let worktrees_removed = worktrees.len() as u32;
+        let mut worktrees_removed: u32 = 0;
 
         if req.remove_worktrees {
-            // Remove worktrees from disk + DB via WorktreeManager
+            let worktrees = self
+                .db
+                .list_worktrees(Some(&req.id))
+                .await
+                .map_err(|e| Status::internal(e.to_string()))?;
+
             for wt in &worktrees {
-                if let Err(e) = self.worktree_manager.remove(&wt.id).await {
-                    tracing::warn!(id = %wt.id, error = %e, "Failed to remove worktree during repo unregistration");
+                match self.worktree_manager.remove(&wt.id).await {
+                    Ok(_) => worktrees_removed += 1,
+                    Err(e) => {
+                        tracing::warn!(id = %wt.id, error = %e, "Failed to remove worktree during repo unregistration");
+                    }
                 }
             }
         }
@@ -223,7 +223,8 @@ impl GitRepoService for GitRepoServiceImpl {
                 .map_err(|e| Status::internal(e.to_string()))?
         };
 
-        let wt_counts = self.db.count_worktrees_by_repo().await.unwrap_or_default();
+        let wt_counts = self.db.count_worktrees_by_repo().await
+            .map_err(|e| Status::internal(e.to_string()))?;
         let repos = rows
             .into_iter()
             .map(|row| {
@@ -251,7 +252,8 @@ impl GitRepoService for GitRepoServiceImpl {
                 _ => Status::internal(e.to_string()),
             })?;
 
-        let wt_count = self.db.count_worktrees_for_repo(&row.id).await.unwrap_or(0);
+        let wt_count = self.db.count_worktrees_for_repo(&row.id).await
+            .map_err(|e| Status::internal(e.to_string()))?;
 
         Ok(Response::new(to_detail(row, wt_count)))
     }
@@ -300,7 +302,8 @@ impl GitRepoService for GitRepoServiceImpl {
 
         info!(id = %row.id, "Repository updated via gRPC");
 
-        let wt_count = self.db.count_worktrees_for_repo(&row.id).await.unwrap_or(0);
+        let wt_count = self.db.count_worktrees_for_repo(&row.id).await
+            .map_err(|e| Status::internal(e.to_string()))?;
 
         Ok(Response::new(to_detail(row, wt_count)))
     }
@@ -367,7 +370,8 @@ impl GitRepoService for GitRepoServiceImpl {
         }
 
         // total_count = total repos in system after scan
-        let total_count = self.db.count_git_repos().await.unwrap_or(0);
+        let total_count = self.db.count_git_repos().await
+            .map_err(|e| Status::internal(e.to_string()))?;
         Ok(Response::new(ListReposResponse {
             repos: registered,
             total_count,
@@ -375,28 +379,63 @@ impl GitRepoService for GitRepoServiceImpl {
     }
 }
 
+/// Well-known directories that are never standalone git repositories.
+const SKIP_DIRS: &[&str] = &[
+    "node_modules",
+    "target",
+    "__pycache__",
+    "vendor",
+    ".cache",
+    "dist",
+    "build",
+];
+
 /// Recursively scan for directories containing a `.git` folder.
 fn scan_for_repos(dir: &Path, depth: u32, results: &mut Vec<std::path::PathBuf>) {
     if depth == 0 {
         return;
     }
 
-    let entries = match std::fs::read_dir(dir) {
-        Ok(e) => e,
-        Err(_) => return,
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
     };
 
     for entry in entries.flatten() {
-        let path = entry.path();
-        if !path.is_dir() {
+        let Ok(file_type) = entry.file_type() else {
+            continue;
+        };
+
+        // Skip symlinks entirely
+        if file_type.is_symlink() {
             continue;
         }
-        if path.file_name().and_then(|n| n.to_str()) == Some(".git") {
-            // Parent is a git repo
-            results.push(dir.to_path_buf());
-            return; // Don't recurse into git repos
+
+        if !file_type.is_dir() {
+            continue;
         }
-        scan_for_repos(&path, depth - 1, results);
+
+        let name = match entry.file_name().to_str() {
+            Some(n) => n.to_string(),
+            None => continue,
+        };
+
+        // Check for .git to detect repo
+        if name == ".git" {
+            results.push(dir.to_path_buf());
+            return;
+        }
+
+        // Skip hidden directories
+        if name.starts_with('.') {
+            continue;
+        }
+
+        // Skip well-known non-repo directories
+        if SKIP_DIRS.contains(&name.as_str()) {
+            continue;
+        }
+
+        scan_for_repos(&entry.path(), depth - 1, results);
     }
 }
 
@@ -956,5 +995,61 @@ mod tests {
             .unwrap();
 
         assert!(resp.into_inner().repos.is_empty());
+    }
+
+    #[tokio::test]
+    async fn scan_repos_skips_hidden_directories() {
+        let (svc, _tmp) = test_service().await;
+        let tmp = tempfile::tempdir().unwrap();
+
+        // Create a visible repo
+        let visible = tmp.path().join("visible-repo");
+        std::fs::create_dir_all(visible.join(".git")).unwrap();
+
+        // Create a hidden directory with a .git inside (should be skipped)
+        let hidden = tmp.path().join(".hidden-repo");
+        std::fs::create_dir_all(hidden.join(".git")).unwrap();
+
+        let resp = svc
+            .scan_repos(Request::new(ScanReposRequest {
+                scan_path: tmp.path().to_string_lossy().into(),
+                max_depth: 2,
+            }))
+            .await
+            .unwrap();
+
+        let repos = resp.into_inner().repos;
+        assert_eq!(repos.len(), 1);
+        assert_eq!(repos[0].name, "visible-repo");
+    }
+
+    #[tokio::test]
+    async fn scan_repos_skips_well_known_dirs() {
+        let (svc, _tmp) = test_service().await;
+        let tmp = tempfile::tempdir().unwrap();
+
+        // Create a real repo
+        let real = tmp.path().join("real-repo");
+        std::fs::create_dir_all(real.join(".git")).unwrap();
+
+        // Create a node_modules dir with a .git inside (should be skipped)
+        let nm = tmp.path().join("node_modules");
+        std::fs::create_dir_all(nm.join("some-package").join(".git")).unwrap();
+
+        // Create a target dir with a .git inside (should be skipped)
+        let target = tmp.path().join("target");
+        std::fs::create_dir_all(target.join("debug").join(".git")).unwrap();
+
+        let resp = svc
+            .scan_repos(Request::new(ScanReposRequest {
+                scan_path: tmp.path().to_string_lossy().into(),
+                max_depth: 3,
+            }))
+            .await
+            .unwrap();
+
+        let repos = resp.into_inner().repos;
+        assert_eq!(repos.len(), 1);
+        assert_eq!(repos[0].name, "real-repo");
     }
 }

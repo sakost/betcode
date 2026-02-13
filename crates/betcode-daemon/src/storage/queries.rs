@@ -292,16 +292,20 @@ impl Database {
     /// `worktree_id` set to NULL (handled by application logic, not FK cascade
     /// since `worktree_id` is not a formal FK in the schema).
     pub async fn remove_worktree(&self, id: &str) -> Result<bool, DatabaseError> {
+        let mut tx = self.pool().begin().await?;
+
         // Clear worktree_id on sessions that reference this worktree
         sqlx::query("UPDATE sessions SET worktree_id = NULL WHERE worktree_id = ?")
             .bind(id)
-            .execute(self.pool())
+            .execute(&mut *tx)
             .await?;
 
         let result = sqlx::query("DELETE FROM worktrees WHERE id = ?")
             .bind(id)
-            .execute(self.pool())
+            .execute(&mut *tx)
             .await?;
+
+        tx.commit().await?;
 
         Ok(result.rows_affected() > 0)
     }
