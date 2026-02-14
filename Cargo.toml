@@ -17,6 +17,7 @@ edition = "2021"
 authors = ["Konstantin Sazhenov <me@sakost.dev>"]
 license = "Apache-2.0"
 repository = "https://github.com/betcode/betcode"
+publish = false
 
 [workspace.dependencies]
 # Async runtime
