@@ -826,7 +826,7 @@ impl TunnelRequestHandler {
         if req.tool_name.is_empty() {
             return vec![Self::error_response(
                 request_id,
-                TunnelErrorCode::Internal,
+                TunnelErrorCode::InvalidArgument,
                 "tool_name must not be empty",
             )];
         }
@@ -1004,46 +1004,23 @@ impl TunnelRequestHandler {
                 let decision =
                     betcode_proto::v1::PermissionDecision::try_from(perm.decision)
                         .unwrap_or(betcode_proto::v1::PermissionDecision::Deny);
-                let granted = matches!(
-                    decision,
-                    betcode_proto::v1::PermissionDecision::AllowOnce
-                        | betcode_proto::v1::PermissionDecision::AllowSession
-                );
 
-                // Look up original tool input and tool name from pending maps.
-                let original_input = if let Some(handle) = self.relay.get_handle(&sid).await {
-                    let input = handle
-                        .pending_permission_inputs
-                        .write()
-                        .await
-                        .remove(&perm.request_id)
-                        .unwrap_or_else(|| serde_json::Value::Object(serde_json::Map::default()));
-                    let tool = handle
-                        .pending_permission_tool_names
-                        .write()
-                        .await
-                        .remove(&perm.request_id);
-
-                    // On AllowSession, cache the grant for this tool
-                    if decision == betcode_proto::v1::PermissionDecision::AllowSession {
-                        if let Some(ref tool_name) = tool {
-                            handle
-                                .session_grants
-                                .write()
-                                .await
-                                .insert(tool_name.clone(), true);
-                            info!(
-                                session_id = %sid,
-                                tool_name = %tool_name,
-                                "Cached AllowSession grant via tunnel"
-                            );
-                        }
-                    }
-
-                    input
-                } else {
-                    serde_json::Value::Object(serde_json::Map::default())
-                };
+                let (granted, original_input) =
+                    if let Some(handle) = self.relay.get_handle(&sid).await {
+                        handle
+                            .process_permission_response(&perm.request_id, decision)
+                            .await
+                    } else {
+                        let fallback_granted = matches!(
+                            decision,
+                            betcode_proto::v1::PermissionDecision::AllowOnce
+                                | betcode_proto::v1::PermissionDecision::AllowSession
+                        );
+                        (
+                            fallback_granted,
+                            serde_json::Value::Object(serde_json::Map::default()),
+                        )
+                    };
 
                 if let Err(e) = self
                     .relay
