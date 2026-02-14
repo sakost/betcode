@@ -31,6 +31,8 @@ jobs:
           components: clippy
       - uses: Swatinem/rust-cache@v2
       - uses: extractions/setup-just@v2
+      - name: Install protoc
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
       - run: just lint
 
   deny:
@@ -49,6 +51,8 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: cargo install cargo-machete
       - uses: extractions/setup-just@v2
+      - name: Install protoc
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
       - run: just machete
 
   duplicates:
