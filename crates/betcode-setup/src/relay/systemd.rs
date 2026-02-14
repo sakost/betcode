@@ -22,6 +22,14 @@ pub fn deploy(config: &RelaySetupConfig, is_update: bool) -> Result<()> {
     create_directories(config)?;
     write_env_file(config, is_update)?;
     write_systemd_unit(config)?;
+
+    // Stop the running service before overwriting the binary to avoid
+    // "Text file busy" (ETXTBSY) on Linux.
+    if is_update && super::validate::is_betcode_relay_active() {
+        tracing::info!("stopping betcode-relay before binary update");
+        run_cmd("stopping betcode-relay", "systemctl", &["stop", "betcode-relay"])?;
+    }
+
     install_relay_binary(config)?;
     setup_certbot(config, is_update)?;
     enable_and_start(is_update)?;

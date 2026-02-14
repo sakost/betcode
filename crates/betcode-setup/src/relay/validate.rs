@@ -10,7 +10,7 @@ const fn should_skip_port_check(is_update: bool, service_is_active: bool) -> boo
 }
 
 /// Check whether the betcode-relay systemd service is currently active.
-fn is_betcode_relay_active() -> bool {
+pub fn is_betcode_relay_active() -> bool {
     std::process::Command::new("systemctl")
         .args(["is-active", "--quiet", "betcode-relay"])
         .status()
