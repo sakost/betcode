@@ -7,7 +7,7 @@ use std::sync::Arc;
 
 use betcode_proto::v1::SessionGrantEntry;
 use tokio::sync::RwLock;
-use tracing::info;
+use tracing::{info, warn};
 
 /// Configuration for starting a relay session.
 #[derive(Debug, Clone)]
@@ -80,9 +80,16 @@ impl RelayHandle {
         let granted = is_granted(decision);
 
         let pending = self.pending_permissions.write().await.remove(request_id);
-        let (input, tool) = match pending {
-            Some(p) => (p.input, Some(p.tool_name)),
-            None => (serde_json::json!({}), None),
+        let (input, tool) = if let Some(p) = pending {
+            (p.input, Some(p.tool_name))
+        } else {
+            warn!(
+                session_id = %self.session_id,
+                request_id,
+                source,
+                "Permission response for unknown request_id (already handled or missing)"
+            );
+            (serde_json::json!({}), None)
         };
 
         // On AllowSession, cache the grant for this tool
@@ -117,19 +124,14 @@ impl RelayHandle {
             .collect()
     }
 
-    /// Clear session grants. If `tool_name` is empty, clears all.
-    /// Returns the tool names that were cleared.
-    pub async fn clear_grants(&self, tool_name: &str) -> Vec<String> {
+    /// Clear session grants. If `tool_name` is empty, clears all;
+    /// otherwise removes only the specified tool.
+    pub async fn clear_grants(&self, tool_name: &str) {
         let mut grants = self.session_grants.write().await;
         if tool_name.is_empty() {
-            let names: Vec<String> = grants.keys().cloned().collect();
             grants.clear();
-            drop(grants);
-            names
         } else {
             grants.remove(tool_name);
-            drop(grants);
-            vec![tool_name.to_string()]
         }
     }
 
@@ -140,13 +142,20 @@ impl RelayHandle {
 }
 
 /// Returns `true` if the given [`PermissionDecision`] grants the requested permission.
+///
+/// Exhaustive match ensures new proto variants cause a compile error rather than
+/// silently falling through.
 pub const fn is_granted(decision: betcode_proto::v1::PermissionDecision) -> bool {
-    matches!(
-        decision,
-        betcode_proto::v1::PermissionDecision::AllowOnce
-            | betcode_proto::v1::PermissionDecision::AllowSession
-            | betcode_proto::v1::PermissionDecision::AllowWithEdit
-    )
+    use betcode_proto::v1::PermissionDecision;
+    match decision {
+        PermissionDecision::AllowOnce
+        | PermissionDecision::AllowSession
+        | PermissionDecision::AllowWithEdit => true,
+        PermissionDecision::Deny
+        | PermissionDecision::DenyNoInterrupt
+        | PermissionDecision::DenyWithInterrupt
+        | PermissionDecision::Unspecified => false,
+    }
 }
 
 /// Errors from relay operations.
