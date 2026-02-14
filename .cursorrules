@@ -1,0 +1,53 @@
+# BetCode -- Cursor IDE Rules
+
+## Project
+
+BetCode is a Rust workspace (edition 2024) with 8 crates wrapping Claude Code CLI as a subprocess.
+Version: 0.1.0-alpha.1 (pre-release, Apache-2.0 license).
+
+## Workspace Structure
+
+crates/betcode-proto     - Protobuf codegen (tonic-build)
+crates/betcode-core      - Shared types, config parsing, errors
+crates/betcode-crypto    - mTLS certificate generation
+crates/betcode-daemon    - Daemon binary (subprocess manager, gRPC server)
+crates/betcode-cli       - CLI binary (clap + ratatui TUI)
+crates/betcode-relay     - Relay binary (gRPC router, JWT auth)
+crates/betcode-setup     - First-run setup wizard
+crates/betcode-releases  - Release artifact packaging
+
+## Code Conventions
+
+- No unwrap() in production code (denied by clippy)
+- No panic!, todo!, dbg! in production code
+- Clippy pedantic + nursery lints enabled
+- In tests: expect()/unwrap() are fine with granular #[allow(clippy::...)]
+- Error handling: thiserror for libraries, anyhow for binaries
+- Async: tokio (full features)
+- gRPC: tonic server/client, tonic-build for codegen
+- Storage: sqlx + SQLite (WAL mode)
+- Dependencies: define in root Cargo.toml [workspace.dependencies], reference with { workspace = true }
+
+## Build and Test
+
+cargo build --workspace          # Full build
+cargo test --workspace           # All tests
+just check                       # All quality gates
+just lint                        # Clippy strict
+just fmt                         # Auto-format
+cargo build -p betcode-proto     # Rebuild after .proto changes
+
+## Commit Messages
+
+Conventional Commits: type(scope): description
+Types: feat, fix, refactor, test, docs, ci, chore, style
+Scopes: daemon, relay, cli, proto, setup, releases, crypto, core
+
+## Architecture Docs
+
+docs/architecture/OVERVIEW.md    - System overview, C4 diagrams
+docs/architecture/DAEMON.md      - Daemon internals
+docs/architecture/PROTOCOL.md    - Protocol reference
+docs/architecture/ROADMAP.md     - Implementation plan
+docs/architecture/SECURITY.md    - Auth and security
+CONTRIBUTING.md                  - Code quality standards, PR rules

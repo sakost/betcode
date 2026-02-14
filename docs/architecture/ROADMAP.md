@@ -1,8 +1,7 @@
 # Implementation Roadmap
 
-**Version**: 0.2.0
-**Last Updated**: 2026-02-01
-**Status**: Design Phase
+**Version**: 0.1.0-alpha.1
+**Status**: Implemented
 **Approach**: Wrapper (Claude Code as subprocess, not reimplemented)
 
 ---
@@ -18,6 +17,29 @@ zero agent maintenance cost, small codebase (~10-15K LOC Rust).
 
 **Trade-offs**: Requires Claude Code installed, one OS process per session, cannot
 intercept tool-level behavior, no local-only model path through agent.
+
+---
+
+## Current Progress
+
+**v0.1.0-alpha.1**
+
+Phase 1 is complete. The foundation crates are implemented and passing CI:
+
+| Crate | Status | Description |
+|-------|--------|-------------|
+| betcode-proto | Done | Protobuf codegen, shared gRPC types |
+| betcode-core | Done | Config parsing, NDJSON types, shared errors |
+| betcode-crypto | Done | mTLS certificate generation and management |
+| betcode-daemon | Done | Subprocess manager, session store, gRPC server |
+| betcode-cli | Done | clap CLI, ratatui TUI, daemon connection |
+| betcode-relay | Done | gRPC router, JWT auth, message buffer |
+| betcode-setup | Done | First-run setup wizard |
+| betcode-releases | Done | Release artifact packaging |
+
+Additional crates beyond the original Phase 1 plan (betcode-crypto, betcode-setup, betcode-releases) were added during implementation.
+
+Phases 2-4 remain as future work.
 
 ---
 
@@ -162,7 +184,7 @@ construction. Every Claude Code update is automatically available to BetCode use
 
 | Metric | Value |
 |--------|-------|
-| Rust crates | 5 (proto, core, daemon, relay, cli) |
+| Rust crates | 8 (proto, core, crypto, daemon, cli, relay, setup, releases) |
 | Estimated Rust LOC | ~10,000-15,000 |
 | NDJSON + subprocess + bridge | ~1,800 LOC |
 | Agent fidelity risk | Zero (Claude Code handles it) |

@@ -1,7 +1,7 @@
 # SQLite Corruption Handling
 
-**Version**: 0.2.0
-**Last Updated**: 2026-02-03
+**Version**: 0.1.0-alpha.1
+**Last Updated**: 2026-02-14
 **Parent**: [FAILURE_MODES.md](./FAILURE_MODES.md)
 
 ---

@@ -1,8 +1,8 @@
 # BetCode Communication Protocols
 
-**Version**: 0.2.0
-**Last Updated**: 2026-02-01
-**Status**: Design Phase
+**Version**: 0.1.0-alpha.1
+**Last Updated**: 2026-02-14
+**Status**: Implemented
 
 ## Overview
 

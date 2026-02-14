@@ -38,6 +38,8 @@ the backend and the mobile app. Proto changes drive the versioning strategy:
 
 This ensures users are never stuck with an incompatible app/backend pair.
 
+See also: [CONTRIBUTING.md Proto Changes](../../CONTRIBUTING.md#proto-changes) for contributor workflow when modifying `.proto` files.
+
 ## Release Process
 
 ### Tooling

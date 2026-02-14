@@ -1,8 +1,8 @@
 # Executable Specification: Permission Bridge
 
-**Version**: 0.2.0
-**Last Updated**: 2026-02-03
-**Status**: Specification Phase
+**Version**: 0.1.0-alpha.1
+**Last Updated**: 2026-02-14
+**Status**: Specification
 
 ---
 

@@ -1,7 +1,7 @@
 # Database Schemas
 
-**Version**: 0.2.0
-**Last Updated**: 2026-02-01
+**Version**: 0.1.0-alpha.1
+**Last Updated**: 2026-02-14
 **Parent**: [OVERVIEW.md](./OVERVIEW.md)
 
 All three BetCode components use SQLite for persistence. The daemon and

@@ -1,7 +1,7 @@
 # Relay Configuration Reference
 
-**Version**: 0.2.0
-**Last Updated**: 2026-02-03
+**Version**: 0.1.0-alpha.1
+**Last Updated**: 2026-02-14
 **Parent**: [CONFIG_REFERENCE.md](./CONFIG_REFERENCE.md)
 
 Relay settings live in `$RELAY_CONFIG_DIR/settings.json` (typically `/etc/betcode-relay/settings.json`).

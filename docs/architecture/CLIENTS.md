@@ -1,8 +1,8 @@
 # Client Applications
 
-**Version**: 0.2.0
-**Last Updated**: 2026-02-01
-**Status**: Design Phase
+**Version**: 0.1.0-alpha.1
+**Last Updated**: 2026-02-14
+**Status**: Implemented
 
 BetCode ships two clients: a **Rust CLI** (ratatui TUI) and a **Flutter
 mobile/web app**. Both are thin presentation layers over gRPC.
@@ -141,7 +141,11 @@ Tools not in `--allowed-tools` are auto-denied in headless mode.
 
 ---
 
-## Flutter App (betcode_app)
+## Flutter App (betcode_app) -- Separate Repository
+
+The Flutter mobile app lives in its own repository. See the
+[betcode_app repo](https://github.com/sakost/betcode_app) for build instructions
+and its own `CLAUDE.md`.
 
 ### Directory Structure
 
@@ -150,24 +154,19 @@ betcode_app/
 ├── lib/
 │   ├── main.dart
 │   ├── app.dart
-│   ├── generated/                    # Protobuf generated code
+│   ├── generated/                    # Protobuf generated code (DO NOT EDIT)
 │   ├── core/
-│   │   ├── grpc/
-│   │   │   ├── client_manager.dart   # Channel lifecycle, reconnection
-│   │   │   ├── relay_client.dart     # Relay connection with JWT
-│   │   │   └── interceptors.dart     # JWT auth, logging, retry
-│   │   ├── sync/
-│   │   │   ├── sync_engine.dart      # Offline queue processor
-│   │   │   └── connectivity.dart     # Network state monitor
-│   │   ├── storage/
-│   │   │   ├── database.dart         # drift (SQLite) ORM
-│   │   │   └── secure_storage.dart   # Token/credential storage
-│   │   └── auth/
-│   │       └── auth_provider.dart    # JWT lifecycle
+│   │   ├── grpc/                     # Channel lifecycle, reconnection, interceptors
+│   │   ├── sync/                     # Offline queue processor, connectivity monitor
+│   │   ├── storage/                  # drift (SQLite) ORM, secure token storage
+│   │   ├── auth/                     # JWT lifecycle
+│   │   └── router.dart               # go_router navigation
 │   ├── features/
+│   │   ├── auth/                     # Authentication screens
 │   │   ├── conversation/             # Agent chat: streaming, tools, perms
 │   │   ├── machines/                 # Machine list, status, switch
 │   │   ├── worktrees/                # Worktree CRUD per machine
+│   │   ├── git_repos/                # Git repository browsing
 │   │   ├── gitlab/                   # Pipelines, MRs, issues
 │   │   ├── settings/                 # Permissions, MCP, models, relay
 │   │   └── sessions/                 # Session list, search, resume
@@ -180,15 +179,15 @@ betcode_app/
 
 ```yaml
 dependencies:
-  grpc: ^3.1.0              # gRPC client
-  protobuf: ^3.1.0          # Runtime
-  flutter_riverpod: ^2.0.0  # State management
-  drift: ^2.0.0             # SQLite ORM
-  flutter_secure_storage: ^9.0.0
-  connectivity_plus: ^6.0.0
-  flutter_markdown: ^0.7.0
-  flutter_highlight: ^0.8.0
-  go_router: ^14.0.0
+  grpc: ^5.1.0                    # gRPC client
+  protobuf: ^6.0.0                # Runtime
+  flutter_riverpod: ^3.2.1        # State management
+  drift: ^2.31.0                  # SQLite ORM
+  flutter_secure_storage: ^10.0.0
+  connectivity_plus: ^7.0.0
+  flutter_markdown_plus: ^1.0.7
+  flutter_highlight: ^0.7.0
+  go_router: ^17.1.0
 ```
 
 ### State Management (Riverpod)

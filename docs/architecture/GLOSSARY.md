@@ -1,7 +1,7 @@
 # BetCode Glossary
 
-**Version**: 0.2.0
-**Last Updated**: 2026-02-03
+**Version**: 0.1.0-alpha.1
+**Last Updated**: 2026-02-14
 
 This glossary defines BetCode-specific terminology to ensure consistent usage
 across all documentation.

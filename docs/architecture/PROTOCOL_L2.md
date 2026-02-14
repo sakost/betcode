@@ -1,7 +1,7 @@
 # Layer 2: BetCode gRPC API
 
-**Version**: 0.2.0
-**Last Updated**: 2026-02-01
+**Version**: 0.1.0-alpha.1
+**Last Updated**: 2026-02-14
 **Parent**: [PROTOCOL.md](./PROTOCOL.md)
 
 ## Overview
@@ -1198,7 +1198,7 @@ Daemon: SERVING (degraded)
 
 Degraded: Relay tunnel not connected. Remote access unavailable.
 Uptime: 2h 34m
-Version: 0.2.0
+Version: 0.1.0-alpha.1
 ```
 
 ---

@@ -1,7 +1,7 @@
 # BetCode Diagram Standards Guide
 
-**Version**: 0.2.0
-**Last Updated**: 2026-02-03
+**Version**: 0.1.0-alpha.1
+**Last Updated**: 2026-02-14
 **Status**: Active
 
 This guide establishes visual consistency across all BetCode architecture diagrams using Mermaid notation for GitHub-native rendering.

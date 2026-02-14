@@ -1,7 +1,7 @@
 # Daemon Diagrams (Mermaid)
 
 **Source**: DAEMON.md
-**Last Updated**: 2026-02-03
+**Last Updated**: 2026-02-14
 
 ---
 

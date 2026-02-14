@@ -1,7 +1,7 @@
 # Client Diagrams (Mermaid)
 
 **Source**: CLIENTS.md
-**Last Updated**: 2026-02-03
+**Last Updated**: 2026-02-14
 
 ---
 

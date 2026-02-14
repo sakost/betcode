@@ -1,8 +1,8 @@
 # Architecture Decision Records
 
-**Version**: 0.2.0
-**Last Updated**: 2026-02-03
-**Status**: Design Phase
+**Version**: 0.1.0-alpha.1
+**Last Updated**: 2026-02-14
+**Status**: Implemented
 
 This document indexes key architectural decisions for BetCode, synthesizing competing viewpoints into coherent policies. Each ADR follows the standard format: Context, Decision, Consequences, and Alternatives Considered.
 

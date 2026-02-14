@@ -1,8 +1,8 @@
 # BetCode Architecture Overview
 
-**Version**: 0.2.0
-**Last Updated**: 2026-02-01
-**Status**: Design Phase
+**Version**: 0.1.0-alpha.1
+**Last Updated**: 2026-02-14
+**Status**: Implemented
 
 ---
 
@@ -57,7 +57,8 @@ identically with BetCode.
                                           | TLS + JWT
                                 +---------+---------+
                                 |   betcode_app     |
-                                |  (Flutter mobile) |
+                                | (Flutter, separate|
+                                |       repo)       |
                                 +-------------------+
 ```
 
@@ -70,7 +71,7 @@ identically with BetCode.
 | **betcode-daemon** | Rust binary      | Spawns Claude Code subprocesses, bridges NDJSON to gRPC, multiplexes sessions, manages worktrees, serves local + tunnel |
 | **betcode-relay**  | Rust binary      | Public gRPC router, JWT + mTLS auth, routes to machines, buffers messages for offline daemons |
 | **betcode-cli**    | Rust binary      | ratatui TUI, connects via local socket or relay, renders streaming output, permission prompts |
-| **betcode_app**    | Flutter app      | Mobile/web client via relay, conversation UI, tool cards, permission dialogs, offline queue |
+| **betcode_app**    | Flutter app (separate repo) | Mobile/web client via relay, conversation UI, tool cards, permission dialogs, offline queue |
 | **SQLite (daemon)**| Embedded         | Sessions, messages, worktrees, permission grants        |
 | **SQLite (relay)** | Embedded         | Users, machines, certificates, message buffer           |
 | **SQLite (client)**| Embedded         | Offline queue, cached sessions, machine bookmarks       |
@@ -129,7 +130,7 @@ the stream-json format.
 ```
 betcode/
 ├── Cargo.toml                    # Workspace root
-├── proto/betcode/v1/             # Shared protobuf definitions
+├── proto/betcode/v1/             # Shared protobuf definitions (git submodule)
 │   ├── agent.proto               #   Core agent conversation service
 │   ├── machine.proto             #   Multi-machine management
 │   ├── worktree.proto            #   Git worktree management
@@ -139,6 +140,7 @@ betcode/
 ├── crates/
 │   ├── betcode-proto/            # Generated protobuf code (tonic-build)
 │   ├── betcode-core/             # Shared types, config parsing, errors
+│   ├── betcode-crypto/           # mTLS certificate generation and management
 │   ├── betcode-daemon/           # Daemon binary
 │   │   └── src/
 │   │       ├── subprocess/       #   Claude Code process mgmt + NDJSON protocol
@@ -147,11 +149,12 @@ betcode/
 │   │       ├── worktree/         #   Git worktree lifecycle
 │   │       ├── gitlab/           #   GitLab API client
 │   │       └── storage/          #   SQLite (sqlx)
+│   ├── betcode-cli/              # CLI client binary
+│   │   └── src/                  #   Commands, TUI (ratatui), connection
 │   ├── betcode-relay/            # Relay server binary
 │   │   └── src/                  #   Router, tunnel, auth, buffer, storage
-│   └── betcode-cli/              # CLI client binary
-│       └── src/                  #   Commands, TUI (ratatui), connection
-├── betcode_app/                  # Flutter mobile/web app
+│   ├── betcode-setup/            # First-run setup wizard
+│   └── betcode-releases/         # Release artifact packaging
 └── docs/architecture/            # Architecture documentation
 ```
 

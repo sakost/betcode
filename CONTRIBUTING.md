@@ -181,6 +181,8 @@ To regenerate after editing `.proto` files:
 cargo build -p betcode-proto
 ```
 
+See also: [Release Policy](docs/policies/release-policy.md) for versioning rules and the breaking change release process.
+
 ## Reporting Issues
 
 - **Bug reports**: use the Bug Report issue template

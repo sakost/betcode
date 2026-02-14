@@ -1,8 +1,8 @@
 # BetCode Configuration Reference
 
-**Version**: 0.2.0
-**Last Updated**: 2026-02-03
-**Status**: Design Phase
+**Version**: 0.1.0-alpha.1
+**Last Updated**: 2026-02-14
+**Status**: Implemented
 
 This document provides the authoritative reference for all BetCode configuration
 parameters, including defaults, valid ranges, environment variable mappings, and
@@ -67,26 +67,9 @@ Configuration is split across focused documents:
 
 ---
 
-## Quick Reference: Key Parameters
+## Quick Reference
 
-### Daemon (Most Common)
-
-| Parameter | Default | Range | Env Override |
-|-----------|---------|-------|--------------|
-| `daemon.max_payload_bytes` | 10 MB | 1-100 MB | `BETCODE_MAX_PAYLOAD_BYTES` |
-| `daemon.subprocess.max_concurrent` | 5 | 1-20 | `BETCODE_MAX_SUBPROCESSES` |
-| `daemon.subagent.max_concurrent` | 5 | 1-20 | `BETCODE_MAX_SUBAGENTS` |
-| `daemon.permission.request_timeout_seconds` | 60 | 10-300 | - |
-| `daemon.relay.url` | null | - | `BETCODE_RELAY_URL` |
-
-### Relay (Most Common)
-
-| Parameter | Default | Range | Env Override |
-|-----------|---------|-------|--------------|
-| `relay.auth.access_token_ttl_seconds` | 900 | 300-3600 | - |
-| `relay.buffer.ttl_hours` | 168 | 1-720 | - |
-| `relay.buffer.max_per_machine` | 1000 | 100-10000 | - |
-| `relay.rate_limit.new_session_per_hour` | 20 | 5-200 | - |
+For parameter details, defaults, ranges, and environment variable overrides, see the individual configuration documents listed in the [Document Index](#document-index) above.
 
 ---
 
