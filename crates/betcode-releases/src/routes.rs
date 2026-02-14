@@ -14,6 +14,16 @@ pub struct AppState {
     pub base_url: String,
 }
 
+/// Build the application router with all routes.
+pub fn build_router(state: AppState) -> axum::Router {
+    axum::Router::new()
+        .route("/", axum::routing::get(root))
+        .route("/install.sh", axum::routing::get(install_sh))
+        .route("/install.ps1", axum::routing::get(install_ps1))
+        .route("/{binary}", axum::routing::get(binary_download))
+        .with_state(state)
+}
+
 const INSTALL_SH: &str = include_str!("scripts/install.sh");
 const INSTALL_PS1: &str = include_str!("scripts/install.ps1");
 
