@@ -3,6 +3,9 @@ use std::net::SocketAddr;
 use clap::Parser;
 use tracing::info;
 
+mod platform;
+mod registry;
+
 #[derive(Parser)]
 struct Args {
     /// Listen address
