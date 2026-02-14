@@ -1022,6 +1022,8 @@ impl TunnelRequestHandler {
                         )
                     };
 
+                info!(session_id = %sid, request_id = %perm.request_id, granted, ?decision, "Permission via tunnel");
+
                 if let Err(e) = self
                     .relay
                     .send_permission_response(&sid, &perm.request_id, granted, &original_input)
