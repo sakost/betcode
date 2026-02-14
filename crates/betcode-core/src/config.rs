@@ -111,11 +111,11 @@ pub fn load_config(project_dir: Option<&Path>) -> Result<Config> {
     let mut config = Config::default();
 
     // Load global config
-    if let Some(global_path) = global_config_path() {
-        if global_path.exists() {
-            let global = load_config_file(&global_path)?;
-            merge_config(&mut config, global);
-        }
+    if let Some(global_path) = global_config_path()
+        && global_path.exists()
+    {
+        let global = load_config_file(&global_path)?;
+        merge_config(&mut config, global);
     }
 
     // Load project config
@@ -223,15 +223,15 @@ fn merge_config(base: &mut Config, overlay: Config) {
 }
 
 fn apply_env_overrides(config: &mut Config) {
-    if let Ok(val) = std::env::var("BETCODE_MAX_SUBPROCESSES") {
-        if let Ok(n) = val.parse() {
-            config.daemon.max_subprocesses = n;
-        }
+    if let Ok(val) = std::env::var("BETCODE_MAX_SUBPROCESSES")
+        && let Ok(n) = val.parse()
+    {
+        config.daemon.max_subprocesses = n;
     }
-    if let Ok(val) = std::env::var("BETCODE_PORT") {
-        if let Ok(n) = val.parse() {
-            config.daemon.port = n;
-        }
+    if let Ok(val) = std::env::var("BETCODE_PORT")
+        && let Ok(n) = val.parse()
+    {
+        config.daemon.port = n;
     }
     if let Ok(val) = std::env::var("BETCODE_LOG_LEVEL") {
         config.daemon.log_level = val;

@@ -7,7 +7,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use tokio::sync::{broadcast, mpsc, RwLock};
+use tokio::sync::{RwLock, broadcast, mpsc};
 use tracing::{debug, info, warn};
 
 use betcode_proto::v1::AgentEvent;
@@ -99,14 +99,14 @@ impl SessionMultiplexer {
     pub async fn unsubscribe(&self, session_id: &str, client_id: &str) {
         let mut sessions = self.sessions.write().await;
 
-        if let Some(session) = sessions.get_mut(session_id) {
-            if session.remove_client(client_id) {
-                info!(session_id, client_id, "Client unsubscribed");
+        if let Some(session) = sessions.get_mut(session_id)
+            && session.remove_client(client_id)
+        {
+            info!(session_id, client_id, "Client unsubscribed");
 
-                if session.is_empty() {
-                    debug!(session_id, "Removing empty session");
-                    sessions.remove(session_id);
-                }
+            if session.is_empty() {
+                debug!(session_id, "Removing empty session");
+                sessions.remove(session_id);
             }
         }
     }
@@ -163,14 +163,14 @@ impl SessionMultiplexer {
     pub async fn release_input_lock(&self, session_id: &str, client_id: &str) {
         let mut sessions = self.sessions.write().await;
 
-        if let Some(session) = sessions.get_mut(session_id) {
-            if session.input_lock_holder.as_deref() == Some(client_id) {
-                session.input_lock_holder = None;
-                if let Some(client) = session.clients.get_mut(client_id) {
-                    client.has_input_lock = false;
-                }
-                info!(session_id, client_id, "Input lock released");
+        if let Some(session) = sessions.get_mut(session_id)
+            && session.input_lock_holder.as_deref() == Some(client_id)
+        {
+            session.input_lock_holder = None;
+            if let Some(client) = session.clients.get_mut(client_id) {
+                client.has_input_lock = false;
             }
+            info!(session_id, client_id, "Input lock released");
         }
     }
 
@@ -193,10 +193,10 @@ impl SessionMultiplexer {
     pub async fn heartbeat(&self, session_id: &str, client_id: &str) {
         let mut sessions = self.sessions.write().await;
 
-        if let Some(session) = sessions.get_mut(session_id) {
-            if let Some(client) = session.clients.get_mut(client_id) {
-                client.last_heartbeat = std::time::Instant::now();
-            }
+        if let Some(session) = sessions.get_mut(session_id)
+            && let Some(client) = session.clients.get_mut(client_id)
+        {
+            client.last_heartbeat = std::time::Instant::now();
         }
     }
 

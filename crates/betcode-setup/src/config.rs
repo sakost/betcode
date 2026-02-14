@@ -2,7 +2,7 @@ use std::fmt;
 use std::net::SocketAddr;
 use std::path::PathBuf;
 
-use anyhow::{bail, Result};
+use anyhow::{Result, bail};
 
 /// Deployment mode for the relay.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

@@ -7,9 +7,9 @@ use tonic::{Request, Response, Status};
 use tracing::instrument;
 
 use betcode_proto::v1::{
-    config_service_server::ConfigService, DaemonSettings, GetPermissionsRequest,
-    GetSettingsRequest, ListMcpServersRequest, ListMcpServersResponse, PermissionRules,
-    PermissionSettings, SessionSettings, Settings, UpdateSettingsRequest,
+    DaemonSettings, GetPermissionsRequest, GetSettingsRequest, ListMcpServersRequest,
+    ListMcpServersResponse, PermissionRules, PermissionSettings, SessionSettings, Settings,
+    UpdateSettingsRequest, config_service_server::ConfigService,
 };
 
 use super::config::ServerConfig;

@@ -4,8 +4,8 @@
 
 use std::io::{self, Write};
 
-use tonic::transport::Channel;
 use tonic::Request;
+use tonic::transport::Channel;
 
 use betcode_proto::v1::machine_service_client::MachineServiceClient;
 use betcode_proto::v1::{

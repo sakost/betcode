@@ -14,8 +14,8 @@ use tokio::sync::RwLock;
 use tokio_stream::StreamExt;
 
 use betcode_core::commands::discover_user_commands;
-use betcode_daemon::commands::service_executor::ServiceExecutor;
 use betcode_daemon::commands::CommandRegistry;
+use betcode_daemon::commands::service_executor::ServiceExecutor;
 use betcode_daemon::completion::agent_lister::AgentLister;
 use betcode_daemon::completion::file_index::FileIndex;
 use betcode_daemon::server::command_svc::CommandServiceImpl;

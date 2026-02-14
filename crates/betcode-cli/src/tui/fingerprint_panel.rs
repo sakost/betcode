@@ -4,7 +4,7 @@
 //! connecting via relay. Supports TOFU (trust on first use) and explicit
 //! verification flows.
 
-use betcode_crypto::{fingerprint_randomart, format_fingerprint_display, FingerprintCheck};
+use betcode_crypto::{FingerprintCheck, fingerprint_randomart, format_fingerprint_display};
 
 /// State for the fingerprint verification prompt.
 #[derive(Debug, Clone)]

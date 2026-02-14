@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use prost::Message;
-use tokio::sync::{mpsc, RwLock};
+use tokio::sync::{RwLock, mpsc};
 use tracing::{debug, error, info, warn};
 
 use tokio_stream::StreamExt as _;
@@ -34,7 +34,7 @@ use betcode_proto::v1::{
 
 use betcode_crypto::{CryptoSession, IdentityKeyPair, KeyExchangeState};
 
-use crate::relay::{is_granted, SessionRelay};
+use crate::relay::{SessionRelay, is_granted};
 use crate::server::{
     CommandServiceImpl, ConfigServiceImpl, GitLabServiceImpl, GitRepoServiceImpl,
     WorktreeServiceImpl,
@@ -52,7 +52,7 @@ pub use betcode_proto::methods::{
     METHOD_GET_PLUGIN_STATUS, METHOD_GET_REPO, METHOD_GET_SETTINGS, METHOD_GET_WORKTREE,
     METHOD_LIST_AGENTS, METHOD_LIST_ISSUES, METHOD_LIST_MCP_SERVERS, METHOD_LIST_MERGE_REQUESTS,
     METHOD_LIST_PATH, METHOD_LIST_PIPELINES, METHOD_LIST_PLUGINS, METHOD_LIST_REPOS,
-    METHOD_LIST_SESSIONS, METHOD_LIST_SESSION_GRANTS, METHOD_LIST_WORKTREES, METHOD_REGISTER_REPO,
+    METHOD_LIST_SESSION_GRANTS, METHOD_LIST_SESSIONS, METHOD_LIST_WORKTREES, METHOD_REGISTER_REPO,
     METHOD_REMOVE_PLUGIN, METHOD_REMOVE_WORKTREE, METHOD_RENAME_SESSION, METHOD_REQUEST_INPUT_LOCK,
     METHOD_RESUME_SESSION, METHOD_SCAN_REPOS, METHOD_SET_SESSION_GRANT, METHOD_UNREGISTER_REPO,
     METHOD_UPDATE_REPO, METHOD_UPDATE_SETTINGS,
@@ -98,7 +98,7 @@ macro_rules! dispatch_rpc {
                     $request_id,
                     TunnelErrorCode::Internal,
                     &format!("Decode error: {e}"),
-                )]
+                )];
             }
         };
         match $svc.$method(Request::new(req)).await {
@@ -333,7 +333,7 @@ impl TunnelRequestHandler {
                         &request_id,
                         TunnelErrorCode::Internal,
                         &e,
-                    )]
+                    )];
                 }
             },
             None => Vec::new(),
@@ -478,7 +478,7 @@ impl TunnelRequestHandler {
                     request_id,
                     TunnelErrorCode::Internal,
                     &format!("Decode error: {e}"),
-                )]
+                )];
             }
         };
         let working_dir = if req.working_directory.is_empty() {
@@ -532,7 +532,7 @@ impl TunnelRequestHandler {
                     request_id,
                     TunnelErrorCode::Internal,
                     &format!("Decode error: {e}"),
-                )]
+                )];
             }
         };
         let sid = &req.session_id;
@@ -544,7 +544,7 @@ impl TunnelRequestHandler {
                     request_id,
                     TunnelErrorCode::Internal,
                     &e.to_string(),
-                )]
+                )];
             }
         };
         if messages_before == 0 {
@@ -568,7 +568,7 @@ impl TunnelRequestHandler {
                     request_id,
                     TunnelErrorCode::Internal,
                     &e.to_string(),
-                )]
+                )];
             }
         };
         let keep_count = (messages_before / 2)
@@ -596,7 +596,7 @@ impl TunnelRequestHandler {
                     request_id,
                     TunnelErrorCode::Internal,
                     &e.to_string(),
-                )]
+                )];
             }
         };
         if let Err(e) = self.db.update_compaction_sequence(sid, cutoff).await {
@@ -634,7 +634,7 @@ impl TunnelRequestHandler {
                     request_id,
                     TunnelErrorCode::Internal,
                     &format!("Decode error: {e}"),
-                )]
+                )];
             }
         };
         let was_active = self
@@ -665,7 +665,7 @@ impl TunnelRequestHandler {
                     request_id,
                     TunnelErrorCode::Internal,
                     &format!("Decode error: {e}"),
-                )]
+                )];
             }
         };
         let client_id = generate_tunnel_client_id();
@@ -706,7 +706,7 @@ impl TunnelRequestHandler {
                     request_id,
                     TunnelErrorCode::Internal,
                     &format!("Decode error: {e}"),
-                )]
+                )];
             }
         };
         let Some(handle) = self.relay.get_handle(&req.session_id).await else {
@@ -740,7 +740,7 @@ impl TunnelRequestHandler {
                     request_id,
                     TunnelErrorCode::Internal,
                     &format!("Decode error: {e}"),
-                )]
+                )];
             }
         };
         let Some(handle) = self.relay.get_handle(&req.session_id).await else {
@@ -775,7 +775,7 @@ impl TunnelRequestHandler {
                     request_id,
                     TunnelErrorCode::Internal,
                     &format!("Decode error: {e}"),
-                )]
+                )];
             }
         };
         if req.tool_name.is_empty() {
@@ -813,7 +813,7 @@ impl TunnelRequestHandler {
                     request_id,
                     TunnelErrorCode::Internal,
                     &format!("Decode error: {e}"),
-                )]
+                )];
             }
         };
         match self
@@ -1425,7 +1425,7 @@ impl TunnelRequestHandler {
                     request_id,
                     TunnelErrorCode::Internal,
                     &format!("Decode error: {e}"),
-                )]
+                )];
             }
         };
 
@@ -1442,7 +1442,7 @@ impl TunnelRequestHandler {
                     request_id,
                     TunnelErrorCode::Internal,
                     &format!("Resume failed: {e}"),
-                )]
+                )];
             }
         };
 

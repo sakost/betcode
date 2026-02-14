@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use tonic::transport::{Identity, ServerTlsConfig};
 use tracing::info;
 
-use super::certs::{generate_dev_bundle, write_dev_certs, CertError};
+use super::certs::{CertError, generate_dev_bundle, write_dev_certs};
 
 /// TLS configuration for the relay server.
 #[derive(Debug, Clone)]

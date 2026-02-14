@@ -10,8 +10,8 @@ use std::sync::Arc;
 
 use prost::Message;
 use tokio::sync::mpsc;
-use tokio_stream::wrappers::ReceiverStream;
 use tokio_stream::StreamExt;
+use tokio_stream::wrappers::ReceiverStream;
 use tonic::{Request, Response, Status, Streaming};
 use tracing::{info, instrument, warn};
 
@@ -27,7 +27,7 @@ use betcode_proto::v1::{
 
 use betcode_proto::methods::{
     METHOD_CANCEL_TURN, METHOD_CLEAR_SESSION_GRANTS, METHOD_COMPACT_SESSION, METHOD_CONVERSE,
-    METHOD_EXCHANGE_KEYS, METHOD_LIST_SESSIONS, METHOD_LIST_SESSION_GRANTS, METHOD_RENAME_SESSION,
+    METHOD_EXCHANGE_KEYS, METHOD_LIST_SESSION_GRANTS, METHOD_LIST_SESSIONS, METHOD_RENAME_SESSION,
     METHOD_REQUEST_INPUT_LOCK, METHOD_RESUME_SESSION, METHOD_SET_SESSION_GRANT,
 };
 

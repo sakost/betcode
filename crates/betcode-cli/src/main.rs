@@ -162,7 +162,10 @@ async fn main() -> anyhow::Result<()> {
         if cli_config.auth.is_none() {
             anyhow::bail!(
                 "Relay URL set but not logged in. Run: betcode --relay {} auth login -u <user> -p <pass>",
-                cli_config.relay_url.as_ref().expect("relay_url checked above")
+                cli_config
+                    .relay_url
+                    .as_ref()
+                    .expect("relay_url checked above")
             );
         }
         if cli_config.active_machine.is_none() {

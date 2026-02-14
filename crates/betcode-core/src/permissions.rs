@@ -145,10 +145,10 @@ fn matches_path(pattern: &str, path: &Path) -> bool {
     if let Some(prefix) = pattern.strip_suffix("/**") {
         return path_str.starts_with(prefix);
     }
-    if let Some(prefix) = pattern.strip_suffix("/*") {
-        if let Some(parent) = path.parent() {
-            return parent.to_string_lossy() == prefix;
-        }
+    if let Some(prefix) = pattern.strip_suffix("/*")
+        && let Some(parent) = path.parent()
+    {
+        return parent.to_string_lossy() == prefix;
     }
     path_str == pattern
 }

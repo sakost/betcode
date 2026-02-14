@@ -10,10 +10,10 @@
 mod tests {
     use crate::app::{App, AppMode, PendingPermission, PendingUserQuestion, QuestionOptionDisplay};
     use crate::ui::draw;
+    use ratatui::Terminal;
     use ratatui::backend::TestBackend;
     use ratatui::text::{Line, Span};
     use ratatui::widgets::{Paragraph, Wrap};
-    use ratatui::Terminal;
 
     /// Create a `TestBackend` + `Terminal` of the given size and draw the app once.
     fn draw_app(width: u16, height: u16, app: &mut App) -> Terminal<TestBackend> {

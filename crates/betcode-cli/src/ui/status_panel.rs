@@ -3,11 +3,11 @@
 //! Renders a centered bordered panel showing session diagnostics:
 //! working directory, session ID, connection type, model, agents, etc.
 
+use ratatui::Frame;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph};
-use ratatui::Frame;
 
 /// Information displayed in the session status panel.
 #[derive(Debug, Clone)]
@@ -117,8 +117,8 @@ fn centered_rect(width: u16, height: u16, area: Rect) -> Rect {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ratatui::backend::TestBackend;
     use ratatui::Terminal;
+    use ratatui::backend::TestBackend;
 
     /// Draw the status panel with the given info on a 60x20 test terminal.
     /// Panics if rendering fails.

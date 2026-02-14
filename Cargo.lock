@@ -269,7 +269,7 @@ checksum = "2af50177e190e07a26ab74f8b1efbfe2ef87da2116221318cb1c2e82baf7de06"
 
 [[package]]
 name = "betcode-cli"
-version = "0.1.0"
+version = "0.1.0-alpha.1"
 dependencies = [
  "anyhow",
  "betcode-core",
@@ -295,7 +295,7 @@ dependencies = [
 
 [[package]]
 name = "betcode-core"
-version = "0.1.0"
+version = "0.1.0-alpha.1"
 dependencies = [
  "cargo-husky",
  "nucleo-matcher",
@@ -312,7 +312,7 @@ dependencies = [
 
 [[package]]
 name = "betcode-crypto"
-version = "0.1.0"
+version = "0.1.0-alpha.1"
 dependencies = [
  "chacha20poly1305",
  "hex",
@@ -329,7 +329,7 @@ dependencies = [
 
 [[package]]
 name = "betcode-daemon"
-version = "0.1.0"
+version = "0.1.0-alpha.1"
 dependencies = [
  "anyhow",
  "async-stream",
@@ -362,7 +362,7 @@ dependencies = [
 
 [[package]]
 name = "betcode-proto"
-version = "0.1.0"
+version = "0.1.0-alpha.1"
 dependencies = [
  "prost",
  "prost-types",
@@ -374,7 +374,7 @@ dependencies = [
 
 [[package]]
 name = "betcode-relay"
-version = "0.1.0"
+version = "0.1.0-alpha.1"
 dependencies = [
  "anyhow",
  "argon2",
@@ -402,7 +402,7 @@ dependencies = [
 
 [[package]]
 name = "betcode-releases"
-version = "0.1.0"
+version = "0.1.0-alpha.1"
 dependencies = [
  "anyhow",
  "axum",
@@ -415,7 +415,7 @@ dependencies = [
 
 [[package]]
 name = "betcode-setup"
-version = "0.1.0"
+version = "0.1.0-alpha.1"
 dependencies = [
  "anyhow",
  "clap",

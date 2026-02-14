@@ -8,10 +8,10 @@
 //! ```
 
 use std::collections::{HashMap, HashSet};
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
-use tokio::sync::{mpsc, RwLock};
+use tokio::sync::{RwLock, mpsc};
 use tracing::{debug, info, warn};
 
 use betcode_core::ndjson;
@@ -378,56 +378,53 @@ fn spawn_stdout_pipeline(ctx: StdoutPipelineContext) {
                 // Transfer pending question inputs from bridge → shared map
                 if let Some(betcode_proto::v1::agent_event::Event::UserQuestion(ref q)) =
                     event.event
+                    && let Some(input) = bridge.take_question_input(&q.question_id)
                 {
-                    if let Some(input) = bridge.take_question_input(&q.question_id) {
-                        pending_question_inputs
-                            .write()
-                            .await
-                            .insert(q.question_id.clone(), input);
-                    }
+                    pending_question_inputs
+                        .write()
+                        .await
+                        .insert(q.question_id.clone(), input);
                 }
                 // Transfer pending permission inputs from bridge → shared map,
                 // or auto-respond if a session grant exists for this tool.
                 if let Some(betcode_proto::v1::agent_event::Event::PermissionRequest(ref p)) =
                     event.event
+                    && let Some(input) = bridge.take_permission_input(&p.request_id)
                 {
-                    if let Some(input) = bridge.take_permission_input(&p.request_id) {
-                        // Check session_grants for a cached decision on this tool:
-                        //   Some(true)  → auto-allow (skip prompt, grant immediately)
-                        //   Some(false) → auto-deny  (skip prompt, deny immediately)
-                        //   None        → no cached decision, forward to client for user prompt
-                        let grant = session_grants.read().await.get(&p.tool_name).copied();
-                        if let Some(granted) = grant {
-                            // Auto-respond: send permission response directly to stdin
-                            let line =
-                                build_permission_response_json(&p.request_id, granted, &input);
-                            if let Err(e) = stdin_tx.send(line).await {
-                                warn!(
-                                    session_id = %sid,
-                                    request_id = %p.request_id,
-                                    error = %e,
-                                    "Failed to send auto-permission response"
-                                );
-                            } else {
-                                debug!(
-                                    session_id = %sid,
-                                    request_id = %p.request_id,
-                                    tool_name = %p.tool_name,
-                                    granted,
-                                    "Auto-responded to permission request from session grant"
-                                );
-                            }
-                            auto_responded_requests.insert(p.request_id.clone());
+                    // Check session_grants for a cached decision on this tool:
+                    //   Some(true)  → auto-allow (skip prompt, grant immediately)
+                    //   Some(false) → auto-deny  (skip prompt, deny immediately)
+                    //   None        → no cached decision, forward to client for user prompt
+                    let grant = session_grants.read().await.get(&p.tool_name).copied();
+                    if let Some(granted) = grant {
+                        // Auto-respond: send permission response directly to stdin
+                        let line = build_permission_response_json(&p.request_id, granted, &input);
+                        if let Err(e) = stdin_tx.send(line).await {
+                            warn!(
+                                session_id = %sid,
+                                request_id = %p.request_id,
+                                error = %e,
+                                "Failed to send auto-permission response"
+                            );
                         } else {
-                            // No grant — store for handler to process
-                            pending_permissions.write().await.insert(
-                                p.request_id.clone(),
-                                super::types::PendingPermission {
-                                    input,
-                                    tool_name: p.tool_name.clone(),
-                                },
+                            debug!(
+                                session_id = %sid,
+                                request_id = %p.request_id,
+                                tool_name = %p.tool_name,
+                                granted,
+                                "Auto-responded to permission request from session grant"
                             );
                         }
+                        auto_responded_requests.insert(p.request_id.clone());
+                    } else {
+                        // No grant — store for handler to process
+                        pending_permissions.write().await.insert(
+                            p.request_id.clone(),
+                            super::types::PendingPermission {
+                                input,
+                                tool_name: p.tool_name.clone(),
+                            },
+                        );
                     }
                 }
             }
@@ -436,20 +433,19 @@ fn spawn_stdout_pipeline(ctx: StdoutPipelineContext) {
                 // Skip forwarding auto-responded permission requests to the client
                 if let Some(betcode_proto::v1::agent_event::Event::PermissionRequest(ref p)) =
                     event.event
+                    && auto_responded_requests.contains(&p.request_id)
                 {
-                    if auto_responded_requests.contains(&p.request_id) {
-                        // Still store the event for replay, but don't forward to client
-                        if let Err(e) = store_event(&db, &sid, &event).await {
-                            warn!(session_id = %sid, error = %e, "Failed to store auto-responded event");
-                        }
-                        continue;
+                    // Still store the event for replay, but don't forward to client
+                    if let Err(e) = store_event(&db, &sid, &event).await {
+                        warn!(session_id = %sid, error = %e, "Failed to store auto-responded event");
                     }
+                    continue;
                 }
                 event_count += 1;
 
                 // Update usage stats in DB when we get a UsageReport
-                if let Some(betcode_proto::v1::agent_event::Event::Usage(ref usage)) = event.event {
-                    if let Err(e) = db
+                if let Some(betcode_proto::v1::agent_event::Event::Usage(ref usage)) = event.event
+                    && let Err(e) = db
                         .update_session_usage(
                             &sid,
                             i64::from(usage.input_tokens),
@@ -457,16 +453,15 @@ fn spawn_stdout_pipeline(ctx: StdoutPipelineContext) {
                             usage.cost_usd,
                         )
                         .await
-                    {
-                        warn!(session_id = %sid, error = %e, "Failed to update usage");
-                    }
+                {
+                    warn!(session_id = %sid, error = %e, "Failed to update usage");
                 }
 
                 // Track if we received a session error (e.g. resume failure)
-                if let Some(betcode_proto::v1::agent_event::Event::Error(ref err)) = event.event {
-                    if err.code == "session_error" {
-                        had_session_error = true;
-                    }
+                if let Some(betcode_proto::v1::agent_event::Event::Error(ref err)) = event.event
+                    && err.code == "session_error"
+                {
+                    had_session_error = true;
                 }
 
                 if let Err(e) = store_event(&db, &sid, &event).await {
@@ -495,13 +490,12 @@ fn spawn_stdout_pipeline(ctx: StdoutPipelineContext) {
                         warn!(session_id = %sid, error = %e, "Failed to clear claude_session_id");
                     }
                 } else {
-                    if let Some(handle) = sessions.write().await.get_mut(&sid) {
-                        if let Err(e) = subprocess_manager
+                    if let Some(handle) = sessions.write().await.get_mut(&sid)
+                        && let Err(e) = subprocess_manager
                             .set_session_id(&handle.process_id, info.session_id.clone())
                             .await
-                        {
-                            warn!(session_id = %sid, error = %e, "Failed to set subprocess session ID");
-                        }
+                    {
+                        warn!(session_id = %sid, error = %e, "Failed to set subprocess session ID");
                     }
                     // Persist Claude session ID for future resume operations
                     if let Err(e) = db.update_claude_session_id(&sid, &info.session_id).await {
@@ -536,13 +530,12 @@ fn spawn_stdout_pipeline(ctx: StdoutPipelineContext) {
         // Only update DB status if the session is still in the active map
         // (cancel_session removes it and updates status itself)
         let was_active = sessions.write().await.remove(&sid).is_some();
-        if was_active {
-            if let Err(e) = db
+        if was_active
+            && let Err(e) = db
                 .update_session_status(&sid, crate::storage::SessionStatus::Idle)
                 .await
-            {
-                warn!(session_id = %sid, error = %e, "Failed to mark session idle");
-            }
+        {
+            warn!(session_id = %sid, error = %e, "Failed to mark session idle");
         }
     });
 }

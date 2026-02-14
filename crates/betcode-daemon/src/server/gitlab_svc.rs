@@ -8,11 +8,11 @@ use tonic::{Request, Response, Status};
 use tracing::{info, instrument};
 
 use betcode_proto::v1::{
-    git_lab_service_server::GitLabService, GetIssueRequest, GetIssueResponse,
-    GetMergeRequestRequest, GetMergeRequestResponse, GetPipelineRequest, GetPipelineResponse,
-    IssueState, ListIssuesRequest, ListIssuesResponse, ListMergeRequestsRequest,
-    ListMergeRequestsResponse, ListPipelinesRequest, ListPipelinesResponse, MergeRequestState,
-    PipelineStatus,
+    GetIssueRequest, GetIssueResponse, GetMergeRequestRequest, GetMergeRequestResponse,
+    GetPipelineRequest, GetPipelineResponse, IssueState, ListIssuesRequest, ListIssuesResponse,
+    ListMergeRequestsRequest, ListMergeRequestsResponse, ListPipelinesRequest,
+    ListPipelinesResponse, MergeRequestState, PipelineStatus,
+    git_lab_service_server::GitLabService,
 };
 
 use super::gitlab_convert::{

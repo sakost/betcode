@@ -1,0 +1,83 @@
+[workspace]
+publish = false
+git_release_enable = true
+git_tag_enable = true
+dependencies_update = true
+changelog_update = true
+
+[changelog]
+header = """# Changelog
+
+All notable changes to this project will be documented in this file.
+
+The format is based on [Keep a Changelog](https://keepachangelog.com/),
+and this project adheres to [Semantic Versioning](https://semver.org/).
+
+"""
+trim = true
+protect_breaking_commits = true
+sort_commits = "newest"
+
+[[changelog.commit_parsers]]
+message = "^feat"
+group = "Added"
+
+[[changelog.commit_parsers]]
+message = "^fix"
+group = "Fixed"
+
+[[changelog.commit_parsers]]
+message = "^refactor"
+group = "Changed"
+
+[[changelog.commit_parsers]]
+message = "^docs"
+group = "Documentation"
+
+[[changelog.commit_parsers]]
+message = "^ci"
+group = "CI"
+
+[[changelog.commit_parsers]]
+message = "^chore"
+group = "Maintenance"
+
+[[changelog.commit_parsers]]
+message = "^style"
+group = "Style"
+
+[[changelog.commit_parsers]]
+message = "^test"
+group = "Testing"
+
+[[package]]
+name = "betcode-proto"
+version_group = "betcode"
+
+[[package]]
+name = "betcode-core"
+version_group = "betcode"
+
+[[package]]
+name = "betcode-crypto"
+version_group = "betcode"
+
+[[package]]
+name = "betcode-daemon"
+version_group = "betcode"
+
+[[package]]
+name = "betcode-cli"
+version_group = "betcode"
+
+[[package]]
+name = "betcode-relay"
+version_group = "betcode"
+
+[[package]]
+name = "betcode-setup"
+version_group = "betcode"
+
+[[package]]
+name = "betcode-releases"
+version_group = "betcode"

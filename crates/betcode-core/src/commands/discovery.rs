@@ -59,16 +59,16 @@ pub fn discover_user_commands(working_dir: &Path) -> Vec<CommandEntry> {
     let mut commands = Vec::new();
     for entry in entries.flatten() {
         let path = entry.path();
-        if path.extension().and_then(|e| e.to_str()) == Some("md") {
-            if let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
-                commands.push(CommandEntry::new(
-                    stem,
-                    &format!("User command: {stem}"),
-                    CommandCategory::ClaudeCode,
-                    ExecutionMode::Passthrough,
-                    "user",
-                ));
-            }
+        if path.extension().and_then(|e| e.to_str()) == Some("md")
+            && let Some(stem) = path.file_stem().and_then(|s| s.to_str())
+        {
+            commands.push(CommandEntry::new(
+                stem,
+                &format!("User command: {stem}"),
+                CommandCategory::ClaudeCode,
+                ExecutionMode::Passthrough,
+                "user",
+            ));
         }
     }
     commands
@@ -87,10 +87,10 @@ pub fn discover_agents(working_dir: &Path) -> Vec<String> {
     let mut agents = Vec::new();
     for entry in entries.flatten() {
         let path = entry.path();
-        if path.extension().and_then(|e| e.to_str()) == Some("md") {
-            if let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
-                agents.push(stem.to_string());
-            }
+        if path.extension().and_then(|e| e.to_str()) == Some("md")
+            && let Some(stem) = path.file_stem().and_then(|s| s.to_str())
+        {
+            agents.push(stem.to_string());
         }
     }
     agents

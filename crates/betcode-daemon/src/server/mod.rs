@@ -42,8 +42,8 @@ use betcode_proto::v1::git_repo_service_server::GitRepoServiceServer;
 use betcode_proto::v1::health_server::HealthServer;
 use betcode_proto::v1::worktree_service_server::WorktreeServiceServer;
 
-use crate::commands::service_executor::ServiceExecutor;
 use crate::commands::CommandRegistry;
+use crate::commands::service_executor::ServiceExecutor;
 use crate::completion::agent_lister::AgentLister;
 use crate::completion::file_index::FileIndex;
 use crate::gitlab::{GitLabClient, GitLabConfig};

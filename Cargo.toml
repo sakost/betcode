@@ -1,5 +1,5 @@
 [workspace]
-resolver = "2"
+resolver = "3"
 members = [
   "crates/betcode-proto",
   "crates/betcode-core",
@@ -12,8 +12,8 @@ members = [
 ]
 
 [workspace.package]
-version = "0.1.0"
-edition = "2021"
+version = "0.1.0-alpha.1"
+edition = "2024"
 authors = ["Konstantin Sazhenov <me@sakost.dev>"]
 license = "Apache-2.0"
 repository = "https://github.com/betcode/betcode"

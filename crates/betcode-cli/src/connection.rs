@@ -10,22 +10,22 @@ use tonic::transport::{Certificate, Channel, ClientTlsConfig, Endpoint};
 use tracing::{error, info, warn};
 
 use betcode_proto::v1::{
-    agent_service_client::AgentServiceClient, command_service_client::CommandServiceClient,
-    git_lab_service_client::GitLabServiceClient, git_repo_service_client::GitRepoServiceClient,
-    worktree_service_client::WorktreeServiceClient, AddPluginRequest, AddPluginResponse,
-    AgentEvent, AgentRequest, CancelTurnRequest, CancelTurnResponse, CreateWorktreeRequest,
-    DisablePluginRequest, DisablePluginResponse, EnablePluginRequest, EnablePluginResponse,
-    ExecuteServiceCommandRequest, GetCommandRegistryResponse, GetIssueRequest, GetIssueResponse,
-    GetMergeRequestRequest, GetMergeRequestResponse, GetPipelineRequest, GetPipelineResponse,
-    GetPluginStatusRequest, GetPluginStatusResponse, GetRepoRequest, GetWorktreeRequest,
-    GitRepoDetail, KeyExchangeRequest, ListAgentsRequest, ListAgentsResponse, ListIssuesRequest,
-    ListIssuesResponse, ListMergeRequestsRequest, ListMergeRequestsResponse, ListPathRequest,
-    ListPathResponse, ListPipelinesRequest, ListPipelinesResponse, ListPluginsRequest,
-    ListPluginsResponse, ListReposRequest, ListReposResponse, ListSessionsRequest,
-    ListSessionsResponse, ListWorktreesRequest, ListWorktreesResponse, RegisterRepoRequest,
-    RemovePluginRequest, RemovePluginResponse, RemoveWorktreeRequest, RemoveWorktreeResponse,
-    ResumeSessionRequest, ScanReposRequest, ServiceCommandOutput, UnregisterRepoRequest,
-    UnregisterRepoResponse, UpdateRepoRequest, WorktreeDetail,
+    AddPluginRequest, AddPluginResponse, AgentEvent, AgentRequest, CancelTurnRequest,
+    CancelTurnResponse, CreateWorktreeRequest, DisablePluginRequest, DisablePluginResponse,
+    EnablePluginRequest, EnablePluginResponse, ExecuteServiceCommandRequest,
+    GetCommandRegistryResponse, GetIssueRequest, GetIssueResponse, GetMergeRequestRequest,
+    GetMergeRequestResponse, GetPipelineRequest, GetPipelineResponse, GetPluginStatusRequest,
+    GetPluginStatusResponse, GetRepoRequest, GetWorktreeRequest, GitRepoDetail, KeyExchangeRequest,
+    ListAgentsRequest, ListAgentsResponse, ListIssuesRequest, ListIssuesResponse,
+    ListMergeRequestsRequest, ListMergeRequestsResponse, ListPathRequest, ListPathResponse,
+    ListPipelinesRequest, ListPipelinesResponse, ListPluginsRequest, ListPluginsResponse,
+    ListReposRequest, ListReposResponse, ListSessionsRequest, ListSessionsResponse,
+    ListWorktreesRequest, ListWorktreesResponse, RegisterRepoRequest, RemovePluginRequest,
+    RemovePluginResponse, RemoveWorktreeRequest, RemoveWorktreeResponse, ResumeSessionRequest,
+    ScanReposRequest, ServiceCommandOutput, UnregisterRepoRequest, UnregisterRepoResponse,
+    UpdateRepoRequest, WorktreeDetail, agent_service_client::AgentServiceClient,
+    command_service_client::CommandServiceClient, git_lab_service_client::GitLabServiceClient,
+    git_repo_service_client::GitRepoServiceClient, worktree_service_client::WorktreeServiceClient,
 };
 
 use betcode_crypto::{
@@ -41,15 +41,15 @@ pub fn attach_relay_metadata<T>(
     auth_token: Option<&str>,
     machine_id: Option<&str>,
 ) {
-    if let Some(token) = auth_token {
-        if let Ok(val) = format!("Bearer {token}").parse() {
-            request.metadata_mut().insert("authorization", val);
-        }
+    if let Some(token) = auth_token
+        && let Ok(val) = format!("Bearer {token}").parse()
+    {
+        request.metadata_mut().insert("authorization", val);
     }
-    if let Some(mid) = machine_id {
-        if let Ok(val) = mid.parse() {
-            request.metadata_mut().insert("x-machine-id", val);
-        }
+    if let Some(mid) = machine_id
+        && let Ok(val) = mid.parse()
+    {
+        request.metadata_mut().insert("x-machine-id", val);
     }
 }
 
@@ -138,15 +138,15 @@ fn apply_relay_meta<T>(
     machine_id: &Option<String>,
 ) {
     #![allow(clippy::ref_option)]
-    if let Some(token) = auth_token {
-        if let Ok(val) = format!("Bearer {token}").parse() {
-            req.metadata_mut().insert("authorization", val);
-        }
+    if let Some(token) = auth_token
+        && let Ok(val) = format!("Bearer {token}").parse()
+    {
+        req.metadata_mut().insert("authorization", val);
     }
-    if let Some(mid) = machine_id {
-        if let Ok(val) = mid.parse() {
-            req.metadata_mut().insert("x-machine-id", val);
-        }
+    if let Some(mid) = machine_id
+        && let Ok(val) = mid.parse()
+    {
+        req.metadata_mut().insert("x-machine-id", val);
     }
 }
 
@@ -541,7 +541,9 @@ impl DaemonConnection {
                                         consecutive_failures, MAX_CONSECUTIVE_DECRYPT_FAILURES, e
                                     );
                                     if consecutive_failures >= MAX_CONSECUTIVE_DECRYPT_FAILURES {
-                                        error!("Too many consecutive decryption failures, closing stream");
+                                        error!(
+                                            "Too many consecutive decryption failures, closing stream"
+                                        );
                                         let _ = event_tx
                                             .send(Err(tonic::Status::internal(
                                                 "Persistent decryption failures — possible key mismatch",
@@ -1373,7 +1375,9 @@ pub enum ConnectionError {
     #[error("Fingerprint rejected: daemon fingerprint mismatch")]
     FingerprintRejected,
 
-    #[error("Daemon fingerprint mismatch! Expected: {expected}, Actual: {actual}. Possible MITM attack.")]
+    #[error(
+        "Daemon fingerprint mismatch! Expected: {expected}, Actual: {actual}. Possible MITM attack."
+    )]
     FingerprintMismatch { expected: String, actual: String },
 }
 

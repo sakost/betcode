@@ -1,10 +1,10 @@
 //! Bottom-panel rendering for permission prompts, user questions, and fingerprint verification.
 
+use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph, Wrap};
-use ratatui::Frame;
 
 use super::render::compute_wrapped_cursor;
 use crate::app::{App, AppMode};

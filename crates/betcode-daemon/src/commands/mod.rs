@@ -1,7 +1,7 @@
 pub mod cc_discovery;
 pub mod service_executor;
 
-use betcode_core::commands::{builtin_commands, CommandEntry};
+use betcode_core::commands::{CommandEntry, builtin_commands};
 
 /// Registry holding all available commands.
 pub struct CommandRegistry {

@@ -1,6 +1,6 @@
 use std::process::Command;
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 
 /// Execute a command with logging. Logs the full command line at debug level
 /// and a human-friendly description at info level.

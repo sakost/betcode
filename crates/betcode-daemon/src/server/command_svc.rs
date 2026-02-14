@@ -3,9 +3,9 @@
 use std::pin::Pin;
 use std::sync::Arc;
 
-use tokio::sync::{mpsc, RwLock};
-use tokio_stream::wrappers::ReceiverStream;
+use tokio::sync::{RwLock, mpsc};
 use tokio_stream::Stream;
+use tokio_stream::wrappers::ReceiverStream;
 use tonic::{Request, Response, Status};
 
 use betcode_proto::v1::command_service_server::CommandService;
@@ -18,8 +18,8 @@ use betcode_proto::v1::{
     RemovePluginResponse, ServiceCommandOutput,
 };
 
-use crate::commands::service_executor::{ServiceExecutor, ServiceOutput};
 use crate::commands::CommandRegistry;
+use crate::commands::service_executor::{ServiceExecutor, ServiceOutput};
 use crate::completion::agent_lister::AgentLister;
 use crate::completion::file_index::FileIndex;
 

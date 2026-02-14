@@ -13,7 +13,7 @@ use betcode_proto::v1::{
     SessionSummary,
 };
 
-use super::{extract_machine_id, AgentProxyService};
+use super::{AgentProxyService, extract_machine_id};
 use crate::server::test_helpers::{
     assert_daemon_error, assert_no_claims_error, assert_no_machine_error, assert_offline_error,
     make_request, proxy_test_setup, spawn_responder, spawn_stream_responder, stream_data_frame,

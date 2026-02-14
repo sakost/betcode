@@ -1,6 +1,6 @@
 use std::net::{SocketAddr, TcpListener};
 
-use anyhow::{bail, Result};
+use anyhow::{Result, bail};
 
 use crate::cmd::{command_exists, should_skip_port_check};
 

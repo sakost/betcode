@@ -1,8 +1,8 @@
 //! Password hashing and verification using argon2id.
 
+use argon2::Argon2;
 use argon2::password_hash::rand_core::OsRng;
 use argon2::password_hash::{PasswordHash, PasswordHasher, PasswordVerifier, SaltString};
-use argon2::Argon2;
 
 /// Hash a password using argon2id with a random salt.
 pub fn hash_password(password: &str) -> Result<String, argon2::password_hash::Error> {

@@ -5,20 +5,20 @@ use std::pin::Pin;
 use std::sync::Arc;
 
 use tokio::sync::mpsc;
-use tokio_stream::{wrappers::ReceiverStream, Stream, StreamExt};
+use tokio_stream::{Stream, StreamExt, wrappers::ReceiverStream};
 use tonic::{Request, Response, Status, Streaming};
 use tracing::{error, info, instrument, warn};
 
 use betcode_proto::v1::{
-    agent_service_server::AgentService, AgentEvent, AgentRequest, CancelTurnRequest,
-    CancelTurnResponse, ClearSessionGrantsRequest, ClearSessionGrantsResponse,
-    CompactSessionRequest, CompactSessionResponse, InputLockRequest, InputLockResponse,
-    KeyExchangeRequest, KeyExchangeResponse, ListSessionGrantsRequest, ListSessionGrantsResponse,
-    ListSessionsRequest, ListSessionsResponse, RenameSessionRequest, RenameSessionResponse,
-    ResumeSessionRequest, SessionSummary, SetSessionGrantRequest, SetSessionGrantResponse,
+    AgentEvent, AgentRequest, CancelTurnRequest, CancelTurnResponse, ClearSessionGrantsRequest,
+    ClearSessionGrantsResponse, CompactSessionRequest, CompactSessionResponse, InputLockRequest,
+    InputLockResponse, KeyExchangeRequest, KeyExchangeResponse, ListSessionGrantsRequest,
+    ListSessionGrantsResponse, ListSessionsRequest, ListSessionsResponse, RenameSessionRequest,
+    RenameSessionResponse, ResumeSessionRequest, SessionSummary, SetSessionGrantRequest,
+    SetSessionGrantResponse, agent_service_server::AgentService,
 };
 
-use super::handler::{handle_agent_request, HandlerContext};
+use super::handler::{HandlerContext, handle_agent_request};
 use crate::relay::SessionRelay;
 use crate::session::SessionMultiplexer;
 use crate::storage::{Database, DatabaseError};

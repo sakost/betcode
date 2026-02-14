@@ -2,8 +2,8 @@
 
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::atomic::AtomicU64;
 use std::sync::Arc;
+use std::sync::atomic::AtomicU64;
 
 use betcode_proto::v1::SessionGrantEntry;
 use tokio::sync::RwLock;
@@ -93,19 +93,19 @@ impl RelayHandle {
         };
 
         // On AllowSession, cache the grant for this tool
-        if decision == betcode_proto::v1::PermissionDecision::AllowSession {
-            if let Some(ref tool_name) = tool {
-                self.session_grants
-                    .write()
-                    .await
-                    .insert(tool_name.clone(), true);
-                info!(
-                    session_id = %self.session_id,
-                    tool_name = %tool_name,
-                    source,
-                    "Cached AllowSession grant"
-                );
-            }
+        if decision == betcode_proto::v1::PermissionDecision::AllowSession
+            && let Some(ref tool_name) = tool
+        {
+            self.session_grants
+                .write()
+                .await
+                .insert(tool_name.clone(), true);
+            info!(
+                session_id = %self.session_id,
+                tool_name = %tool_name,
+                source,
+                "Cached AllowSession grant"
+            );
         }
 
         (granted, input)

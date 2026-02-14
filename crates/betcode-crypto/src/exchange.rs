@@ -10,7 +10,7 @@ use rand::rngs::OsRng;
 use x25519_dalek::{PublicKey, StaticSecret};
 
 use crate::error::CryptoError;
-use crate::identity::{fingerprint_of, IdentityKeyPair};
+use crate::identity::{IdentityKeyPair, fingerprint_of};
 use crate::session::CryptoSession;
 
 /// State of a key exchange in progress.

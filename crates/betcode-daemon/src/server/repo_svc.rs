@@ -6,9 +6,9 @@ use tonic::{Request, Response, Status};
 use tracing::{info, instrument, warn};
 
 use betcode_proto::v1::{
-    git_repo_service_server::GitRepoService, GetRepoRequest, GitRepoDetail, ListReposRequest,
-    ListReposResponse, RegisterRepoRequest, ScanReposRequest, UnregisterRepoRequest,
-    UnregisterRepoResponse, UpdateRepoRequest, WorktreeMode,
+    GetRepoRequest, GitRepoDetail, ListReposRequest, ListReposResponse, RegisterRepoRequest,
+    ScanReposRequest, UnregisterRepoRequest, UnregisterRepoResponse, UpdateRepoRequest,
+    WorktreeMode, git_repo_service_server::GitRepoService,
 };
 
 use crate::storage::{Database, DatabaseError, GitRepoRow};
@@ -284,14 +284,14 @@ impl GitRepoService for GitRepoServiceImpl {
         //   proto None       → None            (don't change)
         //   proto Some("")   → Some(None)      (clear / NULL)
         //   proto Some("v")  → Some(Some("v")) (set)
-        let custom_path: Option<Option<&str>> =
-            req.custom_path
-                .as_deref()
-                .map(|s| if s.is_empty() { None } else { Some(s) });
-        let setup_script: Option<Option<&str>> =
-            req.setup_script
-                .as_deref()
-                .map(|s| if s.is_empty() { None } else { Some(s) });
+        let custom_path: Option<Option<&str>> = req
+            .custom_path
+            .as_deref()
+            .map(|s| if s.is_empty() { None } else { Some(s) });
+        let setup_script: Option<Option<&str>> = req
+            .setup_script
+            .as_deref()
+            .map(|s| if s.is_empty() { None } else { Some(s) });
 
         let row = self
             .db

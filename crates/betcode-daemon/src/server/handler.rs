@@ -8,7 +8,7 @@ use tracing::{info, warn};
 
 use betcode_proto::v1::{AgentEvent, AgentRequest, PermissionDecision};
 
-use crate::relay::{is_granted, RelaySessionConfig, SessionRelay};
+use crate::relay::{RelaySessionConfig, SessionRelay, is_granted};
 use crate::session::SessionMultiplexer;
 use crate::storage::Database;
 
@@ -34,7 +34,7 @@ pub async fn handle_agent_request(
             handle_start(ctx, session_id, start).await?;
         }
         Some(Request::Message(msg)) => {
-            if let Some(ref sid) = session_id {
+            if let Some(sid) = session_id {
                 let agent_id = Some(msg.agent_id.as_str()).filter(|s| !s.is_empty());
                 info!(session_id = %sid, content_len = msg.content.len(), "User message");
                 ctx.relay
@@ -46,12 +46,12 @@ pub async fn handle_agent_request(
             }
         }
         Some(Request::Permission(perm)) => {
-            if let Some(ref sid) = session_id {
+            if let Some(sid) = session_id {
                 handle_permission(ctx, sid, perm).await?;
             }
         }
         Some(Request::QuestionResponse(qr)) => {
-            if let Some(ref sid) = session_id {
+            if let Some(sid) = session_id {
                 info!(session_id = %sid, question_id = %qr.question_id, "Question response");
                 let answers: HashMap<String, String> = qr.answers.into_iter().collect();
 
@@ -76,7 +76,7 @@ pub async fn handle_agent_request(
             }
         }
         Some(Request::Cancel(cancel)) => {
-            if let Some(ref sid) = session_id {
+            if let Some(sid) = session_id {
                 info!(session_id = %sid, reason = %cancel.reason, "Cancel request");
                 ctx.relay
                     .cancel_session(sid)

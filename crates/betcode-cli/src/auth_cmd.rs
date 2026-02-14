@@ -192,15 +192,15 @@ async fn login(config: &mut CliConfig, username: &str, password: &str) -> anyhow
 }
 
 async fn logout(config: &mut CliConfig) -> anyhow::Result<()> {
-    if let (Some(auth), Some(relay_url)) = (&config.auth, &config.relay_url) {
-        if let Ok(channel) = relay_channel(relay_url, config.relay_ca_cert.as_deref()).await {
-            let mut client = AuthServiceClient::new(channel);
-            let _ = client
-                .revoke_token(RevokeTokenRequest {
-                    refresh_token: auth.refresh_token.clone(),
-                })
-                .await;
-        }
+    if let (Some(auth), Some(relay_url)) = (&config.auth, &config.relay_url)
+        && let Ok(channel) = relay_channel(relay_url, config.relay_ca_cert.as_deref()).await
+    {
+        let mut client = AuthServiceClient::new(channel);
+        let _ = client
+            .revoke_token(RevokeTokenRequest {
+                refresh_token: auth.refresh_token.clone(),
+            })
+            .await;
     }
     config.clear_auth();
     config.save()?;

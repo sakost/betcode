@@ -3,7 +3,7 @@
 use crossterm::event::KeyCode;
 use tokio::sync::mpsc;
 
-use crate::app::{json_to_struct, App, AppMode};
+use crate::app::{App, AppMode, json_to_struct};
 use betcode_proto::v1::{AgentRequest, PermissionDecision, PermissionResponse, UserMessage};
 
 /// Handle a key press during the permission prompt (Y/A/Tab/E/N/X).
@@ -59,35 +59,35 @@ pub async fn handle_permission_edit_key(
             }
         }
         KeyCode::Backspace => {
-            if let Some(ref mut perm) = app.pending_permission {
-                if perm.edit_cursor > 0 {
-                    let prev = perm.edit_buffer[..perm.edit_cursor]
-                        .char_indices()
-                        .next_back()
-                        .map_or(0, |(i, _)| i);
-                    perm.edit_buffer.remove(prev);
-                    perm.edit_cursor = prev;
-                }
+            if let Some(ref mut perm) = app.pending_permission
+                && perm.edit_cursor > 0
+            {
+                let prev = perm.edit_buffer[..perm.edit_cursor]
+                    .char_indices()
+                    .next_back()
+                    .map_or(0, |(i, _)| i);
+                perm.edit_buffer.remove(prev);
+                perm.edit_cursor = prev;
             }
         }
         KeyCode::Left => {
-            if let Some(ref mut perm) = app.pending_permission {
-                if perm.edit_cursor > 0 {
-                    perm.edit_cursor = perm.edit_buffer[..perm.edit_cursor]
-                        .char_indices()
-                        .next_back()
-                        .map_or(0, |(i, _)| i);
-                }
+            if let Some(ref mut perm) = app.pending_permission
+                && perm.edit_cursor > 0
+            {
+                perm.edit_cursor = perm.edit_buffer[..perm.edit_cursor]
+                    .char_indices()
+                    .next_back()
+                    .map_or(0, |(i, _)| i);
             }
         }
         KeyCode::Right => {
-            if let Some(ref mut perm) = app.pending_permission {
-                if perm.edit_cursor < perm.edit_buffer.len() {
-                    perm.edit_cursor = perm.edit_buffer[perm.edit_cursor..]
-                        .char_indices()
-                        .nth(1)
-                        .map_or(perm.edit_buffer.len(), |(i, _)| perm.edit_cursor + i);
-                }
+            if let Some(ref mut perm) = app.pending_permission
+                && perm.edit_cursor < perm.edit_buffer.len()
+            {
+                perm.edit_cursor = perm.edit_buffer[perm.edit_cursor..]
+                    .char_indices()
+                    .nth(1)
+                    .map_or(perm.edit_buffer.len(), |(i, _)| perm.edit_cursor + i);
             }
         }
         _ => {}

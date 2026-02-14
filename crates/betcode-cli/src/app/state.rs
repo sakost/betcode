@@ -202,7 +202,7 @@ impl App {
 
     /// Update completion state based on current input and cursor position.
     pub fn update_completion_state(&mut self) {
-        use crate::completion::controller::{detect_trigger, CompletionTrigger};
+        use crate::completion::controller::{CompletionTrigger, detect_trigger};
 
         let trigger = detect_trigger(&self.input, self.cursor_pos);
 
@@ -296,10 +296,10 @@ impl App {
     }
 
     pub fn append_text(&mut self, text: &str) {
-        if let Some(msg) = self.messages.last_mut() {
-            if msg.streaming {
-                msg.content.push_str(text);
-            }
+        if let Some(msg) = self.messages.last_mut()
+            && msg.streaming
+        {
+            msg.content.push_str(text);
         }
     }
 
@@ -453,10 +453,10 @@ impl App {
                 } else if let Some(msg) = self.messages.last_mut() {
                     msg.content.push_str(&delta.text);
                 }
-                if delta.is_complete {
-                    if let Some(msg) = self.messages.last_mut() {
-                        msg.streaming = false;
-                    }
+                if delta.is_complete
+                    && let Some(msg) = self.messages.last_mut()
+                {
+                    msg.streaming = false;
                 }
             }
             Some(Event::ToolCallStart(tool)) => {
@@ -655,7 +655,7 @@ fn struct_to_json(s: betcode_proto::prost_types::Struct) -> serde_json::Value {
 
 /// Convert a `serde_json::Value` back to `prost_types::Struct`.
 pub fn json_to_struct(v: &serde_json::Value) -> betcode_proto::prost_types::Struct {
-    use betcode_proto::prost_types::{value::Kind, ListValue, Struct, Value};
+    use betcode_proto::prost_types::{ListValue, Struct, Value, value::Kind};
     fn json_to_value(v: &serde_json::Value) -> Value {
         Value {
             kind: Some(match v {

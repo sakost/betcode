@@ -144,16 +144,18 @@ async fn message_fk_requires_session() {
 #[tokio::test]
 async fn relay_send_requires_active_session() {
     let tc = testutil::test_components().await;
-    assert!(tc
-        .relay
-        .send_user_message("missing", "hello", None)
-        .await
-        .is_err());
-    assert!(tc
-        .relay
-        .send_permission_response("missing", "r1", true, &serde_json::json!({}))
-        .await
-        .is_err());
+    assert!(
+        tc.relay
+            .send_user_message("missing", "hello", None)
+            .await
+            .is_err()
+    );
+    assert!(
+        tc.relay
+            .send_permission_response("missing", "r1", true, &serde_json::json!({}))
+            .await
+            .is_err()
+    );
     assert!(tc.relay.send_raw_stdin("missing", "{}").await.is_err());
 }
 

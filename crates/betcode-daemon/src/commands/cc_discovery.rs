@@ -5,7 +5,7 @@ use regex::Regex;
 use tracing::warn;
 
 use betcode_core::commands::{
-    discover_user_commands, hardcoded_cc_commands, parse_help_output, CommandEntry,
+    CommandEntry, discover_user_commands, hardcoded_cc_commands, parse_help_output,
 };
 
 /// Result of a full command discovery pass.

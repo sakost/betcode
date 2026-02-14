@@ -1,12 +1,12 @@
 use std::path::{Path, PathBuf};
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::Command;
 use tokio::sync::mpsc;
 
-use super::cc_discovery::discover_all_cc_commands;
 use super::CommandRegistry;
+use super::cc_discovery::discover_all_cc_commands;
 
 /// Output messages from command execution.
 #[derive(Debug)]
@@ -176,10 +176,10 @@ mod tests {
         executor.execute_bash("echo hello", tx).await.unwrap();
         let mut found_hello = false;
         while let Some(output) = rx.recv().await {
-            if let ServiceOutput::Stdout(line) = output {
-                if line.contains("hello") {
-                    found_hello = true;
-                }
+            if let ServiceOutput::Stdout(line) = output
+                && line.contains("hello")
+            {
+                found_hello = true;
             }
         }
         assert!(found_hello);

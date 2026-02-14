@@ -112,8 +112,8 @@ impl HandlerTestBuilder {
         );
 
         if self.with_command_service {
-            use crate::commands::service_executor::ServiceExecutor;
             use crate::commands::CommandRegistry;
+            use crate::commands::service_executor::ServiceExecutor;
             use crate::completion::agent_lister::AgentLister;
             use crate::completion::file_index::FileIndex;
             use tokio::sync::RwLock;
@@ -395,7 +395,7 @@ async fn stream_data_frame_returns_empty() {
 // --- Sprint 4.3: Streaming tests ---
 
 fn make_start_request(session_id: &str) -> Vec<u8> {
-    use betcode_proto::v1::{agent_request::Request, StartConversation};
+    use betcode_proto::v1::{StartConversation, agent_request::Request};
     let req = AgentRequest {
         request: Some(Request::Start(StartConversation {
             session_id: session_id.into(),
@@ -449,7 +449,7 @@ async fn converse_non_start_sends_error_on_outbound() {
         handler: h, mut rx, ..
     } = HandlerTestBuilder::new().build().await;
     // Send a UserMessage instead of StartConversation
-    use betcode_proto::v1::{agent_request::Request, UserMessage};
+    use betcode_proto::v1::{UserMessage, agent_request::Request};
     let req = AgentRequest {
         request: Some(Request::Message(UserMessage {
             content: "hello".into(),
@@ -485,7 +485,7 @@ async fn converse_start_session_failure_sends_error_cleans_active() {
     assert!(result.is_empty());
 
     // Send a UserMessage via StreamData to trigger the deferred spawn failure
-    use betcode_proto::v1::{agent_request::Request, UserMessage};
+    use betcode_proto::v1::{UserMessage, agent_request::Request};
     let user_msg = AgentRequest {
         request: Some(Request::Message(UserMessage {
             content: "hello".into(),
@@ -759,12 +759,11 @@ async fn handler_rejects_tampered_ciphertext() {
     };
     let mut frame = encrypted_req_frame("etc1", METHOD_LIST_SESSIONS, encode(&req), &client_crypto);
     // Tamper with the ciphertext
-    if let Some(betcode_proto::v1::tunnel_frame::Payload::StreamData(ref mut p)) = frame.payload {
-        if let Some(ref mut enc) = p.encrypted {
-            if let Some(byte) = enc.ciphertext.first_mut() {
-                *byte ^= 0xFF;
-            }
-        }
+    if let Some(betcode_proto::v1::tunnel_frame::Payload::StreamData(ref mut p)) = frame.payload
+        && let Some(ref mut enc) = p.encrypted
+        && let Some(byte) = enc.ciphertext.first_mut()
+    {
+        *byte ^= 0xFF;
     }
     let r = h.handle_frame(frame).await;
     assert_eq!(r.len(), 1);
@@ -1237,10 +1236,9 @@ async fn encrypted_agent_request_with_corrupted_data_rejected() {
     // Corrupt the ciphertext
     if let Some(betcode_proto::v1::agent_request::Request::Encrypted(ref mut env)) =
         encrypted_req.request
+        && let Some(byte) = env.ciphertext.first_mut()
     {
-        if let Some(byte) = env.ciphertext.first_mut() {
-            *byte ^= 0xFF;
-        }
+        *byte ^= 0xFF;
     }
     let encrypted_bytes = encode(&encrypted_req);
 
@@ -1624,24 +1622,24 @@ async fn resume_session_with_crypto_produces_decodable_frames() {
 
     let mut decoded_events = Vec::new();
     while let Ok(frame) = rx.try_recv() {
-        if frame.frame_type == FrameType::StreamData as i32 {
-            if let Some(betcode_proto::v1::tunnel_frame::Payload::StreamData(p)) = frame.payload {
-                let data = p
-                    .encrypted
-                    .as_ref()
-                    .map(|e| &e.ciphertext[..])
-                    .unwrap_or(&[]);
-                // This is what the relay does — decode ciphertext as AgentEvent.
-                // It MUST succeed (no protobuf decode error).
-                match AgentEvent::decode(data) {
-                    Ok(evt) => decoded_events.push(evt),
-                    Err(e) => panic!(
-                        "Relay cannot decode resume frame as AgentEvent: {}. \
-                         This means the daemon sent encrypted bytes without \
-                         wrapping in EncryptedEnvelope.",
-                        e
-                    ),
-                }
+        if frame.frame_type == FrameType::StreamData as i32
+            && let Some(betcode_proto::v1::tunnel_frame::Payload::StreamData(p)) = frame.payload
+        {
+            let data = p
+                .encrypted
+                .as_ref()
+                .map(|e| &e.ciphertext[..])
+                .unwrap_or(&[]);
+            // This is what the relay does — decode ciphertext as AgentEvent.
+            // It MUST succeed (no protobuf decode error).
+            match AgentEvent::decode(data) {
+                Ok(evt) => decoded_events.push(evt),
+                Err(e) => panic!(
+                    "Relay cannot decode resume frame as AgentEvent: {}. \
+                     This means the daemon sent encrypted bytes without \
+                     wrapping in EncryptedEnvelope.",
+                    e
+                ),
             }
         }
     }
@@ -1708,17 +1706,17 @@ async fn resume_session_without_crypto_sends_plain_events() {
 
     let mut decoded_events = Vec::new();
     while let Ok(frame) = rx.try_recv() {
-        if frame.frame_type == FrameType::StreamData as i32 {
-            if let Some(betcode_proto::v1::tunnel_frame::Payload::StreamData(p)) = frame.payload {
-                let data = p
-                    .encrypted
-                    .as_ref()
-                    .map(|e| &e.ciphertext[..])
-                    .unwrap_or(&[]);
-                match AgentEvent::decode(data) {
-                    Ok(evt) => decoded_events.push(evt),
-                    Err(e) => panic!("Cannot decode plain resume frame: {}", e),
-                }
+        if frame.frame_type == FrameType::StreamData as i32
+            && let Some(betcode_proto::v1::tunnel_frame::Payload::StreamData(p)) = frame.payload
+        {
+            let data = p
+                .encrypted
+                .as_ref()
+                .map(|e| &e.ciphertext[..])
+                .unwrap_or(&[]);
+            match AgentEvent::decode(data) {
+                Ok(evt) => decoded_events.push(evt),
+                Err(e) => panic!("Cannot decode plain resume frame: {}", e),
             }
         }
     }

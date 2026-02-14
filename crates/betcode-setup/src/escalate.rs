@@ -1,7 +1,7 @@
 use std::env;
 use std::process::Command;
 
-use anyhow::{bail, Result};
+use anyhow::{Result, bail};
 use dialoguer::Confirm;
 use nix::unistd::geteuid;
 

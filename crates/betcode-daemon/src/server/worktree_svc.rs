@@ -4,9 +4,9 @@ use tonic::{Request, Response, Status};
 use tracing::{debug, info, instrument};
 
 use betcode_proto::v1::{
-    worktree_service_server::WorktreeService, CreateWorktreeRequest, GetWorktreeRequest,
-    ListWorktreesRequest, ListWorktreesResponse, RemoveWorktreeRequest, RemoveWorktreeResponse,
-    WorktreeDetail,
+    CreateWorktreeRequest, GetWorktreeRequest, ListWorktreesRequest, ListWorktreesResponse,
+    RemoveWorktreeRequest, RemoveWorktreeResponse, WorktreeDetail,
+    worktree_service_server::WorktreeService,
 };
 
 use crate::storage::Database;

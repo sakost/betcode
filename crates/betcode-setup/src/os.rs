@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::fs;
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 
 /// Parse `/etc/os-release` into key-value pairs.
 fn parse_os_release() -> Result<HashMap<String, String>> {

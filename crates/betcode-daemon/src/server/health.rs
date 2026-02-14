@@ -10,9 +10,9 @@ use tokio_stream::Stream;
 use tonic::{Request, Response, Status};
 
 use betcode_proto::v1::{
-    bet_code_health_server::BetCodeHealth, health_server::Health, ComponentHealth,
-    HealthCheckRequest, HealthCheckResponse, HealthDetailsRequest, HealthDetailsResponse,
-    ServingStatus,
+    ComponentHealth, HealthCheckRequest, HealthCheckResponse, HealthDetailsRequest,
+    HealthDetailsResponse, ServingStatus, bet_code_health_server::BetCodeHealth,
+    health_server::Health,
 };
 
 use crate::storage::Database;

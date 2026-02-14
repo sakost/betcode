@@ -314,14 +314,18 @@ mod tests {
         std::fs::create_dir(dir.path().join("src")).unwrap();
         std::fs::write(dir.path().join("src/main.rs"), "").unwrap();
         let index = FileIndex::build(dir.path(), 1000).await.unwrap();
-        assert!(index
-            .search("file1", 10)
-            .iter()
-            .any(|p| p.path.contains("file1.rs")));
-        assert!(index
-            .search("main", 10)
-            .iter()
-            .any(|p| p.path.contains("main.rs")));
+        assert!(
+            index
+                .search("file1", 10)
+                .iter()
+                .any(|p| p.path.contains("file1.rs"))
+        );
+        assert!(
+            index
+                .search("main", 10)
+                .iter()
+                .any(|p| p.path.contains("main.rs"))
+        );
     }
 
     #[tokio::test]

@@ -9,7 +9,7 @@ use tokio_stream::wrappers::ReceiverStream;
 use tonic::{Code, Request, Response, Status};
 use tracing::warn;
 
-use betcode_proto::v1::{tunnel_frame, FrameType, TunnelFrame};
+use betcode_proto::v1::{FrameType, TunnelFrame, tunnel_frame};
 
 use crate::router::RequestRouter;
 use crate::server::agent_proxy::{decode_response, router_error_to_status};

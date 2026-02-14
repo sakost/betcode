@@ -3,5 +3,5 @@
 pub mod certs;
 pub mod config;
 
-pub use certs::{generate_dev_bundle, CertBundle, CertError};
+pub use certs::{CertBundle, CertError, generate_dev_bundle};
 pub use config::{TlsConfigError, TlsMode};

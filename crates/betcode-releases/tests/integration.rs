@@ -2,7 +2,7 @@ use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use tower::ServiceExt;
 
-use betcode_releases::routes::{build_router, AppState};
+use betcode_releases::routes::{AppState, build_router};
 
 fn app() -> axum::Router {
     build_router(AppState {

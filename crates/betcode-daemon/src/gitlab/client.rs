@@ -2,7 +2,7 @@
 //!
 //! Uses reqwest to call GitLab endpoints for merge requests, pipelines, and issues.
 
-use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION};
+use reqwest::header::{AUTHORIZATION, HeaderMap, HeaderValue};
 use thiserror::Error;
 
 use super::types::{Issue, MergeRequest, Pipeline};

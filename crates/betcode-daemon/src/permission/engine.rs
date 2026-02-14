@@ -92,21 +92,21 @@ impl DaemonPermissionEngine {
         }
 
         // 2. Check database grants
-        if let Some(ref db) = self.db {
-            if let Ok(Some(grant)) = db.get_permission_grant(req.session_id, req.tool_name).await {
-                let granted = grant.action == "allow";
-                debug!(
-                    session_id = req.session_id,
-                    tool_name = req.tool_name,
-                    granted,
-                    "Database grant hit"
-                );
-                return if granted {
-                    PermissionEvaluation::Allowed { cached: true }
-                } else {
-                    PermissionEvaluation::Denied { cached: true }
-                };
-            }
+        if let Some(ref db) = self.db
+            && let Ok(Some(grant)) = db.get_permission_grant(req.session_id, req.tool_name).await
+        {
+            let granted = grant.action == "allow";
+            debug!(
+                session_id = req.session_id,
+                tool_name = req.tool_name,
+                granted,
+                "Database grant hit"
+            );
+            return if granted {
+                PermissionEvaluation::Allowed { cached: true }
+            } else {
+                PermissionEvaluation::Denied { cached: true }
+            };
         }
 
         // 3. Evaluate against rules
@@ -179,15 +179,15 @@ impl DaemonPermissionEngine {
             .await;
         }
 
-        if response.remember_permanent {
-            if let Some(ref db) = self.db {
-                let action = if response.granted { "allow" } else { "deny" };
-                if let Err(e) = db
-                    .insert_permission_grant(&request.session_id, &request.tool_name, None, action)
-                    .await
-                {
-                    tracing::error!(?e, "Failed to store permission grant");
-                }
+        if response.remember_permanent
+            && let Some(ref db) = self.db
+        {
+            let action = if response.granted { "allow" } else { "deny" };
+            if let Err(e) = db
+                .insert_permission_grant(&request.session_id, &request.tool_name, None, action)
+                .await
+            {
+                tracing::error!(?e, "Failed to store permission grant");
             }
         }
 
@@ -240,10 +240,10 @@ impl DaemonPermissionEngine {
         for grant in session_grants.iter().rev() {
             if grant.tool_name == tool_name {
                 if let Some(ref pattern) = grant.path_pattern {
-                    if let Some(p) = path {
-                        if p.to_string_lossy().starts_with(pattern) {
-                            return Some(grant.granted);
-                        }
+                    if let Some(p) = path
+                        && p.to_string_lossy().starts_with(pattern)
+                    {
+                        return Some(grant.granted);
                     }
                 } else {
                     return Some(grant.granted);

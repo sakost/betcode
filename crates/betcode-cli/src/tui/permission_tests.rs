@@ -72,12 +72,13 @@ mod tests {
         let (tx, _rx) = mpsc::channel::<AgentRequest>(8);
         crate::tui::permission_input::handle_permission_key(&mut app, &tx, KeyCode::Tab).await;
         assert_eq!(app.mode, AppMode::PermissionEditInput);
-        assert!(!app
-            .pending_permission
-            .as_ref()
-            .unwrap()
-            .edit_buffer
-            .is_empty());
+        assert!(
+            !app.pending_permission
+                .as_ref()
+                .unwrap()
+                .edit_buffer
+                .is_empty()
+        );
     }
 
     #[tokio::test]
@@ -87,12 +88,13 @@ mod tests {
         crate::tui::permission_input::handle_permission_key(&mut app, &tx, KeyCode::Char('e'))
             .await;
         assert_eq!(app.mode, AppMode::PermissionComment);
-        assert!(app
-            .pending_permission
-            .as_ref()
-            .unwrap()
-            .edit_buffer
-            .is_empty());
+        assert!(
+            app.pending_permission
+                .as_ref()
+                .unwrap()
+                .edit_buffer
+                .is_empty()
+        );
     }
 
     #[tokio::test]

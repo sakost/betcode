@@ -1,11 +1,11 @@
 //! Heartbeat task for tunnel keepalive via unary RPC.
 
-use tonic::transport::Channel;
 use tonic::Request;
+use tonic::transport::Channel;
 use tracing::{info, warn};
 
-use betcode_proto::v1::tunnel_service_client::TunnelServiceClient;
 use betcode_proto::v1::TunnelHeartbeat;
+use betcode_proto::v1::tunnel_service_client::TunnelServiceClient;
 
 /// Spawn a heartbeat RPC task that periodically sends heartbeats via the
 /// TunnelService.Heartbeat unary RPC (separate from the tunnel stream pings).

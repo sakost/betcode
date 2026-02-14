@@ -1,10 +1,10 @@
 //! TUI rendering functions.
 
+use ratatui::Frame;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Padding, Paragraph, Wrap};
-use ratatui::Frame;
 use unicode_width::UnicodeWidthStr;
 
 use super::panels;
@@ -35,7 +35,7 @@ const fn bottom_panel_mode(app: &App) -> BottomPanel {
 #[allow(clippy::too_many_lines)]
 pub fn draw(frame: &mut Frame<'_>, app: &mut App) {
     use crate::app::COMPLETION_VISIBLE_COUNT;
-    use crate::ui::status_panel::{render_status_panel, SessionStatusInfo};
+    use crate::ui::status_panel::{SessionStatusInfo, render_status_panel};
 
     let bottom_panel = bottom_panel_mode(app);
 
@@ -596,8 +596,8 @@ mod tests {
     use crate::app::App;
     use crate::tui::fingerprint_panel::FingerprintPrompt;
     use betcode_crypto::FingerprintCheck;
-    use ratatui::backend::TestBackend;
     use ratatui::Terminal;
+    use ratatui::backend::TestBackend;
 
     #[test]
     fn draw_with_fingerprint_panel_does_not_panic() {
