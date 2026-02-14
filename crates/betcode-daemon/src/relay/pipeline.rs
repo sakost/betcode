@@ -91,9 +91,8 @@ impl SessionRelay {
         let sequence_counter = Arc::new(AtomicU64::new(start_seq));
 
         let pending_question_inputs = Arc::new(tokio::sync::RwLock::new(HashMap::new()));
-        let pending_permission_inputs = Arc::new(tokio::sync::RwLock::new(HashMap::new()));
+        let pending_permissions = Arc::new(tokio::sync::RwLock::new(HashMap::new()));
         let session_grants = Arc::new(tokio::sync::RwLock::new(HashMap::new()));
-        let pending_permission_tool_names = Arc::new(tokio::sync::RwLock::new(HashMap::new()));
 
         let relay_handle = RelayHandle {
             process_id: process_handle.id.clone(),
@@ -101,9 +100,8 @@ impl SessionRelay {
             stdin_tx: process_handle.stdin_tx.clone(),
             sequence_counter: Arc::clone(&sequence_counter),
             pending_question_inputs: Arc::clone(&pending_question_inputs),
-            pending_permission_inputs: Arc::clone(&pending_permission_inputs),
+            pending_permissions: Arc::clone(&pending_permissions),
             session_grants: Arc::clone(&session_grants),
-            pending_permission_tool_names: Arc::clone(&pending_permission_tool_names),
         };
 
         // Spawn the NDJSON reader pipeline
@@ -116,9 +114,8 @@ impl SessionRelay {
             subprocess_manager: Arc::clone(&self.subprocess_manager),
             sequence_counter,
             pending_question_inputs,
-            pending_permission_inputs,
+            pending_permissions,
             session_grants,
-            pending_permission_tool_names,
             stdin_tx: process_handle.stdin_tx.clone(),
         });
 
@@ -325,9 +322,8 @@ struct StdoutPipelineContext {
     subprocess_manager: Arc<SubprocessManager>,
     sequence_counter: Arc<AtomicU64>,
     pending_question_inputs: Arc<tokio::sync::RwLock<HashMap<String, serde_json::Value>>>,
-    pending_permission_inputs: Arc<tokio::sync::RwLock<HashMap<String, serde_json::Value>>>,
+    pending_permissions: Arc<tokio::sync::RwLock<HashMap<String, super::types::PendingPermission>>>,
     session_grants: Arc<tokio::sync::RwLock<HashMap<String, bool>>>,
-    pending_permission_tool_names: Arc<tokio::sync::RwLock<HashMap<String, String>>>,
     stdin_tx: tokio::sync::mpsc::Sender<String>,
 }
 
@@ -343,9 +339,8 @@ fn spawn_stdout_pipeline(ctx: StdoutPipelineContext) {
         subprocess_manager,
         sequence_counter,
         pending_question_inputs,
-        pending_permission_inputs,
+        pending_permissions,
         session_grants,
-        pending_permission_tool_names,
         stdin_tx,
     } = ctx;
     tokio::spawn(async move {
@@ -428,14 +423,13 @@ fn spawn_stdout_pipeline(ctx: StdoutPipelineContext) {
                             auto_responded_requests.insert(p.request_id.clone());
                         } else {
                             // No grant — store for handler to process
-                            pending_permission_inputs
+                            pending_permissions
                                 .write()
                                 .await
-                                .insert(p.request_id.clone(), input);
-                            pending_permission_tool_names
-                                .write()
-                                .await
-                                .insert(p.request_id.clone(), p.tool_name.clone());
+                                .insert(p.request_id.clone(), super::types::PendingPermission {
+                                    input,
+                                    tool_name: p.tool_name.clone(),
+                                });
                         }
                     }
                 }
@@ -681,9 +675,8 @@ mod tests {
             stdin_tx: tx,
             sequence_counter: Arc::new(AtomicU64::new(0)),
             pending_question_inputs: Arc::new(tokio::sync::RwLock::new(HashMap::new())),
-            pending_permission_inputs: Arc::new(tokio::sync::RwLock::new(HashMap::new())),
+            pending_permissions: Arc::new(tokio::sync::RwLock::new(HashMap::new())),
             session_grants: Arc::new(tokio::sync::RwLock::new(HashMap::new())),
-            pending_permission_tool_names: Arc::new(tokio::sync::RwLock::new(HashMap::new())),
         };
         (handle, rx)
     }
@@ -842,39 +835,39 @@ mod tests {
         assert!(response["updatedInput"]["questions"].is_array());
     }
 
-    /// Verify that RelayHandle session_grants and pending_permission_tool_names
+    /// Verify that RelayHandle session_grants and pending_permissions
     /// are properly initialized as empty.
     #[tokio::test]
     async fn relay_handle_session_grants_initialized_empty() {
         let (handle, _rx) = test_relay_handle();
 
         assert!(handle.session_grants.read().await.is_empty());
-        assert!(handle.pending_permission_tool_names.read().await.is_empty());
+        assert!(handle.pending_permissions.read().await.is_empty());
     }
 
     /// Verify AllowSession populates session_grants via the handle.
     #[tokio::test]
     async fn allow_session_populates_grant() {
+        use crate::relay::PendingPermission;
         let (handle, _rx) = test_relay_handle();
 
-        // Simulate what the handler does on AllowSession
+        // Simulate what the pipeline does: store PendingPermission
         handle
-            .pending_permission_tool_names
+            .pending_permissions
             .write()
             .await
-            .insert("req-1".into(), "Bash".into());
-        handle
-            .pending_permission_inputs
-            .write()
-            .await
-            .insert("req-1".into(), serde_json::json!({"command": "ls"}));
+            .insert("req-1".into(), PendingPermission {
+                input: serde_json::json!({"command": "ls"}),
+                tool_name: "Bash".into(),
+            });
 
-        // Simulate AllowSession grant caching
-        let tool_name = handle
-            .pending_permission_tool_names
+        // Simulate AllowSession grant caching via process_permission_response
+        let pending = handle
+            .pending_permissions
             .write()
             .await
             .remove("req-1");
+        let tool_name = pending.map(|p| p.tool_name);
         assert_eq!(tool_name, Some("Bash".to_string()));
 
         handle
@@ -891,23 +884,22 @@ mod tests {
     /// Verify AllowOnce does NOT populate session_grants.
     #[tokio::test]
     async fn allow_once_does_not_populate_grant() {
+        use crate::relay::PendingPermission;
         let (handle, _rx) = test_relay_handle();
 
         // Set up pending state
         handle
-            .pending_permission_tool_names
+            .pending_permissions
             .write()
             .await
-            .insert("req-1".into(), "Bash".into());
+            .insert("req-1".into(), PendingPermission {
+                input: serde_json::json!({}),
+                tool_name: "Bash".into(),
+            });
 
         // AllowOnce: remove from pending but do NOT insert into session_grants
         let _ = handle
-            .pending_permission_inputs
-            .write()
-            .await
-            .remove("req-1");
-        let _ = handle
-            .pending_permission_tool_names
+            .pending_permissions
             .write()
             .await
             .remove("req-1");
@@ -945,51 +937,49 @@ mod tests {
     }
 
     /// Verify that with no matching grant, the permission request is
-    /// stored in pending maps for the handler to process.
+    /// stored in pending_permissions for the handler to process.
     #[tokio::test]
-    async fn no_grant_stores_in_pending_maps() {
+    async fn no_grant_stores_in_pending_permissions() {
+        use crate::relay::PendingPermission;
         let (handle, _rx) = test_relay_handle();
 
-        // No grants — simulate what pipeline does: store in pending maps
+        // No grants — simulate what pipeline does: store in pending_permissions
         let grant = handle.session_grants.read().await.get("Write").copied();
         assert!(grant.is_none());
 
         let input = serde_json::json!({"file": "/tmp/test.txt"});
         handle
-            .pending_permission_inputs
+            .pending_permissions
             .write()
             .await
-            .insert("req-2".into(), input.clone());
-        handle
-            .pending_permission_tool_names
-            .write()
-            .await
-            .insert("req-2".into(), "Write".into());
+            .insert("req-2".into(), PendingPermission {
+                input: input.clone(),
+                tool_name: "Write".into(),
+            });
 
         // Verify stored
-        let inputs = handle.pending_permission_inputs.read().await;
-        assert_eq!(inputs.get("req-2"), Some(&input));
-        let tool_names = handle.pending_permission_tool_names.read().await;
-        assert_eq!(tool_names.get("req-2"), Some(&"Write".to_string()));
+        let pending = handle.pending_permissions.read().await;
+        let entry = pending.get("req-2").unwrap();
+        assert_eq!(entry.input, input);
+        assert_eq!(entry.tool_name, "Write");
     }
 
-    /// Helper to create a `RelayHandle` with pre-populated pending maps.
+    /// Helper to create a `RelayHandle` with pre-populated pending permissions.
     async fn make_handle_with_pending(
         request_id: &str,
         tool_name: &str,
         original_input: serde_json::Value,
     ) -> RelayHandle {
+        use crate::relay::PendingPermission;
         let (handle, _rx) = test_relay_handle();
         handle
-            .pending_permission_inputs
+            .pending_permissions
             .write()
             .await
-            .insert(request_id.into(), original_input);
-        handle
-            .pending_permission_tool_names
-            .write()
-            .await
-            .insert(request_id.into(), tool_name.into());
+            .insert(request_id.into(), PendingPermission {
+                input: original_input,
+                tool_name: tool_name.into(),
+            });
         handle
     }
 
@@ -1013,8 +1003,7 @@ mod tests {
         let grants = handle.session_grants.read().await;
         assert_eq!(grants.get("Bash"), Some(&true));
         // pending maps should be cleaned
-        assert!(handle.pending_permission_inputs.read().await.is_empty());
-        assert!(handle.pending_permission_tool_names.read().await.is_empty());
+        assert!(handle.pending_permissions.read().await.is_empty());
     }
 
     /// AllowOnce should NOT cache the grant in session_grants but should clean pending maps.
@@ -1036,8 +1025,7 @@ mod tests {
         // session_grants should be empty (AllowOnce does not cache)
         assert!(handle.session_grants.read().await.is_empty());
         // pending maps should be cleaned
-        assert!(handle.pending_permission_inputs.read().await.is_empty());
-        assert!(handle.pending_permission_tool_names.read().await.is_empty());
+        assert!(handle.pending_permissions.read().await.is_empty());
     }
 
     /// Deny should NOT cache the grant and should clean pending maps.
@@ -1059,8 +1047,7 @@ mod tests {
         // session_grants should be empty (Deny does not cache)
         assert!(handle.session_grants.read().await.is_empty());
         // pending maps should be cleaned
-        assert!(handle.pending_permission_inputs.read().await.is_empty());
-        assert!(handle.pending_permission_tool_names.read().await.is_empty());
+        assert!(handle.pending_permissions.read().await.is_empty());
     }
 
     /// AllowWithEdit should grant but NOT cache in session_grants, and should clean pending maps.
@@ -1082,7 +1069,6 @@ mod tests {
         // session_grants should be empty (AllowWithEdit does not cache — user wants to review each time)
         assert!(handle.session_grants.read().await.is_empty());
         // pending maps should be cleaned
-        assert!(handle.pending_permission_inputs.read().await.is_empty());
-        assert!(handle.pending_permission_tool_names.read().await.is_empty());
+        assert!(handle.pending_permissions.read().await.is_empty());
     }
 }

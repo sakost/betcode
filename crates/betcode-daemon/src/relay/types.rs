@@ -24,6 +24,15 @@ pub struct RelaySessionConfig {
     pub worktree_id: String,
 }
 
+/// Pending permission request data stored while waiting for user response.
+#[derive(Debug, Clone)]
+pub struct PendingPermission {
+    /// The original tool input JSON from the `CanUseTool` event.
+    pub input: serde_json::Value,
+    /// The tool name from the permission request.
+    pub tool_name: String,
+}
+
 /// Handle returned after a relay session is started.
 /// Used to send messages and permissions to the subprocess.
 #[derive(Debug, Clone)]
@@ -40,10 +49,11 @@ pub struct RelayHandle {
     /// Written by the stdout pipeline bridge, read by the handler to
     /// build the correct `control_response` with `updatedInput`.
     pub pending_question_inputs: Arc<RwLock<HashMap<String, serde_json::Value>>>,
-    /// Pending permission (`CanUseTool`) original inputs keyed by `request_id`.
+    /// Pending permission requests keyed by `request_id`.
     /// Written by the stdout pipeline bridge, read by the handler to
-    /// build the correct `control_response` with `updatedInput`.
-    pub pending_permission_inputs: Arc<RwLock<HashMap<String, serde_json::Value>>>,
+    /// build the correct `control_response` with `updatedInput` and
+    /// to look up the tool name for `AllowSession` caching.
+    pub pending_permissions: Arc<RwLock<HashMap<String, PendingPermission>>>,
     /// Session-scoped permission grants keyed by `tool_name` → granted.
     ///
     /// Three-state semantics (keyed by tool name):
@@ -56,10 +66,6 @@ pub struct RelayHandle {
     /// Read by the stdout pipeline to auto-respond to subsequent matching
     /// permission requests without forwarding them to the client.
     pub session_grants: Arc<RwLock<HashMap<String, bool>>>,
-    /// Maps `request_id` → `tool_name` for pending permission requests.
-    /// Used by the handler to look up which tool was granted when
-    /// processing `AllowSession` decisions.
-    pub pending_permission_tool_names: Arc<RwLock<HashMap<String, String>>>,
 }
 
 impl RelayHandle {
@@ -73,18 +79,11 @@ impl RelayHandle {
     ) -> (bool, serde_json::Value) {
         let granted = is_granted(decision);
 
-        let input = self
-            .pending_permission_inputs
-            .write()
-            .await
-            .remove(request_id)
-            .unwrap_or_else(|| serde_json::json!({}));
-
-        let tool = self
-            .pending_permission_tool_names
-            .write()
-            .await
-            .remove(request_id);
+        let pending = self.pending_permissions.write().await.remove(request_id);
+        let (input, tool) = match pending {
+            Some(p) => (p.input, Some(p.tool_name)),
+            None => (serde_json::json!({}), None),
+        };
 
         // On AllowSession, cache the grant for this tool
         if decision == betcode_proto::v1::PermissionDecision::AllowSession {
