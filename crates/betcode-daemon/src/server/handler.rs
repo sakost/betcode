@@ -117,7 +117,9 @@ async fn handle_permission(
     } else {
         let fallback_granted = matches!(
             decision,
-            PermissionDecision::AllowOnce | PermissionDecision::AllowSession
+            PermissionDecision::AllowOnce
+                | PermissionDecision::AllowSession
+                | PermissionDecision::AllowWithEdit
         );
         (
             fallback_granted,

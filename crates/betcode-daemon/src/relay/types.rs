@@ -66,6 +66,7 @@ impl RelayHandle {
             decision,
             betcode_proto::v1::PermissionDecision::AllowOnce
                 | betcode_proto::v1::PermissionDecision::AllowSession
+                | betcode_proto::v1::PermissionDecision::AllowWithEdit
         );
 
         let input = self

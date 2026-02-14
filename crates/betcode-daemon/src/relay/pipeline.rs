@@ -1112,4 +1112,27 @@ mod tests {
         assert!(handle.pending_permission_inputs.read().await.is_empty());
         assert!(handle.pending_permission_tool_names.read().await.is_empty());
     }
+
+    /// AllowWithEdit should grant but NOT cache in session_grants, and should clean pending maps.
+    #[tokio::test]
+    async fn process_permission_allow_with_edit_grants_without_caching() {
+        let input = serde_json::json!({"command": "cargo build"});
+        let handle = make_handle_with_pending("req-awe", "Bash", input.clone()).await;
+
+        let (granted, returned_input) = handle
+            .process_permission_response(
+                "req-awe",
+                betcode_proto::v1::PermissionDecision::AllowWithEdit,
+                "test",
+            )
+            .await;
+
+        assert!(granted);
+        assert_eq!(returned_input, input);
+        // session_grants should be empty (AllowWithEdit does not cache — user wants to review each time)
+        assert!(handle.session_grants.read().await.is_empty());
+        // pending maps should be cleaned
+        assert!(handle.pending_permission_inputs.read().await.is_empty());
+        assert!(handle.pending_permission_tool_names.read().await.is_empty());
+    }
 }

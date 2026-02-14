@@ -793,10 +793,13 @@ impl TunnelRequestHandler {
         let mut grants = handle.session_grants.write().await;
         if req.tool_name.is_empty() {
             grants.clear();
+            drop(grants);
+            info!(session_id = %req.session_id, "Cleared all session grants via tunnel");
         } else {
             grants.remove(&req.tool_name);
+            drop(grants);
+            info!(session_id = %req.session_id, tool_name = %req.tool_name, "Cleared session grant via tunnel");
         }
-        drop(grants);
         vec![
             self.unary_response_frame(
                 request_id,
@@ -837,11 +840,14 @@ impl TunnelRequestHandler {
                 &format!("Session {} not active", req.session_id),
             )];
         };
+        let tool_name = req.tool_name.clone();
+        let granted = req.granted;
         handle
             .session_grants
             .write()
             .await
             .insert(req.tool_name, req.granted);
+        info!(session_id = %req.session_id, tool_name = %tool_name, granted = granted, "Set session grant via tunnel");
         vec![
             self.unary_response_frame(
                 request_id,
@@ -873,14 +879,17 @@ impl TunnelRequestHandler {
             .update_session_name(&req.session_id, &req.name)
             .await
         {
-            Ok(()) => vec![
-                self.unary_response_frame(
-                    request_id,
-                    &RenameSessionResponse {},
-                    relay_forwarded,
-                )
-                .await,
-            ],
+            Ok(()) => {
+                info!(session_id = %req.session_id, name = %req.name, "Session renamed via tunnel");
+                vec![
+                    self.unary_response_frame(
+                        request_id,
+                        &RenameSessionResponse {},
+                        relay_forwarded,
+                    )
+                    .await,
+                ]
+            }
             Err(crate::storage::DatabaseError::NotFound(_)) => vec![Self::error_response(
                 request_id,
                 TunnelErrorCode::NotFound,
@@ -1015,6 +1024,7 @@ impl TunnelRequestHandler {
                             decision,
                             betcode_proto::v1::PermissionDecision::AllowOnce
                                 | betcode_proto::v1::PermissionDecision::AllowSession
+                                | betcode_proto::v1::PermissionDecision::AllowWithEdit
                         );
                         (
                             fallback_granted,
