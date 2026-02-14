@@ -42,5 +42,8 @@ notify.workspace = true
 betcode-crypto = { workspace = true, features = ["test-utils"] }
 tempfile.workspace = true
 
+[package.metadata.cargo-machete]
+ignored = ["tracing-subscriber"]
+
 [lints]
 workspace = true

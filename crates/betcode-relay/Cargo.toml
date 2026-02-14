@@ -34,5 +34,8 @@ argon2 = "0.5.3"
 sha2 = "0.10.9"
 rcgen = "0.14.7"
 
+[package.metadata.cargo-machete]
+ignored = ["tracing-subscriber"]
+
 [lints]
 workspace = true

@@ -297,7 +297,6 @@ dependencies = [
 name = "betcode-core"
 version = "0.1.0"
 dependencies = [
- "betcode-proto",
  "cargo-husky",
  "nucleo-matcher",
  "regex",
@@ -410,7 +409,6 @@ dependencies = [
  "clap",
  "tokio",
  "tower",
- "tower-http",
  "tracing",
  "tracing-subscriber",
 ]
