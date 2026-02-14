@@ -123,32 +123,8 @@ impl AgentService for AgentServiceImpl {
             .await
             .map_err(|e| Status::internal(e.to_string()))?;
 
-        let summaries: Vec<SessionSummary> = sessions
-            .into_iter()
-            .map(|s| SessionSummary {
-                id: s.id,
-                model: s.model,
-                working_directory: s.working_directory,
-                worktree_id: s.worktree_id.unwrap_or_default(),
-                status: s.status,
-                message_count: 0,
-                #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-                total_input_tokens: s.total_input_tokens as u32,
-                #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-                total_output_tokens: s.total_output_tokens as u32,
-                total_cost_usd: s.total_cost_usd,
-                created_at: Some(prost_types::Timestamp {
-                    seconds: s.created_at,
-                    nanos: 0,
-                }),
-                updated_at: Some(prost_types::Timestamp {
-                    seconds: s.updated_at,
-                    nanos: 0,
-                }),
-                last_message_preview: s.last_message_preview.unwrap_or_default(),
-                name: s.name,
-            })
-            .collect();
+        let summaries: Vec<SessionSummary> =
+            sessions.into_iter().map(SessionSummary::from).collect();
 
         #[allow(clippy::cast_possible_truncation)]
         let total = summaries.len() as u32;

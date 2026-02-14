@@ -703,12 +703,13 @@ async fn handler_encrypts_outgoing_response() {
         let enc = p.encrypted.as_ref().unwrap();
         // Nonce should be non-empty (encrypted)
         assert!(!enc.nonce.is_empty());
-        // Raw protobuf decode on ciphertext should fail
-        assert!(CancelTurnResponse::decode(enc.ciphertext.as_slice()).is_err());
-        // But decrypting first should work
+        // Decrypting should work
         let decrypted = client_crypto.decrypt(&enc.ciphertext, &enc.nonce).unwrap();
         let resp = CancelTurnResponse::decode(decrypted.as_slice()).unwrap();
         assert!(!resp.was_active);
+        // Ciphertext must differ from plaintext — proves encryption happened
+        let plaintext = resp.encode_to_vec();
+        assert_ne!(enc.ciphertext, plaintext, "ciphertext should differ from plaintext");
     } else {
         panic!("wrong payload");
     }

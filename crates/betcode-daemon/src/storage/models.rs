@@ -1,5 +1,6 @@
 //! Database models for `BetCode` daemon.
 
+use betcode_proto::v1::SessionSummary;
 use serde::{Deserialize, Serialize};
 
 /// Session record from the database.
@@ -21,6 +22,33 @@ pub struct Session {
     pub compaction_sequence: i64,
     #[serde(default)]
     pub name: String,
+}
+
+impl From<Session> for SessionSummary {
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    fn from(s: Session) -> Self {
+        Self {
+            id: s.id,
+            model: s.model,
+            working_directory: s.working_directory,
+            worktree_id: s.worktree_id.unwrap_or_default(),
+            status: s.status,
+            message_count: 0,
+            total_input_tokens: s.total_input_tokens as u32,
+            total_output_tokens: s.total_output_tokens as u32,
+            total_cost_usd: s.total_cost_usd,
+            created_at: Some(prost_types::Timestamp {
+                seconds: s.created_at,
+                nanos: 0,
+            }),
+            updated_at: Some(prost_types::Timestamp {
+                seconds: s.updated_at,
+                nanos: 0,
+            }),
+            last_message_preview: s.last_message_preview.unwrap_or_default(),
+            name: s.name,
+        }
+    }
 }
 
 /// Message record from the database.

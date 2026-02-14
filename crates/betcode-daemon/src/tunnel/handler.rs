@@ -500,32 +500,8 @@ impl TunnelRequestHandler {
 
         match self.db.list_sessions(working_dir, limit, req.offset).await {
             Ok(sessions) => {
-                let summaries: Vec<SessionSummary> = sessions
-                    .into_iter()
-                    .map(|s| SessionSummary {
-                        id: s.id,
-                        model: s.model,
-                        working_directory: s.working_directory,
-                        worktree_id: s.worktree_id.unwrap_or_default(),
-                        status: s.status,
-                        message_count: 0,
-                        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-                        total_input_tokens: s.total_input_tokens as u32,
-                        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-                        total_output_tokens: s.total_output_tokens as u32,
-                        total_cost_usd: s.total_cost_usd,
-                        created_at: Some(prost_types::Timestamp {
-                            seconds: s.created_at,
-                            nanos: 0,
-                        }),
-                        updated_at: Some(prost_types::Timestamp {
-                            seconds: s.updated_at,
-                            nanos: 0,
-                        }),
-                        last_message_preview: s.last_message_preview.unwrap_or_default(),
-                        name: s.name,
-                    })
-                    .collect();
+                let summaries: Vec<SessionSummary> =
+                    sessions.into_iter().map(SessionSummary::from).collect();
                 #[allow(clippy::cast_possible_truncation)]
                 let total = summaries.len() as u32;
                 vec![
@@ -1012,7 +988,10 @@ impl TunnelRequestHandler {
             Some(Request::Permission(perm)) => {
                 let decision =
                     betcode_proto::v1::PermissionDecision::try_from(perm.decision)
-                        .unwrap_or(betcode_proto::v1::PermissionDecision::Deny);
+                        .unwrap_or_else(|_| {
+                            warn!(raw_decision = perm.decision, "Unknown PermissionDecision, defaulting to Deny");
+                            betcode_proto::v1::PermissionDecision::Deny
+                        });
 
                 let (granted, original_input) =
                     if let Some(handle) = self.relay.get_handle(&sid).await {
