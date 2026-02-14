@@ -397,7 +397,10 @@ fn spawn_stdout_pipeline(ctx: StdoutPipelineContext) {
                     event.event
                 {
                     if let Some(input) = bridge.take_permission_input(&p.request_id) {
-                        // Check if we have a session grant for this tool
+                        // Check session_grants for a cached decision on this tool:
+                        //   Some(true)  → auto-allow (skip prompt, grant immediately)
+                        //   Some(false) → auto-deny  (skip prompt, deny immediately)
+                        //   None        → no cached decision, forward to client for user prompt
                         let grant = session_grants.read().await.get(&p.tool_name).copied();
                         if let Some(granted) = grant {
                             // Auto-respond: send permission response directly to stdin
