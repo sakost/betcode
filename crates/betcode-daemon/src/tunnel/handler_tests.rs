@@ -2518,3 +2518,34 @@ async fn config_all_methods_dispatch() {
         }
     }
 }
+
+// --- SetSessionGrant validation tests ---
+
+#[tokio::test]
+async fn set_session_grant_empty_tool_name_returns_invalid_argument() {
+    let HandlerTestOutput { handler: h, .. } = HandlerTestBuilder::new().build().await;
+    let req = SetSessionGrantRequest {
+        session_id: "some-session".into(),
+        tool_name: String::new(),
+        granted: true,
+    };
+    let r = h
+        .handle_frame(req_frame(
+            "ssg1",
+            METHOD_SET_SESSION_GRANT,
+            encode(&req),
+        ))
+        .await;
+    assert_eq!(r.len(), 1);
+    assert_eq!(r[0].frame_type, FrameType::Error as i32);
+    if let Some(betcode_proto::v1::tunnel_frame::Payload::Error(e)) = &r[0].payload {
+        assert_eq!(e.code, TunnelErrorCode::InvalidArgument as i32);
+        assert!(
+            e.message.contains("tool_name"),
+            "Error message should mention tool_name, got: {}",
+            e.message
+        );
+    } else {
+        panic!("expected error payload");
+    }
+}

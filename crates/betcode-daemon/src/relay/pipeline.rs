@@ -1010,4 +1010,106 @@ mod tests {
         let tool_names = handle.pending_permission_tool_names.read().await;
         assert_eq!(tool_names.get("req-2"), Some(&"Write".to_string()));
     }
+
+    /// Helper to create a `RelayHandle` with pre-populated pending maps.
+    async fn make_handle_with_pending(
+        request_id: &str,
+        tool_name: &str,
+        original_input: serde_json::Value,
+    ) -> RelayHandle {
+        use std::sync::atomic::AtomicU64;
+
+        let (tx, _rx) = tokio::sync::mpsc::channel(1);
+        let handle = RelayHandle {
+            process_id: "pid-test".into(),
+            session_id: "sid-test".into(),
+            stdin_tx: tx,
+            sequence_counter: Arc::new(AtomicU64::new(0)),
+            pending_question_inputs: Arc::new(tokio::sync::RwLock::new(HashMap::new())),
+            pending_permission_inputs: Arc::new(tokio::sync::RwLock::new(HashMap::new())),
+            session_grants: Arc::new(tokio::sync::RwLock::new(HashMap::new())),
+            pending_permission_tool_names: Arc::new(tokio::sync::RwLock::new(HashMap::new())),
+        };
+        handle
+            .pending_permission_inputs
+            .write()
+            .await
+            .insert(request_id.into(), original_input);
+        handle
+            .pending_permission_tool_names
+            .write()
+            .await
+            .insert(request_id.into(), tool_name.into());
+        handle
+    }
+
+    /// AllowSession should cache the grant in session_grants and clean pending maps.
+    #[tokio::test]
+    async fn process_permission_allow_session_caches_grant() {
+        let input = serde_json::json!({"command": "cargo test"});
+        let handle = make_handle_with_pending("req-as", "Bash", input.clone()).await;
+
+        let (granted, returned_input) = handle
+            .process_permission_response(
+                "req-as",
+                betcode_proto::v1::PermissionDecision::AllowSession,
+                "test",
+            )
+            .await;
+
+        assert!(granted);
+        assert_eq!(returned_input, input);
+        // session_grants should contain the cached grant
+        let grants = handle.session_grants.read().await;
+        assert_eq!(grants.get("Bash"), Some(&true));
+        // pending maps should be cleaned
+        assert!(handle.pending_permission_inputs.read().await.is_empty());
+        assert!(handle.pending_permission_tool_names.read().await.is_empty());
+    }
+
+    /// AllowOnce should NOT cache the grant in session_grants but should clean pending maps.
+    #[tokio::test]
+    async fn process_permission_allow_once_does_not_cache() {
+        let input = serde_json::json!({"file": "/tmp/test.txt"});
+        let handle = make_handle_with_pending("req-ao", "Write", input.clone()).await;
+
+        let (granted, returned_input) = handle
+            .process_permission_response(
+                "req-ao",
+                betcode_proto::v1::PermissionDecision::AllowOnce,
+                "test",
+            )
+            .await;
+
+        assert!(granted);
+        assert_eq!(returned_input, input);
+        // session_grants should be empty (AllowOnce does not cache)
+        assert!(handle.session_grants.read().await.is_empty());
+        // pending maps should be cleaned
+        assert!(handle.pending_permission_inputs.read().await.is_empty());
+        assert!(handle.pending_permission_tool_names.read().await.is_empty());
+    }
+
+    /// Deny should NOT cache the grant and should clean pending maps.
+    #[tokio::test]
+    async fn process_permission_deny_cleans_pending() {
+        let input = serde_json::json!({"command": "rm -rf /"});
+        let handle = make_handle_with_pending("req-d", "Bash", input.clone()).await;
+
+        let (granted, returned_input) = handle
+            .process_permission_response(
+                "req-d",
+                betcode_proto::v1::PermissionDecision::Deny,
+                "test",
+            )
+            .await;
+
+        assert!(!granted);
+        assert_eq!(returned_input, input);
+        // session_grants should be empty (Deny does not cache)
+        assert!(handle.session_grants.read().await.is_empty());
+        // pending maps should be cleaned
+        assert!(handle.pending_permission_inputs.read().await.is_empty());
+        assert!(handle.pending_permission_tool_names.read().await.is_empty());
+    }
 }
