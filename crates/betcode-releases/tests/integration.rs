@@ -11,6 +11,7 @@ fn app() -> axum::Router {
     })
 }
 
+#[allow(clippy::unwrap_used)]
 /// Send a request to the app and return (status, body text).
 async fn send_request(uri: &str, headers: &[(&str, &str)]) -> (StatusCode, String) {
     let mut builder = Request::builder().uri(uri);
@@ -28,6 +29,7 @@ async fn send_request(uri: &str, headers: &[(&str, &str)]) -> (StatusCode, Strin
     (status, String::from_utf8_lossy(&body).into_owned())
 }
 
+#[allow(clippy::unwrap_used)]
 /// Send a request and assert the response is a redirect containing `expected_asset`.
 async fn assert_redirect(uri: &str, user_agent: &str, expected_asset: &str) {
     let mut builder = Request::builder().uri(uri);

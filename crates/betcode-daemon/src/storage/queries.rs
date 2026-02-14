@@ -593,7 +593,7 @@ mod tests {
     }
 
     /// Create a DB with repo "r1" and a worktree "wt-1" on branch "feature-x",
-    /// with the given setup_script.
+    /// with the given `setup_script`.
     async fn create_worktree_fixture(setup_script: Option<&str>) -> (Database, Worktree) {
         let db = Database::open_in_memory().await.unwrap();
         create_test_repo(&db, "r1", "repo", "/repo").await;

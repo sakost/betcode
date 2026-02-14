@@ -837,7 +837,7 @@ mod tests {
         assert!(response["updatedInput"]["questions"].is_array());
     }
 
-    /// Verify that RelayHandle session_grants and pending_permissions
+    /// Verify that `RelayHandle` `session_grants` and `pending_permissions`
     /// are properly initialized as empty.
     #[tokio::test]
     async fn relay_handle_session_grants_initialized_empty() {
@@ -847,7 +847,7 @@ mod tests {
         assert!(handle.pending_permissions.read().await.is_empty());
     }
 
-    /// Verify AllowSession populates session_grants via the handle.
+    /// Verify `AllowSession` populates `session_grants` via the handle.
     #[tokio::test]
     async fn allow_session_populates_grant() {
         use crate::relay::PendingPermission;
@@ -876,9 +876,10 @@ mod tests {
         // Verify grant is cached
         let grants = handle.session_grants.read().await;
         assert_eq!(grants.get("Bash"), Some(&true));
+        drop(grants);
     }
 
-    /// Verify AllowOnce does NOT populate session_grants.
+    /// Verify `AllowOnce` does NOT populate `session_grants`.
     #[tokio::test]
     async fn allow_once_does_not_populate_grant() {
         use crate::relay::PendingPermission;
@@ -900,7 +901,7 @@ mod tests {
         assert!(handle.session_grants.read().await.is_empty());
     }
 
-    /// Verify that session_grants auto-respond sends to stdin_tx when a grant exists.
+    /// Verify that `session_grants` auto-respond sends to `stdin_tx` when a grant exists.
     #[tokio::test]
     async fn session_grant_auto_respond_sends_to_stdin() {
         let (handle, mut rx) = test_relay_handle();
@@ -929,7 +930,7 @@ mod tests {
     }
 
     /// Verify that with no matching grant, the permission request is
-    /// stored in pending_permissions for the handler to process.
+    /// stored in `pending_permissions` for the handler to process.
     #[tokio::test]
     async fn no_grant_stores_in_pending_permissions() {
         use crate::relay::PendingPermission;
@@ -953,9 +954,10 @@ mod tests {
         let entry = pending.get("req-2").unwrap();
         assert_eq!(entry.input, input);
         assert_eq!(entry.tool_name, "Write");
+        drop(pending);
     }
 
-    /// Helper to create a `RelayHandle` with pre-populated pending permissions.
+    /// Helper to create a [`RelayHandle`] with pre-populated pending permissions.
     async fn make_handle_with_pending(
         request_id: &str,
         tool_name: &str,
@@ -973,7 +975,7 @@ mod tests {
         handle
     }
 
-    /// AllowSession should cache the grant in session_grants and clean pending maps.
+    /// `AllowSession` should cache the grant in `session_grants` and clean pending maps.
     #[tokio::test]
     async fn process_permission_allow_session_caches_grant() {
         let input = serde_json::json!({"command": "cargo test"});
@@ -992,11 +994,12 @@ mod tests {
         // session_grants should contain the cached grant
         let grants = handle.session_grants.read().await;
         assert_eq!(grants.get("Bash"), Some(&true));
+        drop(grants);
         // pending maps should be cleaned
         assert!(handle.pending_permissions.read().await.is_empty());
     }
 
-    /// AllowOnce should NOT cache the grant in session_grants but should clean pending maps.
+    /// `AllowOnce` should NOT cache the grant in `session_grants` but should clean pending maps.
     #[tokio::test]
     async fn process_permission_allow_once_does_not_cache() {
         let input = serde_json::json!({"file": "/tmp/test.txt"});
@@ -1040,7 +1043,7 @@ mod tests {
         assert!(handle.pending_permissions.read().await.is_empty());
     }
 
-    /// AllowWithEdit should grant but NOT cache in session_grants, and should clean pending maps.
+    /// `AllowWithEdit` should grant but NOT cache in `session_grants`, and should clean pending maps.
     #[tokio::test]
     async fn process_permission_allow_with_edit_grants_without_caching() {
         let input = serde_json::json!({"command": "cargo build"});

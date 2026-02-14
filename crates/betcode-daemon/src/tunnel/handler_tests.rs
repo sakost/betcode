@@ -78,6 +78,7 @@ impl HandlerTestBuilder {
         self
     }
 
+    #[allow(clippy::too_many_lines)]
     async fn build(self) -> HandlerTestOutput {
         let db = Database::open_in_memory().await.unwrap();
         let sub = Arc::new(SubprocessManager::new(self.max_processes));

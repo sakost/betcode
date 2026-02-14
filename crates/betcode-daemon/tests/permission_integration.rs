@@ -24,7 +24,7 @@ async fn engine_with_db() -> DaemonPermissionEngine {
 
 /// Build a `PermissionEvalRequest` with common defaults.
 /// Only `request_id` and `tool_name` vary in most tests.
-fn eval_request<'a>(
+const fn eval_request<'a>(
     request_id: &'a str,
     tool_name: &'a str,
     description: &'a str,

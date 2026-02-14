@@ -256,6 +256,7 @@ mod tests {
     use std::net::SocketAddr;
     use std::path::PathBuf;
 
+    #[allow(clippy::expect_used)]
     fn test_config() -> RelaySetupConfig {
         RelaySetupConfig {
             domain: "relay.example.com".into(),
@@ -282,6 +283,7 @@ mod tests {
     /// Write an env file via `write_env_file_inner` into a temp directory and
     /// return its final contents. Optionally seeds the file with `initial`
     /// content before calling the function under test.
+    #[allow(clippy::expect_used)]
     fn run_write_env_file(is_update: bool, initial: Option<&str>) -> String {
         let dir = tempfile::tempdir().expect("tempdir");
         let env_path = dir.path().join("relay.env");
@@ -324,6 +326,7 @@ mod tests {
     // --- should_skip_certbot ---
 
     #[test]
+    #[allow(clippy::expect_used)]
     fn skip_certbot_when_cert_exists_on_update() {
         let dir = tempfile::tempdir().expect("tempdir");
         let cert_path = dir.path().join("fullchain.pem");

@@ -336,6 +336,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::expect_used, clippy::panic)]
     fn parse_result_error_during_execution() {
         let json = r#"{"type":"result","subtype":"error_during_execution","duration_ms":0,"is_error":true,"errors":["No conversation found with session ID: abc-123"],"session_id":"new-session","total_cost_usd":0,"usage":{"input_tokens":0,"output_tokens":0}}"#;
         let msg = parse_line(json).expect("should parse");
@@ -356,6 +357,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::expect_used, clippy::panic)]
     fn parse_result_success_has_no_errors() {
         let json = r#"{"type":"result","subtype":"success","duration_ms":1234,"session_id":"s1","total_cost_usd":0.01,"usage":{"input_tokens":100,"output_tokens":50}}"#;
         let msg = parse_line(json).expect("should parse");

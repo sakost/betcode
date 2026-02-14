@@ -597,6 +597,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::panic)]
     async fn create_nonexistent_repo_returns_not_found() {
         let (mgr, _tmp) = test_manager().await;
         let repo = make_test_repo(PathBuf::from("/nonexistent/repo/path"));
@@ -607,7 +608,7 @@ mod tests {
                 assert!(msg.contains("Repository not found"));
                 assert!(msg.contains("/nonexistent/repo/path"));
             }
-            other => panic!("Expected NotFound, got: {:?}", other),
+            other => panic!("Expected NotFound, got: {other:?}"),
         }
     }
 
