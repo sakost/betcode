@@ -104,9 +104,7 @@ pub fn prompt_username(non_interactive: bool) -> Result<String> {
     if non_interactive {
         anyhow::bail!("--username is required in non-interactive mode");
     }
-    let username: String = Input::new()
-        .with_prompt("Username")
-        .interact_text()?;
+    let username: String = Input::new().with_prompt("Username").interact_text()?;
     Ok(username)
 }
 
@@ -114,14 +112,10 @@ pub fn prompt_username(non_interactive: bool) -> Result<String> {
 pub fn prompt_password(non_interactive: bool) -> Result<String> {
     if non_interactive {
         std::env::var("BETCODE_PASSWORD").map_err(|_| {
-            anyhow::anyhow!(
-                "BETCODE_PASSWORD env var is required in non-interactive mode"
-            )
+            anyhow::anyhow!("BETCODE_PASSWORD env var is required in non-interactive mode")
         })
     } else {
-        let password: String = Password::new()
-            .with_prompt("Password")
-            .interact()?;
+        let password: String = Password::new().with_prompt("Password").interact()?;
         Ok(password)
     }
 }

@@ -187,10 +187,7 @@ pub fn to_mr_info(mr: gitlab::MergeRequest) -> MergeRequestInfo {
         updated_at: parse_timestamp(&mr.updated_at),
         web_url: mr.web_url,
         draft: mr.draft,
-        merge_status: mr
-            .merge_status
-            .as_deref()
-            .map_or(0, str_to_merge_status),
+        merge_status: mr.merge_status.as_deref().map_or(0, str_to_merge_status),
         assignee: mr.assignee.map(|u| u.username).unwrap_or_default(),
         assignees: mr.assignees.into_iter().map(|u| u.username).collect(),
         reviewers: mr.reviewers.into_iter().map(|u| u.username).collect(),

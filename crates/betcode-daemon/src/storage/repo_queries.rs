@@ -65,11 +65,10 @@ impl Database {
 
     /// List all git repos.
     pub async fn list_git_repos(&self) -> Result<Vec<GitRepoRow>, DatabaseError> {
-        let repos = sqlx::query_as::<_, GitRepoRow>(
-            "SELECT * FROM git_repos ORDER BY last_active DESC",
-        )
-        .fetch_all(self.pool())
-        .await?;
+        let repos =
+            sqlx::query_as::<_, GitRepoRow>("SELECT * FROM git_repos ORDER BY last_active DESC")
+                .fetch_all(self.pool())
+                .await?;
 
         Ok(repos)
     }
@@ -282,7 +281,14 @@ mod tests {
         let db = Database::open_in_memory().await.unwrap();
         let repo = db
             .create_git_repo(
-                "r1", "myrepo", "/path/to/repo", "global", ".worktree", None, None, true,
+                "r1",
+                "myrepo",
+                "/path/to/repo",
+                "global",
+                ".worktree",
+                None,
+                None,
+                true,
             )
             .await
             .unwrap();
@@ -299,7 +305,14 @@ mod tests {
     async fn get_by_path() {
         let db = Database::open_in_memory().await.unwrap();
         db.create_git_repo(
-            "r1", "myrepo", "/path/to/repo", "global", ".worktree", None, None, true,
+            "r1",
+            "myrepo",
+            "/path/to/repo",
+            "global",
+            ".worktree",
+            None,
+            None,
+            true,
         )
         .await
         .unwrap();
@@ -326,7 +339,14 @@ mod tests {
     async fn update_repo() {
         let db = Database::open_in_memory().await.unwrap();
         db.create_git_repo(
-            "r1", "old", "/repo", "global", ".worktree", None, None, true,
+            "r1",
+            "old",
+            "/repo",
+            "global",
+            ".worktree",
+            None,
+            None,
+            true,
         )
         .await
         .unwrap();
@@ -353,7 +373,14 @@ mod tests {
     async fn remove_repo_cascades_to_worktrees() {
         let db = Database::open_in_memory().await.unwrap();
         db.create_git_repo(
-            "r1", "repo", "/repo", "global", ".worktree", None, None, true,
+            "r1",
+            "repo",
+            "/repo",
+            "global",
+            ".worktree",
+            None,
+            None,
+            true,
         )
         .await
         .unwrap();
@@ -412,13 +439,27 @@ mod tests {
     async fn duplicate_repo_path_fails() {
         let db = Database::open_in_memory().await.unwrap();
         db.create_git_repo(
-            "r1", "a", "/same/path", "global", ".worktree", None, None, true,
+            "r1",
+            "a",
+            "/same/path",
+            "global",
+            ".worktree",
+            None,
+            None,
+            true,
         )
         .await
         .unwrap();
         let result = db
             .create_git_repo(
-                "r2", "b", "/same/path", "global", ".worktree", None, None, true,
+                "r2",
+                "b",
+                "/same/path",
+                "global",
+                ".worktree",
+                None,
+                None,
+                true,
             )
             .await;
         assert!(result.is_err());
@@ -427,12 +468,30 @@ mod tests {
     #[tokio::test]
     async fn count_worktrees_for_repo() {
         let db = Database::open_in_memory().await.unwrap();
-        db.create_git_repo("ra", "repo-a", "/repo-a", "global", ".worktree", None, None, true)
-            .await
-            .unwrap();
-        db.create_git_repo("rb", "repo-b", "/repo-b", "global", ".worktree", None, None, true)
-            .await
-            .unwrap();
+        db.create_git_repo(
+            "ra",
+            "repo-a",
+            "/repo-a",
+            "global",
+            ".worktree",
+            None,
+            None,
+            true,
+        )
+        .await
+        .unwrap();
+        db.create_git_repo(
+            "rb",
+            "repo-b",
+            "/repo-b",
+            "global",
+            ".worktree",
+            None,
+            None,
+            true,
+        )
+        .await
+        .unwrap();
 
         db.create_worktree("wt1", "feat1", "/tmp/wt1", "feat1", "ra", None)
             .await
@@ -505,15 +564,42 @@ mod tests {
         assert!(counts.is_empty());
 
         // Create 2 repos
-        db.create_git_repo("ra", "repo-a", "/repo-a", "global", ".worktree", None, None, true)
-            .await
-            .unwrap();
-        db.create_git_repo("rb", "repo-b", "/repo-b", "global", ".worktree", None, None, true)
-            .await
-            .unwrap();
-        db.create_git_repo("rc", "repo-c", "/repo-c", "global", ".worktree", None, None, true)
-            .await
-            .unwrap();
+        db.create_git_repo(
+            "ra",
+            "repo-a",
+            "/repo-a",
+            "global",
+            ".worktree",
+            None,
+            None,
+            true,
+        )
+        .await
+        .unwrap();
+        db.create_git_repo(
+            "rb",
+            "repo-b",
+            "/repo-b",
+            "global",
+            ".worktree",
+            None,
+            None,
+            true,
+        )
+        .await
+        .unwrap();
+        db.create_git_repo(
+            "rc",
+            "repo-c",
+            "/repo-c",
+            "global",
+            ".worktree",
+            None,
+            None,
+            true,
+        )
+        .await
+        .unwrap();
 
         // Add 2 worktrees to repo-a, 1 to repo-b, none to repo-c
         db.create_worktree("wt1", "feat1", "/tmp/wt1", "feat1", "ra", None)
@@ -568,7 +654,7 @@ mod tests {
                 None,
                 None,
                 Some(None),               // clear custom_path
-                Some(Some("new script")),  // set new setup_script
+                Some(Some("new script")), // set new setup_script
                 Some(false),
             )
             .await

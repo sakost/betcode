@@ -177,9 +177,12 @@ impl SubprocessManager {
         let process_id = uuid::Uuid::new_v4().to_string();
 
         // Set up stdin channel
-        let stdin = child.stdin.take().ok_or_else(|| SubprocessError::SpawnFailed {
-            reason: "Failed to capture stdin".to_string(),
-        })?;
+        let stdin = child
+            .stdin
+            .take()
+            .ok_or_else(|| SubprocessError::SpawnFailed {
+                reason: "Failed to capture stdin".to_string(),
+            })?;
 
         let (stdin_tx, mut stdin_rx) = mpsc::channel::<String>(32);
 
@@ -203,9 +206,12 @@ impl SubprocessManager {
         });
 
         // Set up stdout reader
-        let stdout = child.stdout.take().ok_or_else(|| SubprocessError::SpawnFailed {
-            reason: "Failed to capture stdout".to_string(),
-        })?;
+        let stdout = child
+            .stdout
+            .take()
+            .ok_or_else(|| SubprocessError::SpawnFailed {
+                reason: "Failed to capture stdout".to_string(),
+            })?;
 
         let pid = process_id.clone();
         tokio::spawn(async move {

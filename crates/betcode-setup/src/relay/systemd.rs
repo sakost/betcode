@@ -27,7 +27,11 @@ pub fn deploy(config: &RelaySetupConfig, is_update: bool) -> Result<()> {
     // "Text file busy" (ETXTBSY) on Linux.
     if is_update && super::validate::is_betcode_relay_active() {
         tracing::info!("stopping betcode-relay before binary update");
-        run_cmd("stopping betcode-relay", "systemctl", &["stop", "betcode-relay"])?;
+        run_cmd(
+            "stopping betcode-relay",
+            "systemctl",
+            &["stop", "betcode-relay"],
+        )?;
     }
 
     install_relay_binary(config)?;
@@ -63,8 +67,7 @@ fn create_directories(config: &RelaySetupConfig) -> Result<()> {
 
     for dir in &[db_dir, Path::new("/etc/betcode")] {
         tracing::info!("creating directory: {}", dir.display());
-        fs::create_dir_all(dir)
-            .with_context(|| format!("failed to create {}", dir.display()))?;
+        fs::create_dir_all(dir).with_context(|| format!("failed to create {}", dir.display()))?;
     }
 
     run_cmd(
@@ -88,9 +91,7 @@ fn write_env_file(config: &RelaySetupConfig, is_update: bool) -> Result<()> {
 
 fn write_env_file_inner(config: &RelaySetupConfig, is_update: bool, path: &str) -> Result<()> {
     if is_update && Path::new(path).exists() {
-        tracing::warn!(
-            "existing {path} preserved — to regenerate, delete it and re-run setup"
-        );
+        tracing::warn!("existing {path} preserved — to regenerate, delete it and re-run setup");
         return Ok(());
     }
 
@@ -105,7 +106,11 @@ fn write_env_file_inner(config: &RelaySetupConfig, is_update: bool, path: &str) 
         fs::set_permissions(path, fs::Permissions::from_mode(0o640))
             .context("failed to set permissions on relay.env")?;
 
-        run_cmd("setting ownership on relay.env", "chown", &["root:betcode", path])?;
+        run_cmd(
+            "setting ownership on relay.env",
+            "chown",
+            &["root:betcode", path],
+        )?;
     }
     Ok(())
 }
@@ -129,15 +134,11 @@ fn install_relay_binary(config: &RelaySetupConfig) -> Result<()> {
             tracing::info!("using existing relay binary at {dest}");
             return Ok(());
         }
-        anyhow::bail!(
-            "relay binary not found at {dest} and --relay-binary not provided"
-        );
+        anyhow::bail!("relay binary not found at {dest} and --relay-binary not provided");
     };
 
     tracing::info!("installing relay binary: {} -> {dest}", src.display());
-    fs::copy(src, dest).with_context(|| {
-        format!("failed to copy {} to {dest}", src.display())
-    })?;
+    fs::copy(src, dest).with_context(|| format!("failed to copy {} to {dest}", src.display()))?;
 
     // Ensure executable
     fs::set_permissions(dest, fs::Permissions::from_mode(0o755))
@@ -172,13 +173,25 @@ fn setup_certbot(config: &RelaySetupConfig, is_update: bool) -> Result<()> {
     run_cmd(
         &format!("obtaining TLS certificate for {}", config.domain),
         "certbot",
-        &["certonly", "--standalone", "-d", &config.domain, "--agree-tos", "--non-interactive", "--register-unsafely-without-email"],
+        &[
+            "certonly",
+            "--standalone",
+            "-d",
+            &config.domain,
+            "--agree-tos",
+            "--non-interactive",
+            "--register-unsafely-without-email",
+        ],
     )?;
 
     // Grant betcode user read access to letsencrypt dirs via ACLs
     // (certbot defaults to 0700 root:root on /etc/letsencrypt/{live,archive})
     if !command_exists("setfacl") {
-        run_cmd("installing acl package", "apt-get", &["install", "-y", "acl"])?;
+        run_cmd(
+            "installing acl package",
+            "apt-get",
+            &["install", "-y", "acl"],
+        )?;
     }
     for dir in &[
         "/etc/letsencrypt/live",
@@ -205,8 +218,7 @@ fn setup_certbot(config: &RelaySetupConfig, is_update: bool) -> Result<()> {
     let hooks_dir = "/etc/letsencrypt/renewal-hooks";
     for subdir in &["pre", "post"] {
         let dir = format!("{hooks_dir}/{subdir}");
-        fs::create_dir_all(&dir)
-            .with_context(|| format!("failed to create {dir}"))?;
+        fs::create_dir_all(&dir).with_context(|| format!("failed to create {dir}"))?;
     }
 
     let pre_hook_path = format!("{hooks_dir}/pre/betcode-relay.sh");
@@ -260,9 +272,8 @@ pub fn deploy_releases(releases_binary: &std::path::Path, domain: &str, repo: &s
         "installing releases binary: {} -> {dest}",
         releases_binary.display()
     );
-    fs::copy(releases_binary, dest).with_context(|| {
-        format!("failed to copy {} to {dest}", releases_binary.display())
-    })?;
+    fs::copy(releases_binary, dest)
+        .with_context(|| format!("failed to copy {} to {dest}", releases_binary.display()))?;
     fs::set_permissions(dest, fs::Permissions::from_mode(0o755))
         .context("failed to set permissions on releases binary")?;
 
@@ -287,9 +298,15 @@ fn enable_and_start(is_update: bool) -> Result<()> {
     run_cmd(description, "systemctl", &args)?;
 
     // Verify service is active
-    let result = run_cmd("verifying service status", "systemctl", &["is-active", "betcode-relay"]);
+    let result = run_cmd(
+        "verifying service status",
+        "systemctl",
+        &["is-active", "betcode-relay"],
+    );
     if result.is_err() {
-        tracing::warn!("service may not have started correctly — check: journalctl -u betcode-relay");
+        tracing::warn!(
+            "service may not have started correctly — check: journalctl -u betcode-relay"
+        );
     }
 
     tracing::info!("betcode-relay is deployed and running");
@@ -318,7 +335,10 @@ mod tests {
 
     #[test]
     fn service_unit_path_is_systemd_location() {
-        assert_eq!(SERVICE_UNIT_PATH, "/etc/systemd/system/betcode-relay.service");
+        assert_eq!(
+            SERVICE_UNIT_PATH,
+            "/etc/systemd/system/betcode-relay.service"
+        );
     }
 
     // --- write_env_file_inner ---

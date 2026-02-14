@@ -111,7 +111,9 @@ fn parse_mode(s: &str) -> Result<DeploymentMode, String> {
     match s {
         "systemd" => Ok(DeploymentMode::Systemd),
         "docker" => Ok(DeploymentMode::Docker),
-        other => Err(format!("unknown mode: {other} (expected 'systemd' or 'docker')")),
+        other => Err(format!(
+            "unknown mode: {other} (expected 'systemd' or 'docker')"
+        )),
     }
 }
 
@@ -178,7 +180,11 @@ pub fn run(args: RelayArgs, non_interactive: bool) -> Result<()> {
 
     config.validate()?;
 
-    tracing::info!("relay setup: mode={}, domain={}", config.deployment_mode, config.domain);
+    tracing::info!(
+        "relay setup: mode={}, domain={}",
+        config.deployment_mode,
+        config.domain
+    );
 
     match config.deployment_mode {
         DeploymentMode::Systemd => {
@@ -194,9 +200,9 @@ pub fn run(args: RelayArgs, non_interactive: bool) -> Result<()> {
 
     // Optionally deploy the releases download server
     if let Some(releases_binary) = args.releases_binary {
-        let releases_domain = args.releases_domain.unwrap_or_else(|| {
-            format!("get.{}", config.domain.trim_start_matches("relay."))
-        });
+        let releases_domain = args
+            .releases_domain
+            .unwrap_or_else(|| format!("get.{}", config.domain.trim_start_matches("relay.")));
         let releases_binary = std::fs::canonicalize(&releases_binary)
             .with_context(|| format!("releases binary not found: {}", releases_binary.display()))?;
         systemd::deploy_releases(&releases_binary, &releases_domain, &args.github_repo)?;

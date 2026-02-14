@@ -56,10 +56,8 @@ impl From<GitRepoRow> for GitRepo {
         let worktree_mode = match row.worktree_mode.as_str() {
             "local" => WorktreeMode::Local,
             "custom" => WorktreeMode::Custom(
-                row.custom_path.map_or_else(
-                    || PathBuf::from("/tmp/betcode-worktrees"),
-                    PathBuf::from,
-                ),
+                row.custom_path
+                    .map_or_else(|| PathBuf::from("/tmp/betcode-worktrees"), PathBuf::from),
             ),
             _ => WorktreeMode::Global,
         };
@@ -132,10 +130,7 @@ mod tests {
             last_active: 0,
         };
         let base = repo.worktree_base_dir(Path::new("/ignored"));
-        assert_eq!(
-            base,
-            PathBuf::from("/home/user/projects/myrepo/.worktree")
-        );
+        assert_eq!(base, PathBuf::from("/home/user/projects/myrepo/.worktree"));
     }
 
     #[test]
@@ -152,10 +147,7 @@ mod tests {
             last_active: 0,
         };
         let base = repo.worktree_base_dir(Path::new("/ignored"));
-        assert_eq!(
-            base,
-            PathBuf::from("/mnt/fast-ssd/worktrees/myrepo")
-        );
+        assert_eq!(base, PathBuf::from("/mnt/fast-ssd/worktrees/myrepo"));
     }
 
     #[test]

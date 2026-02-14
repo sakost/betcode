@@ -42,13 +42,11 @@ fn write_with_backup(filename: &str, content: &str) -> Result<()> {
     if path.exists() {
         let backup = format!("{filename}.bak");
         tracing::info!("backing up existing {filename} -> {backup}");
-        fs::rename(path, &backup)
-            .with_context(|| format!("failed to backup {filename}"))?;
+        fs::rename(path, &backup).with_context(|| format!("failed to backup {filename}"))?;
     }
 
     tracing::info!("writing {filename}");
-    fs::write(path, content)
-        .with_context(|| format!("failed to write {filename}"))?;
+    fs::write(path, content).with_context(|| format!("failed to write {filename}"))?;
 
     Ok(())
 }

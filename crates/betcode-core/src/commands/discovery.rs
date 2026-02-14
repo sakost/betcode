@@ -7,9 +7,8 @@ use super::{CommandCategory, CommandEntry, ExecutionMode};
 
 /// Pre-compiled regex for extracting slash-command names from help text.
 #[allow(clippy::expect_used)]
-static COMMAND_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"/([a-zA-Z][\w-]*)").expect("static regex is valid")
-});
+static COMMAND_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"/([a-zA-Z][\w-]*)").expect("static regex is valid"));
 
 /// Returns a hardcoded list of known Claude Code slash commands.
 pub fn hardcoded_cc_commands(version: &str) -> Vec<CommandEntry> {

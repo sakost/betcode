@@ -38,8 +38,8 @@ use betcode_proto::v1::agent_service_server::AgentServiceServer;
 use betcode_proto::v1::bet_code_health_server::BetCodeHealthServer;
 use betcode_proto::v1::command_service_server::CommandServiceServer;
 use betcode_proto::v1::config_service_server::ConfigServiceServer;
-use betcode_proto::v1::health_server::HealthServer;
 use betcode_proto::v1::git_repo_service_server::GitRepoServiceServer;
+use betcode_proto::v1::health_server::HealthServer;
 use betcode_proto::v1::worktree_service_server::WorktreeServiceServer;
 
 use crate::commands::service_executor::ServiceExecutor;

@@ -11,8 +11,7 @@ use tracing::{error, info, warn};
 
 use betcode_proto::v1::{
     agent_service_client::AgentServiceClient, command_service_client::CommandServiceClient,
-    git_lab_service_client::GitLabServiceClient,
-    git_repo_service_client::GitRepoServiceClient,
+    git_lab_service_client::GitLabServiceClient, git_repo_service_client::GitRepoServiceClient,
     worktree_service_client::WorktreeServiceClient, AddPluginRequest, AddPluginResponse,
     AgentEvent, AgentRequest, CancelTurnRequest, CancelTurnResponse, CreateWorktreeRequest,
     DisablePluginRequest, DisablePluginResponse, EnablePluginRequest, EnablePluginResponse,
@@ -258,10 +257,12 @@ impl DaemonConnection {
         let machine_id_meta = self.config.machine_id.clone();
         let client = self.client.as_mut().ok_or(ConnectionError::NotConnected)?;
 
-        let state = self.identity.as_ref().map_or_else(
-            KeyExchangeState::new,
-            |id| KeyExchangeState::with_identity(std::sync::Arc::clone(id)),
-        );
+        let state = self
+            .identity
+            .as_ref()
+            .map_or_else(KeyExchangeState::new, |id| {
+                KeyExchangeState::with_identity(std::sync::Arc::clone(id))
+            });
         let our_pubkey = state.public_bytes();
 
         let (identity_pubkey, fingerprint_str) = self.identity.as_ref().map_or_else(
@@ -296,17 +297,7 @@ impl DaemonConnection {
 
         match &fp_check {
             FingerprintCheck::TrustOnFirstUse => {
-                let now = std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap_or_default()
-                    .as_secs()
-                    .try_into()
-                    .unwrap_or(i64::MAX);
-                self.fingerprint_store
-                    .record(machine_id, &daemon_fingerprint, now);
-                if let Err(e) = self.fingerprint_store.save(&self.fingerprint_store_path) {
-                    warn!(?e, "Failed to save fingerprint store");
-                }
+                self.record_fingerprint(machine_id, &daemon_fingerprint);
                 info!(
                     daemon_fingerprint = %daemon_fingerprint,
                     machine_id = %machine_id,
@@ -314,15 +305,7 @@ impl DaemonConnection {
                 );
             }
             FingerprintCheck::Matched => {
-                let now = std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap_or_default()
-                    .as_secs()
-                    .try_into()
-                    .unwrap_or(i64::MAX);
-                self.fingerprint_store
-                    .record(machine_id, &daemon_fingerprint, now);
-                let _ = self.fingerprint_store.save(&self.fingerprint_store_path);
+                self.record_fingerprint(machine_id, &daemon_fingerprint);
                 info!(
                     daemon_fingerprint = %daemon_fingerprint,
                     "Daemon fingerprint verified (matches known)"
@@ -343,6 +326,20 @@ impl DaemonConnection {
         self.crypto = Some(std::sync::Arc::new(session));
 
         Ok((daemon_fingerprint, fp_check))
+    }
+
+    /// Record a fingerprint in the TOFU store with the current timestamp.
+    fn record_fingerprint(&mut self, machine_id: &str, fingerprint: &str) {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs()
+            .try_into()
+            .unwrap_or(i64::MAX);
+        self.fingerprint_store.record(machine_id, fingerprint, now);
+        if let Err(e) = self.fingerprint_store.save(&self.fingerprint_store_path) {
+            warn!(?e, "Failed to save fingerprint store");
+        }
     }
 
     /// Accept a fingerprint mismatch (e.g., after user confirms the daemon key changed).

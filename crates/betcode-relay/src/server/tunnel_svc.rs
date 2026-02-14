@@ -230,9 +230,7 @@ impl TunnelService for TunnelServiceImpl {
             self.db
                 .create_machine(&req.machine_id, &req.machine_name, &user_id, &metadata_json)
                 .await
-                .map_err(|e| {
-                    Status::internal(format!("Failed to auto-register machine: {e}"))
-                })?
+                .map_err(|e| Status::internal(format!("Failed to auto-register machine: {e}")))?
         };
 
         // Store identity pubkey if provided

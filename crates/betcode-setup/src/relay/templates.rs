@@ -264,7 +264,13 @@ mod tests {
         let unit = releases_systemd_unit("get.example.com", "sakost/betcode");
         assert!(unit.contains("get.example.com"), "unit must contain domain");
         assert!(unit.contains("sakost/betcode"), "unit must contain repo");
-        assert!(unit.contains("--addr 0.0.0.0:8090"), "unit must contain listen address");
-        assert!(unit.contains("betcode-releases"), "unit must reference the releases binary");
+        assert!(
+            unit.contains("--addr 0.0.0.0:8090"),
+            "unit must contain listen address"
+        );
+        assert!(
+            unit.contains("betcode-releases"),
+            "unit must reference the releases binary"
+        );
     }
 }

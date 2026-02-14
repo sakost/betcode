@@ -125,8 +125,14 @@ async fn main() -> anyhow::Result<()> {
 
     // Create and start gRPC server
     let config = ServerConfig::tcp(args.addr).with_max_sessions(args.max_sessions);
-    let server =
-        GrpcServer::new(config, db, subprocess_manager, shutdown_tx.clone(), worktree_dir).await;
+    let server = GrpcServer::new(
+        config,
+        db,
+        subprocess_manager,
+        shutdown_tx.clone(),
+        worktree_dir,
+    )
+    .await;
 
     // Optionally spawn tunnel client
     let tunnel_handle = if let Some(relay_url) = &args.relay_url {

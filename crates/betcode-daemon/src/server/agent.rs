@@ -15,8 +15,7 @@ use betcode_proto::v1::{
     CompactSessionRequest, CompactSessionResponse, InputLockRequest, InputLockResponse,
     KeyExchangeRequest, KeyExchangeResponse, ListSessionGrantsRequest, ListSessionGrantsResponse,
     ListSessionsRequest, ListSessionsResponse, RenameSessionRequest, RenameSessionResponse,
-    ResumeSessionRequest, SessionSummary, SetSessionGrantRequest,
-    SetSessionGrantResponse,
+    ResumeSessionRequest, SessionSummary, SetSessionGrantRequest, SetSessionGrantResponse,
 };
 
 use super::handler::{handle_agent_request, HandlerContext};

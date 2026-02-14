@@ -104,7 +104,10 @@ async fn handle_permission(
     perm: betcode_proto::v1::PermissionResponse,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let decision = PermissionDecision::try_from(perm.decision).unwrap_or_else(|_| {
-        warn!(raw_decision = perm.decision, "Unknown PermissionDecision, defaulting to Deny");
+        warn!(
+            raw_decision = perm.decision,
+            "Unknown PermissionDecision, defaulting to Deny"
+        );
         PermissionDecision::Deny
     });
 
@@ -113,10 +116,7 @@ async fn handle_permission(
             .process_permission_response(&perm.request_id, decision, "grpc")
             .await
     } else {
-        (
-            is_granted(decision),
-            serde_json::json!({}),
-        )
+        (is_granted(decision), serde_json::json!({}))
     };
 
     info!(session_id = %sid, request_id = %perm.request_id, granted, ?decision, "Permission");

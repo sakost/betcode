@@ -50,10 +50,7 @@ async fn root_curl_returns_shell_script() {
         .unwrap();
     let text = String::from_utf8_lossy(&body);
     assert!(text.contains("#!/bin/sh"), "should return shell script");
-    assert!(
-        text.contains("sakost/betcode"),
-        "should have repo replaced"
-    );
+    assert!(text.contains("sakost/betcode"), "should have repo replaced");
 }
 
 #[tokio::test]

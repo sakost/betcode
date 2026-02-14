@@ -53,20 +53,29 @@ mod tests {
 
     #[test]
     fn relay_not_available_on_macos() {
-        let mac = Platform { os: Os::Darwin, arch: Arch::Arm64 };
+        let mac = Platform {
+            os: Os::Darwin,
+            arch: Arch::Arm64,
+        };
         assert!(!is_available("betcode-relay", &mac));
         assert!(is_available("betcode", &mac));
     }
 
     #[test]
     fn relay_available_on_linux() {
-        let linux = Platform { os: Os::Linux, arch: Arch::Amd64 };
+        let linux = Platform {
+            os: Os::Linux,
+            arch: Arch::Amd64,
+        };
         assert!(is_available("betcode-relay", &linux));
     }
 
     #[test]
     fn download_url_linux() {
-        let p = Platform { os: Os::Linux, arch: Arch::Amd64 };
+        let p = Platform {
+            os: Os::Linux,
+            arch: Arch::Amd64,
+        };
         let url = download_url("sakost/betcode", "betcode", &p);
         assert_eq!(
             url,
@@ -76,7 +85,10 @@ mod tests {
 
     #[test]
     fn download_url_windows() {
-        let p = Platform { os: Os::Windows, arch: Arch::Amd64 };
+        let p = Platform {
+            os: Os::Windows,
+            arch: Arch::Amd64,
+        };
         let url = download_url("sakost/betcode", "betcode", &p);
         assert_eq!(
             url,

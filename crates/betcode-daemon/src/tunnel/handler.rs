@@ -25,12 +25,11 @@ use betcode_proto::v1::{
     InputLockRequest, InputLockResponse, KeyExchangeRequest, KeyExchangeResponse,
     ListAgentsRequest, ListIssuesRequest, ListMcpServersRequest, ListMergeRequestsRequest,
     ListPathRequest, ListPipelinesRequest, ListPluginsRequest, ListReposRequest,
-    ListSessionGrantsRequest, ListSessionGrantsResponse, ListSessionsRequest,
-    ListSessionsResponse, ListWorktreesRequest, RegisterRepoRequest, RemovePluginRequest,
-    RemoveWorktreeRequest, RenameSessionRequest, RenameSessionResponse, ResumeSessionRequest,
-    ScanReposRequest, SessionSummary, SetSessionGrantRequest,
-    SetSessionGrantResponse, StreamPayload, TunnelError, TunnelErrorCode, TunnelFrame,
-    UnregisterRepoRequest, UpdateRepoRequest, UpdateSettingsRequest,
+    ListSessionGrantsRequest, ListSessionGrantsResponse, ListSessionsRequest, ListSessionsResponse,
+    ListWorktreesRequest, RegisterRepoRequest, RemovePluginRequest, RemoveWorktreeRequest,
+    RenameSessionRequest, RenameSessionResponse, ResumeSessionRequest, ScanReposRequest,
+    SessionSummary, SetSessionGrantRequest, SetSessionGrantResponse, StreamPayload, TunnelError,
+    TunnelErrorCode, TunnelFrame, UnregisterRepoRequest, UpdateRepoRequest, UpdateSettingsRequest,
 };
 
 use betcode_crypto::{CryptoSession, IdentityKeyPair, KeyExchangeState};
@@ -53,10 +52,10 @@ pub use betcode_proto::methods::{
     METHOD_GET_PLUGIN_STATUS, METHOD_GET_REPO, METHOD_GET_SETTINGS, METHOD_GET_WORKTREE,
     METHOD_LIST_AGENTS, METHOD_LIST_ISSUES, METHOD_LIST_MCP_SERVERS, METHOD_LIST_MERGE_REQUESTS,
     METHOD_LIST_PATH, METHOD_LIST_PIPELINES, METHOD_LIST_PLUGINS, METHOD_LIST_REPOS,
-    METHOD_LIST_SESSIONS, METHOD_LIST_SESSION_GRANTS, METHOD_LIST_WORKTREES,
-    METHOD_REGISTER_REPO, METHOD_REMOVE_PLUGIN, METHOD_REMOVE_WORKTREE, METHOD_RENAME_SESSION,
-    METHOD_REQUEST_INPUT_LOCK, METHOD_RESUME_SESSION, METHOD_SCAN_REPOS,
-    METHOD_SET_SESSION_GRANT, METHOD_UNREGISTER_REPO, METHOD_UPDATE_REPO, METHOD_UPDATE_SETTINGS,
+    METHOD_LIST_SESSIONS, METHOD_LIST_SESSION_GRANTS, METHOD_LIST_WORKTREES, METHOD_REGISTER_REPO,
+    METHOD_REMOVE_PLUGIN, METHOD_REMOVE_WORKTREE, METHOD_RENAME_SESSION, METHOD_REQUEST_INPUT_LOCK,
+    METHOD_RESUME_SESSION, METHOD_SCAN_REPOS, METHOD_SET_SESSION_GRANT, METHOD_UNREGISTER_REPO,
+    METHOD_UPDATE_REPO, METHOD_UPDATE_SETTINGS,
 };
 
 /// Default maximum number of sessions returned by `ListSessions`.
@@ -411,13 +410,8 @@ impl TunnelRequestHandler {
             | METHOD_GET_REPO
             | METHOD_UPDATE_REPO
             | METHOD_SCAN_REPOS => {
-                self.dispatch_repo_rpc(
-                    &request_id,
-                    payload.method.as_str(),
-                    &data,
-                    relay_forwarded,
-                )
-                .await
+                self.dispatch_repo_rpc(&request_id, payload.method.as_str(), &data, relay_forwarded)
+                    .await
             }
             // WorktreeService RPCs
             METHOD_CREATE_WORKTREE
@@ -763,12 +757,8 @@ impl TunnelRequestHandler {
             info!(session_id = %req.session_id, tool_name = %req.tool_name, "Cleared session grant via tunnel");
         }
         vec![
-            self.unary_response_frame(
-                request_id,
-                &ClearSessionGrantsResponse {},
-                relay_forwarded,
-            )
-            .await,
+            self.unary_response_frame(request_id, &ClearSessionGrantsResponse {}, relay_forwarded)
+                .await,
         ]
     }
 
@@ -805,12 +795,8 @@ impl TunnelRequestHandler {
         handle.set_grant(req.tool_name.clone(), req.granted).await;
         info!(session_id = %req.session_id, tool_name = %req.tool_name, granted = req.granted, "Set session grant via tunnel");
         vec![
-            self.unary_response_frame(
-                request_id,
-                &SetSessionGrantResponse {},
-                relay_forwarded,
-            )
-            .await,
+            self.unary_response_frame(request_id, &SetSessionGrantResponse {}, relay_forwarded)
+                .await,
         ]
     }
 
@@ -873,7 +859,9 @@ impl TunnelRequestHandler {
     pub async fn handle_incoming_stream_data(&self, request_id: &str, data: &[u8]) {
         let sid = {
             let stream = self.active_streams.read().await;
-            if let Some(a) = stream.get(request_id) { a.session_id.clone() } else {
+            if let Some(a) = stream.get(request_id) {
+                a.session_id.clone()
+            } else {
                 warn!(request_id = %request_id, "StreamData for unknown active stream");
                 return;
             }
@@ -962,12 +950,14 @@ impl TunnelRequestHandler {
                 }
             }
             Some(Request::Permission(perm)) => {
-                let decision =
-                    betcode_proto::v1::PermissionDecision::try_from(perm.decision)
-                        .unwrap_or_else(|_| {
-                            warn!(raw_decision = perm.decision, "Unknown PermissionDecision, defaulting to Deny");
-                            betcode_proto::v1::PermissionDecision::Deny
-                        });
+                let decision = betcode_proto::v1::PermissionDecision::try_from(perm.decision)
+                    .unwrap_or_else(|_| {
+                        warn!(
+                            raw_decision = perm.decision,
+                            "Unknown PermissionDecision, defaulting to Deny"
+                        );
+                        betcode_proto::v1::PermissionDecision::Deny
+                    });
 
                 let (granted, original_input) =
                     if let Some(handle) = self.relay.get_handle(&sid).await {
@@ -975,10 +965,7 @@ impl TunnelRequestHandler {
                             .process_permission_response(&perm.request_id, decision, "tunnel")
                             .await
                     } else {
-                        (
-                            is_granted(decision),
-                            serde_json::json!({}),
-                        )
+                        (is_granted(decision), serde_json::json!({}))
                     };
 
                 info!(session_id = %sid, request_id = %perm.request_id, granted, ?decision, "Permission via tunnel");
@@ -1122,7 +1109,9 @@ impl TunnelRequestHandler {
         let working_dir: std::path::PathBuf = start_conv.working_directory.clone().into();
 
         // Create or resume session in DB
-        let resume_session = if let Ok(existing) = self.db.get_session(&sid).await { existing.claude_session_id.filter(|s| !s.is_empty()) } else {
+        let resume_session = if let Ok(existing) = self.db.get_session(&sid).await {
+            existing.claude_session_id.filter(|s| !s.is_empty())
+        } else {
             if let Err(e) = self
                 .db
                 .create_session(
@@ -1367,10 +1356,12 @@ impl TunnelRequestHandler {
         }
 
         // Generate our ephemeral keypair and complete the exchange
-        let state = self.identity.as_ref().map_or_else(
-            KeyExchangeState::new,
-            |id| KeyExchangeState::with_identity(Arc::clone(id)),
-        );
+        let state = self
+            .identity
+            .as_ref()
+            .map_or_else(KeyExchangeState::new, |id| {
+                KeyExchangeState::with_identity(Arc::clone(id))
+            });
 
         let daemon_ephemeral_pub = state.public_bytes();
         let session = match state.complete(&req.ephemeral_pubkey) {
@@ -1721,7 +1712,10 @@ impl TunnelRequestHandler {
                             warn!(request_id = %rid, error = %e, "Failed to encode command output");
                             continue;
                         }
-                        let encrypted = match make_encrypted_payload(crypto_for_response.as_deref(), &buf) {
+                        let encrypted = match make_encrypted_payload(
+                            crypto_for_response.as_deref(),
+                            &buf,
+                        ) {
                             Ok(enc) => enc,
                             Err(e) => {
                                 warn!(request_id = %rid, error = %e, "Failed to encrypt command output");
@@ -2194,7 +2188,7 @@ use betcode_core::db::base64_decode;
     clippy::significant_drop_tightening,
     clippy::map_unwrap_or,
     clippy::uninlined_format_args,
-    clippy::iter_on_single_items,
+    clippy::iter_on_single_items
 )]
 #[path = "handler_tests.rs"]
 mod tests;

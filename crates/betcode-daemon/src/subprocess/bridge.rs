@@ -322,14 +322,12 @@ impl EventBridge {
             };
             warn!(errors = ?result.errors, "Claude result indicates error");
             let mut error_event = self.next_event();
-            error_event.event = Some(proto::agent_event::Event::Error(
-                proto::ErrorEvent {
-                    code: "session_error".to_string(),
-                    message: error_message,
-                    is_fatal: true,
-                    details: HashMap::default(),
-                },
-            ));
+            error_event.event = Some(proto::agent_event::Event::Error(proto::ErrorEvent {
+                code: "session_error".to_string(),
+                message: error_message,
+                is_fatal: true,
+                details: HashMap::default(),
+            }));
             events.push(error_event);
         }
 

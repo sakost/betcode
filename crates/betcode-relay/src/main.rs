@@ -15,11 +15,11 @@ use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 use betcode_proto::v1::agent_service_server::AgentServiceServer;
 use betcode_proto::v1::auth_service_server::AuthServiceServer;
 use betcode_proto::v1::command_service_server::CommandServiceServer;
+use betcode_proto::v1::config_service_server::ConfigServiceServer;
 use betcode_proto::v1::git_lab_service_server::GitLabServiceServer;
+use betcode_proto::v1::git_repo_service_server::GitRepoServiceServer;
 use betcode_proto::v1::machine_service_server::MachineServiceServer;
 use betcode_proto::v1::tunnel_service_server::TunnelServiceServer;
-use betcode_proto::v1::git_repo_service_server::GitRepoServiceServer;
-use betcode_proto::v1::config_service_server::ConfigServiceServer;
 use betcode_proto::v1::worktree_service_server::WorktreeServiceServer;
 
 use betcode_relay::auth::JwtManager;

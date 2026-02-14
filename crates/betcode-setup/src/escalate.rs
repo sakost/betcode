@@ -43,10 +43,7 @@ pub fn escalate_if_needed(non_interactive: bool) -> Result<()> {
     tracing::info!("re-executing with sudo");
     tracing::debug!("exec: sudo {} {}", exe.display(), args[1..].join(" "));
 
-    let status = Command::new("sudo")
-        .arg(exe)
-        .args(&args[1..])
-        .status()?;
+    let status = Command::new("sudo").arg(exe).args(&args[1..]).status()?;
 
     // sudo process completed — exit with its code
     std::process::exit(status.code().unwrap_or(1));

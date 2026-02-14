@@ -15,7 +15,10 @@ use betcode_proto::v1::{
     PipelineStatus,
 };
 
-use super::gitlab_convert::{mr_state_to_str, to_status, to_mr_info, pipeline_status_to_str, to_pipeline_info, issue_state_to_str, to_issue_info};
+use super::gitlab_convert::{
+    issue_state_to_str, mr_state_to_str, pipeline_status_to_str, to_issue_info, to_mr_info,
+    to_pipeline_info, to_status,
+};
 use crate::gitlab::GitLabClient;
 
 /// `GitLabService` implementation backed by `GitLabClient`.

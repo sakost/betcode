@@ -106,11 +106,7 @@ fn run_betcode_auth(
 }
 
 /// Run `betcode machine register` and extract the machine ID from output.
-fn run_betcode_machine_register(
-    betcode: &Path,
-    relay_url: &str,
-    name: &str,
-) -> Result<String> {
+fn run_betcode_machine_register(betcode: &Path, relay_url: &str, name: &str) -> Result<String> {
     tracing::info!("registering machine: {name}");
 
     let output = Command::new(betcode)
@@ -154,6 +150,5 @@ fn run_betcode_machine_switch(betcode: &Path, machine_id: &str) -> Result<()> {
 
 /// Get the system hostname for the default machine name.
 fn gethostname() -> String {
-    crate::cmd::run_cmd_output("hostname", &[])
-        .unwrap_or_else(|_| "my-machine".to_string())
+    crate::cmd::run_cmd_output("hostname", &[]).unwrap_or_else(|_| "my-machine".to_string())
 }

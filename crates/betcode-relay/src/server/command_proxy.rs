@@ -132,10 +132,7 @@ impl CommandService for CommandProxyService {
                 match FrameType::try_from(frame.frame_type) {
                     Ok(FrameType::StreamData) => {
                         if let Some(tunnel_frame::Payload::StreamData(p)) = frame.payload {
-                            let data = p
-                                .encrypted
-                                .as_ref()
-                                .map_or(&[][..], |e| &e.ciphertext[..]);
+                            let data = p.encrypted.as_ref().map_or(&[][..], |e| &e.ciphertext[..]);
                             match ServiceCommandOutput::decode(data) {
                                 Ok(output) => {
                                     if tx.send(Ok(output)).await.is_err() {

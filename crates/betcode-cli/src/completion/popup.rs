@@ -146,9 +146,7 @@ mod tests {
     #[test]
     fn test_popup_visible_window() {
         let items: Vec<CompletionItem> = (0..20)
-            .map(|i| {
-                CompletionItem::simple(&format!("item-{i}"), "", CompletionCategory::Command)
-            })
+            .map(|i| CompletionItem::simple(&format!("item-{i}"), "", CompletionCategory::Command))
             .collect();
         let state = PopupState::new(items, 5);
         let visible = state.visible_items();

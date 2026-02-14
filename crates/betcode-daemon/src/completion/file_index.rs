@@ -297,7 +297,12 @@ impl FileIndex {
 }
 
 #[cfg(test)]
-#[allow(clippy::panic, clippy::expect_used, clippy::unwrap_used, clippy::used_underscore_binding)]
+#[allow(
+    clippy::panic,
+    clippy::expect_used,
+    clippy::unwrap_used,
+    clippy::used_underscore_binding
+)]
 mod tests {
     use super::*;
     use tempfile::TempDir;

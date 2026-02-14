@@ -209,9 +209,7 @@ async fn main() -> anyhow::Result<()> {
             info!(session_id = %latest.id, "Continuing most recent session");
             session_id = Some(latest.id.clone());
         } else {
-            anyhow::bail!(
-                "No sessions found in {working_dir}. Start a new session first."
-            );
+            anyhow::bail!("No sessions found in {working_dir}. Start a new session first.");
         }
     }
 

@@ -100,7 +100,13 @@ async fn list_repos_routes_to_machine() {
             total_count: 1,
         },
     );
-    let req = make_request(ListReposRequest { limit: 0, offset: 0 }, "m1");
+    let req = make_request(
+        ListReposRequest {
+            limit: 0,
+            offset: 0,
+        },
+        "m1",
+    );
     let resp = svc.list_repos(req).await.unwrap().into_inner();
     assert_eq!(resp.repos.len(), 1);
     assert_eq!(resp.repos[0].id, "repo-1");
@@ -116,7 +122,12 @@ async fn get_repo_routes_to_machine() {
         ..Default::default()
     };
     spawn_responder(&router, "m1", rx, detail);
-    let req = make_request(GetRepoRequest { id: "repo-2".into() }, "m1");
+    let req = make_request(
+        GetRepoRequest {
+            id: "repo-2".into(),
+        },
+        "m1",
+    );
     let resp = svc.get_repo(req).await.unwrap().into_inner();
     assert_eq!(resp.id, "repo-2");
     assert_eq!(resp.worktree_mode, WorktreeMode::Local as i32);
@@ -186,7 +197,13 @@ async fn scan_repos_routes_to_machine() {
 #[tokio::test]
 async fn machine_offline_returns_unavailable() {
     let svc = setup_offline().await;
-    let req = make_request(ListReposRequest { limit: 0, offset: 0 }, "m-off");
+    let req = make_request(
+        ListReposRequest {
+            limit: 0,
+            offset: 0,
+        },
+        "m-off",
+    );
     let err = svc.list_repos(req).await.unwrap_err();
     assert_eq!(err.code(), tonic::Code::Unavailable);
 }
@@ -194,7 +211,10 @@ async fn machine_offline_returns_unavailable() {
 #[tokio::test]
 async fn missing_machine_id_returns_invalid_argument() {
     let (svc, _router, _rx) = setup_with_machine("m1").await;
-    let mut req = Request::new(ListReposRequest { limit: 0, offset: 0 });
+    let mut req = Request::new(ListReposRequest {
+        limit: 0,
+        offset: 0,
+    });
     req.extensions_mut().insert(test_claims());
     let err = svc.list_repos(req).await.unwrap_err();
     assert_eq!(err.code(), tonic::Code::InvalidArgument);
@@ -203,7 +223,10 @@ async fn missing_machine_id_returns_invalid_argument() {
 #[tokio::test]
 async fn missing_claims_returns_internal() {
     let (svc, _router, _rx) = setup_with_machine("m1").await;
-    let mut req = Request::new(ListReposRequest { limit: 0, offset: 0 });
+    let mut req = Request::new(ListReposRequest {
+        limit: 0,
+        offset: 0,
+    });
     req.metadata_mut()
         .insert("x-machine-id", "m1".parse().unwrap());
     let err = svc.list_repos(req).await.unwrap_err();
@@ -214,7 +237,13 @@ async fn missing_claims_returns_internal() {
 async fn daemon_error_propagated_to_client() {
     let (svc, router, rx) = setup_with_machine("m1").await;
     spawn_error_responder(&router, "m1", rx, "repo registration failed");
-    let req = make_request(ListReposRequest { limit: 0, offset: 0 }, "m1");
+    let req = make_request(
+        ListReposRequest {
+            limit: 0,
+            offset: 0,
+        },
+        "m1",
+    );
     let err = svc.list_repos(req).await.unwrap_err();
     assert_eq!(err.code(), tonic::Code::Internal);
     assert!(err.message().contains("repo registration failed"));

@@ -131,8 +131,7 @@ pub async fn run(conn: &mut DaemonConnection, action: RepoAction) -> anyhow::Res
             setup_script,
             no_auto_gitignore,
         } => {
-            let worktree_mode = parse_worktree_mode(&mode)
-                .map_err(|e| anyhow::anyhow!(e))?;
+            let worktree_mode = parse_worktree_mode(&mode).map_err(|e| anyhow::anyhow!(e))?;
             let detail = conn
                 .register_repo(
                     &path,
@@ -182,7 +181,12 @@ pub async fn run(conn: &mut DaemonConnection, action: RepoAction) -> anyhow::Res
                     )?;
                 }
                 if resp.total_count > 0 && resp.total_count as usize != resp.repos.len() {
-                    writeln!(out, "\nShowing {} of {} repository(ies)", resp.repos.len(), resp.total_count)?;
+                    writeln!(
+                        out,
+                        "\nShowing {} of {} repository(ies)",
+                        resp.repos.len(),
+                        resp.total_count
+                    )?;
                 } else {
                     writeln!(out, "\n{} repository(ies)", resp.repos.len())?;
                 }
@@ -233,11 +237,7 @@ pub async fn run(conn: &mut DaemonConnection, action: RepoAction) -> anyhow::Res
             if resp.repos.is_empty() {
                 writeln!(out, "No repositories found.")?;
             } else {
-                writeln!(
-                    out,
-                    "{:<36}  {:<20}  {:<8}  PATH",
-                    "ID", "NAME", "MODE"
-                )?;
+                writeln!(out, "{:<36}  {:<20}  {:<8}  PATH", "ID", "NAME", "MODE")?;
                 for repo in &resp.repos {
                     writeln!(
                         out,

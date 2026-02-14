@@ -21,7 +21,7 @@ use crate::session::SessionMultiplexer;
 use crate::storage::Database;
 use crate::subprocess::{EventBridge, SpawnConfig, SubprocessManager};
 
-use super::types::{RelayHandle, RelaySessionConfig, RelayError};
+use super::types::{RelayError, RelayHandle, RelaySessionConfig};
 
 /// Session relay manages the lifecycle of subprocess ↔ gRPC bridging.
 pub struct SessionRelay {
@@ -399,11 +399,8 @@ fn spawn_stdout_pipeline(ctx: StdoutPipelineContext) {
                         let grant = session_grants.read().await.get(&p.tool_name).copied();
                         if let Some(granted) = grant {
                             // Auto-respond: send permission response directly to stdin
-                            let line = build_permission_response_json(
-                                &p.request_id,
-                                granted,
-                                &input,
-                            );
+                            let line =
+                                build_permission_response_json(&p.request_id, granted, &input);
                             if let Err(e) = stdin_tx.send(line).await {
                                 warn!(
                                     session_id = %sid,
@@ -423,13 +420,13 @@ fn spawn_stdout_pipeline(ctx: StdoutPipelineContext) {
                             auto_responded_requests.insert(p.request_id.clone());
                         } else {
                             // No grant — store for handler to process
-                            pending_permissions
-                                .write()
-                                .await
-                                .insert(p.request_id.clone(), super::types::PendingPermission {
+                            pending_permissions.write().await.insert(
+                                p.request_id.clone(),
+                                super::types::PendingPermission {
                                     input,
                                     tool_name: p.tool_name.clone(),
-                                });
+                                },
+                            );
                         }
                     }
                 }
@@ -659,7 +656,12 @@ fn build_question_response_json(
 }
 
 #[cfg(test)]
-#[allow(clippy::panic, clippy::expect_used, clippy::unwrap_used, clippy::iter_on_single_items)]
+#[allow(
+    clippy::panic,
+    clippy::expect_used,
+    clippy::unwrap_used,
+    clippy::iter_on_single_items
+)]
 mod tests {
     use super::*;
 
@@ -852,21 +854,16 @@ mod tests {
         let (handle, _rx) = test_relay_handle();
 
         // Simulate what the pipeline does: store PendingPermission
-        handle
-            .pending_permissions
-            .write()
-            .await
-            .insert("req-1".into(), PendingPermission {
+        handle.pending_permissions.write().await.insert(
+            "req-1".into(),
+            PendingPermission {
                 input: serde_json::json!({"command": "ls"}),
                 tool_name: "Bash".into(),
-            });
+            },
+        );
 
         // Simulate AllowSession grant caching via process_permission_response
-        let pending = handle
-            .pending_permissions
-            .write()
-            .await
-            .remove("req-1");
+        let pending = handle.pending_permissions.write().await.remove("req-1");
         let tool_name = pending.map(|p| p.tool_name);
         assert_eq!(tool_name, Some("Bash".to_string()));
 
@@ -888,21 +885,16 @@ mod tests {
         let (handle, _rx) = test_relay_handle();
 
         // Set up pending state
-        handle
-            .pending_permissions
-            .write()
-            .await
-            .insert("req-1".into(), PendingPermission {
+        handle.pending_permissions.write().await.insert(
+            "req-1".into(),
+            PendingPermission {
                 input: serde_json::json!({}),
                 tool_name: "Bash".into(),
-            });
+            },
+        );
 
         // AllowOnce: remove from pending but do NOT insert into session_grants
-        let _ = handle
-            .pending_permissions
-            .write()
-            .await
-            .remove("req-1");
+        let _ = handle.pending_permissions.write().await.remove("req-1");
 
         // session_grants should remain empty
         assert!(handle.session_grants.read().await.is_empty());
@@ -948,14 +940,13 @@ mod tests {
         assert!(grant.is_none());
 
         let input = serde_json::json!({"file": "/tmp/test.txt"});
-        handle
-            .pending_permissions
-            .write()
-            .await
-            .insert("req-2".into(), PendingPermission {
+        handle.pending_permissions.write().await.insert(
+            "req-2".into(),
+            PendingPermission {
                 input: input.clone(),
                 tool_name: "Write".into(),
-            });
+            },
+        );
 
         // Verify stored
         let pending = handle.pending_permissions.read().await;
@@ -972,14 +963,13 @@ mod tests {
     ) -> RelayHandle {
         use crate::relay::PendingPermission;
         let (handle, _rx) = test_relay_handle();
-        handle
-            .pending_permissions
-            .write()
-            .await
-            .insert(request_id.into(), PendingPermission {
+        handle.pending_permissions.write().await.insert(
+            request_id.into(),
+            PendingPermission {
                 input: original_input,
                 tool_name: tool_name.into(),
-            });
+            },
+        );
         handle
     }
 

@@ -20,16 +20,15 @@ use betcode_proto::v1::{
     AgentEvent, AgentRequest, CancelTurnRequest, CancelTurnResponse, ClearSessionGrantsRequest,
     ClearSessionGrantsResponse, CompactSessionRequest, CompactSessionResponse, EncryptedPayload,
     FrameType, InputLockRequest, InputLockResponse, KeyExchangeRequest, KeyExchangeResponse,
-    ListSessionGrantsRequest, ListSessionGrantsResponse, ListSessionsRequest,
-    ListSessionsResponse, RenameSessionRequest, RenameSessionResponse, ResumeSessionRequest,
-    SetSessionGrantRequest, SetSessionGrantResponse, StreamPayload, TunnelFrame,
+    ListSessionGrantsRequest, ListSessionGrantsResponse, ListSessionsRequest, ListSessionsResponse,
+    RenameSessionRequest, RenameSessionResponse, ResumeSessionRequest, SetSessionGrantRequest,
+    SetSessionGrantResponse, StreamPayload, TunnelFrame,
 };
 
 use betcode_proto::methods::{
     METHOD_CANCEL_TURN, METHOD_CLEAR_SESSION_GRANTS, METHOD_COMPACT_SESSION, METHOD_CONVERSE,
-    METHOD_EXCHANGE_KEYS, METHOD_LIST_SESSIONS, METHOD_LIST_SESSION_GRANTS,
-    METHOD_RENAME_SESSION, METHOD_REQUEST_INPUT_LOCK, METHOD_RESUME_SESSION,
-    METHOD_SET_SESSION_GRANT,
+    METHOD_EXCHANGE_KEYS, METHOD_LIST_SESSIONS, METHOD_LIST_SESSION_GRANTS, METHOD_RENAME_SESSION,
+    METHOD_REQUEST_INPUT_LOCK, METHOD_RESUME_SESSION, METHOD_SET_SESSION_GRANT,
 };
 
 use crate::router::{RequestRouter, RouterError};
@@ -74,12 +73,8 @@ pub fn decode_response<M: Message + Default>(frame: &TunnelFrame) -> Result<M, S
     }
     match &frame.payload {
         Some(betcode_proto::v1::tunnel_frame::Payload::StreamData(p)) => {
-            let data = p
-                .encrypted
-                .as_ref()
-                .map_or(&[][..], |e| &e.ciphertext[..]);
-            M::decode(data)
-                .map_err(|e| Status::internal(format!("Failed to decode response: {e}")))
+            let data = p.encrypted.as_ref().map_or(&[][..], |e| &e.ciphertext[..]);
+            M::decode(data).map_err(|e| Status::internal(format!("Failed to decode response: {e}")))
         }
         _ => Err(Status::internal("Unexpected response payload format")),
     }
@@ -189,10 +184,7 @@ async fn converse_proxy_task(
             Ok(FrameType::StreamData) => {
                 if let Some(betcode_proto::v1::tunnel_frame::Payload::StreamData(p)) = frame.payload
                 {
-                    let data = p
-                        .encrypted
-                        .as_ref()
-                        .map_or(&[][..], |e| &e.ciphertext[..]);
+                    let data = p.encrypted.as_ref().map_or(&[][..], |e| &e.ciphertext[..]);
                     match AgentEvent::decode(data) {
                         Ok(event) => {
                             if out_tx.send(Ok(event)).await.is_err() {
@@ -318,10 +310,7 @@ impl AgentService for AgentProxyService {
                         if let Some(betcode_proto::v1::tunnel_frame::Payload::StreamData(p)) =
                             frame.payload
                         {
-                            let data = p
-                                .encrypted
-                                .as_ref()
-                                .map_or(&[][..], |e| &e.ciphertext[..]);
+                            let data = p.encrypted.as_ref().map_or(&[][..], |e| &e.ciphertext[..]);
                             match AgentEvent::decode(data) {
                                 Ok(event) => {
                                     if tx.send(Ok(event)).await.is_err() {

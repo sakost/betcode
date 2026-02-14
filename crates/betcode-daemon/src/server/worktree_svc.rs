@@ -235,7 +235,16 @@ mod tests {
         let (svc, _tmp) = test_service().await;
         // Register a repo first
         svc.db
-            .create_git_repo("r1", "repo", "/tmp/repo", "global", ".worktree", None, None, true)
+            .create_git_repo(
+                "r1",
+                "repo",
+                "/tmp/repo",
+                "global",
+                ".worktree",
+                None,
+                None,
+                true,
+            )
             .await
             .unwrap();
         let result = svc

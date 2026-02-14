@@ -58,7 +58,11 @@ pub enum TermEvent {
 /// # Panics
 ///
 /// Panics if the current working directory cannot be accessed.
-#[allow(clippy::too_many_lines, clippy::expect_used, clippy::option_if_let_else)]
+#[allow(
+    clippy::too_many_lines,
+    clippy::expect_used,
+    clippy::option_if_let_else
+)]
 pub async fn run(
     conn: &mut DaemonConnection,
     session_id: &Option<String>,
@@ -254,10 +258,8 @@ pub async fn run(
                 // Wait for debounce period since last request
                 let elapsed = last_request_time.elapsed();
                 if elapsed < debounce {
-                    tokio::time::sleep(
-                        debounce.checked_sub(elapsed).unwrap_or(Duration::ZERO),
-                    )
-                    .await;
+                    tokio::time::sleep(debounce.checked_sub(elapsed).unwrap_or(Duration::ZERO))
+                        .await;
                     // Drain again after sleep
                     while let Ok(newer) = completion_req_rx.try_recv() {
                         latest = newer;

@@ -24,7 +24,10 @@ pub struct GitRepoServiceImpl {
 impl GitRepoServiceImpl {
     /// Create a new `GitRepoService`.
     pub const fn new(db: Database, worktree_manager: WorktreeManager) -> Self {
-        Self { db, worktree_manager }
+        Self {
+            db,
+            worktree_manager,
+        }
     }
 }
 
@@ -35,7 +38,10 @@ fn worktree_mode_to_proto(s: &str) -> i32 {
         "local" => WorktreeMode::Local as i32,
         "custom" => WorktreeMode::Custom as i32,
         other => {
-            warn!(worktree_mode = other, "Unknown worktree_mode in database, defaulting to Unspecified");
+            warn!(
+                worktree_mode = other,
+                "Unknown worktree_mode in database, defaulting to Unspecified"
+            );
             WorktreeMode::Unspecified as i32
         }
     }
@@ -223,7 +229,10 @@ impl GitRepoService for GitRepoServiceImpl {
                 .map_err(|e| Status::internal(e.to_string()))?
         };
 
-        let wt_counts = self.db.count_worktrees_by_repo().await
+        let wt_counts = self
+            .db
+            .count_worktrees_by_repo()
+            .await
             .map_err(|e| Status::internal(e.to_string()))?;
         let repos = rows
             .into_iter()
@@ -243,16 +252,15 @@ impl GitRepoService for GitRepoServiceImpl {
     ) -> Result<Response<GitRepoDetail>, Status> {
         let req = request.into_inner();
 
-        let row = self
-            .db
-            .get_git_repo(&req.id)
-            .await
-            .map_err(|e| match e {
-                DatabaseError::NotFound(_) => Status::not_found(e.to_string()),
-                _ => Status::internal(e.to_string()),
-            })?;
+        let row = self.db.get_git_repo(&req.id).await.map_err(|e| match e {
+            DatabaseError::NotFound(_) => Status::not_found(e.to_string()),
+            _ => Status::internal(e.to_string()),
+        })?;
 
-        let wt_count = self.db.count_worktrees_for_repo(&row.id).await
+        let wt_count = self
+            .db
+            .count_worktrees_for_repo(&row.id)
+            .await
             .map_err(|e| Status::internal(e.to_string()))?;
 
         Ok(Response::new(to_detail(row, wt_count)))
@@ -276,12 +284,14 @@ impl GitRepoService for GitRepoServiceImpl {
         //   proto None       → None            (don't change)
         //   proto Some("")   → Some(None)      (clear / NULL)
         //   proto Some("v")  → Some(Some("v")) (set)
-        let custom_path: Option<Option<&str>> = req.custom_path.as_deref().map(|s| {
-            if s.is_empty() { None } else { Some(s) }
-        });
-        let setup_script: Option<Option<&str>> = req.setup_script.as_deref().map(|s| {
-            if s.is_empty() { None } else { Some(s) }
-        });
+        let custom_path: Option<Option<&str>> =
+            req.custom_path
+                .as_deref()
+                .map(|s| if s.is_empty() { None } else { Some(s) });
+        let setup_script: Option<Option<&str>> =
+            req.setup_script
+                .as_deref()
+                .map(|s| if s.is_empty() { None } else { Some(s) });
 
         let row = self
             .db
@@ -302,7 +312,10 @@ impl GitRepoService for GitRepoServiceImpl {
 
         info!(id = %row.id, "Repository updated via gRPC");
 
-        let wt_count = self.db.count_worktrees_for_repo(&row.id).await
+        let wt_count = self
+            .db
+            .count_worktrees_for_repo(&row.id)
+            .await
             .map_err(|e| Status::internal(e.to_string()))?;
 
         Ok(Response::new(to_detail(row, wt_count)))
@@ -356,7 +369,16 @@ impl GitRepoService for GitRepoServiceImpl {
             let id = uuid::Uuid::new_v4().to_string();
             match self
                 .db
-                .create_git_repo(&id, &name, &path_str, "global", ".worktree", None, None, true)
+                .create_git_repo(
+                    &id,
+                    &name,
+                    &path_str,
+                    "global",
+                    ".worktree",
+                    None,
+                    None,
+                    true,
+                )
                 .await
             {
                 Ok(row) => {
@@ -370,7 +392,10 @@ impl GitRepoService for GitRepoServiceImpl {
         }
 
         // total_count = total repos in system after scan
-        let total_count = self.db.count_git_repos().await
+        let total_count = self
+            .db
+            .count_git_repos()
+            .await
             .map_err(|e| Status::internal(e.to_string()))?;
         Ok(Response::new(ListReposResponse {
             repos: registered,
@@ -597,10 +622,7 @@ mod tests {
             .await;
 
         assert!(result.is_err());
-        assert_eq!(
-            result.unwrap_err().code(),
-            tonic::Code::InvalidArgument
-        );
+        assert_eq!(result.unwrap_err().code(), tonic::Code::InvalidArgument);
     }
 
     #[tokio::test]
@@ -799,12 +821,26 @@ mod tests {
         let repo_id = reg.into_inner().id;
 
         // Create worktree DB records (simulating created worktrees)
-        db.create_worktree("wt1", "feat-a", "/tmp/nonexistent-wt-a", "feat-a", &repo_id, None)
-            .await
-            .unwrap();
-        db.create_worktree("wt2", "feat-b", "/tmp/nonexistent-wt-b", "feat-b", &repo_id, None)
-            .await
-            .unwrap();
+        db.create_worktree(
+            "wt1",
+            "feat-a",
+            "/tmp/nonexistent-wt-a",
+            "feat-a",
+            &repo_id,
+            None,
+        )
+        .await
+        .unwrap();
+        db.create_worktree(
+            "wt2",
+            "feat-b",
+            "/tmp/nonexistent-wt-b",
+            "feat-b",
+            &repo_id,
+            None,
+        )
+        .await
+        .unwrap();
 
         // Unregister with remove_worktrees=true
         let resp = svc
@@ -830,9 +866,7 @@ mod tests {
     async fn get_nonexistent_returns_not_found() {
         let (svc, _tmp) = test_service().await;
         let result = svc
-            .get_repo(Request::new(GetRepoRequest {
-                id: "nope".into(),
-            }))
+            .get_repo(Request::new(GetRepoRequest { id: "nope".into() }))
             .await;
         assert!(result.is_err());
         assert_eq!(result.unwrap_err().code(), tonic::Code::NotFound);
@@ -930,10 +964,7 @@ mod tests {
             }))
             .await;
         assert!(result.is_err());
-        assert_eq!(
-            result.unwrap_err().code(),
-            tonic::Code::InvalidArgument
-        );
+        assert_eq!(result.unwrap_err().code(), tonic::Code::InvalidArgument);
     }
 
     #[tokio::test]

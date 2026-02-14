@@ -126,7 +126,12 @@ impl fmt::Debug for TunnelConfig {
 }
 
 #[cfg(test)]
-#[allow(clippy::panic, clippy::expect_used, clippy::unwrap_used, clippy::float_cmp)]
+#[allow(
+    clippy::panic,
+    clippy::expect_used,
+    clippy::unwrap_used,
+    clippy::float_cmp
+)]
 mod tests {
     use super::*;
 

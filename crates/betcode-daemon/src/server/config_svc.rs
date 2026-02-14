@@ -73,9 +73,7 @@ impl ConfigService for ConfigServiceImpl {
         request: Request<UpdateSettingsRequest>,
     ) -> Result<Response<Settings>, Status> {
         let _req = request.into_inner();
-        Err(Status::unimplemented(
-            "UpdateSettings not yet implemented",
-        ))
+        Err(Status::unimplemented("UpdateSettings not yet implemented"))
     }
 
     #[instrument(skip(self, request), fields(rpc = "ListMcpServers"))]
@@ -85,9 +83,7 @@ impl ConfigService for ConfigServiceImpl {
     ) -> Result<Response<ListMcpServersResponse>, Status> {
         let _req = request.into_inner();
         // No MCP servers managed yet; return empty list.
-        Ok(Response::new(ListMcpServersResponse {
-            servers: vec![],
-        }))
+        Ok(Response::new(ListMcpServersResponse { servers: vec![] }))
     }
 
     #[instrument(skip(self, request), fields(rpc = "GetPermissions"))]

@@ -5,7 +5,10 @@
 use std::io::{self, Write};
 
 use crate::connection::DaemonConnection;
-use crate::gitlab_fmt::{parse_mr_state, truncate, mr_state_str, write_mr_detail, parse_pipeline_status, pipeline_status_str, write_pipeline_detail, parse_issue_state, issue_state_str, write_issue_detail};
+use crate::gitlab_fmt::{
+    issue_state_str, mr_state_str, parse_issue_state, parse_mr_state, parse_pipeline_status,
+    pipeline_status_str, truncate, write_issue_detail, write_mr_detail, write_pipeline_detail,
+};
 
 /// GitLab subcommand actions.
 #[derive(clap::Subcommand, Debug)]

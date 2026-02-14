@@ -77,8 +77,9 @@ async fn connect_relay(config: &CliConfig) -> anyhow::Result<Channel> {
     if relay_url.starts_with("https://") {
         let mut tls_config = ClientTlsConfig::new().with_enabled_roots();
         if let Some(ca_path) = &config.relay_ca_cert {
-            let ca_pem = std::fs::read_to_string(ca_path)
-                .map_err(|e| anyhow::anyhow!("Failed to read CA cert {}: {}", ca_path.display(), e))?;
+            let ca_pem = std::fs::read_to_string(ca_path).map_err(|e| {
+                anyhow::anyhow!("Failed to read CA cert {}: {}", ca_path.display(), e)
+            })?;
             tls_config = tls_config.ca_certificate(Certificate::from_pem(ca_pem));
         }
         endpoint = endpoint

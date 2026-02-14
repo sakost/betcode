@@ -61,10 +61,7 @@ pub fn draw(frame: &mut Frame<'_>, app: &mut App) {
         BottomPanel::Permission => 8u16.min(frame.area().height / 3).max(5),
         BottomPanel::PermissionEdit => 6u16.min(frame.area().height / 3).max(4),
         BottomPanel::Question => {
-            let opt_count = app
-                .pending_question
-                .as_ref()
-                .map_or(0, |q| q.options.len());
+            let opt_count = app.pending_question.as_ref().map_or(0, |q| q.options.len());
             #[allow(clippy::cast_possible_truncation)]
             let lines = 2 + opt_count as u16 + 2;
             (lines + 2).min(frame.area().height / 2).max(6)
@@ -142,7 +139,8 @@ pub fn draw(frame: &mut Frame<'_>, app: &mut App) {
     // Render status panel overlay if visible
     if app.show_status_panel {
         let info = SessionStatusInfo {
-            cwd: std::env::current_dir().map_or_else(|_| "unknown".to_string(), |p| p.display().to_string()),
+            cwd: std::env::current_dir()
+                .map_or_else(|_| "unknown".to_string(), |p| p.display().to_string()),
             session_id: app.session_id.clone().unwrap_or_else(|| "none".to_string()),
             connection: app.connection_type.clone(),
             model: app.model.clone(),
@@ -280,7 +278,6 @@ fn draw_input(frame: &mut Frame<'_>, app: &App, area: Rect) {
 
     // Build input line with optional ghost text suffix inserted at cursor position
     let input_line = if let Some(ref ghost) = app.completion_state.ghost_text {
-
         let query = detect_trigger(&app.input, app.cursor_pos).and_then(|t| match t {
             crate::completion::controller::CompletionTrigger::Command { query }
             | crate::completion::controller::CompletionTrigger::Agent { query, .. }
@@ -351,25 +348,24 @@ fn draw_status_bar(frame: &mut Frame<'_>, app: &App, area: Rect) {
             u.input_tokens, u.output_tokens, u.cost_usd
         )
     });
-    let keys_hint = match app.mode {
-        AppMode::PermissionPrompt => " | Y:allow A:session Tab:edit N:deny X:deny+stop",
-        AppMode::PermissionEditInput
-        | AppMode::PermissionComment
-        | AppMode::PermissionDenyMessage => " | Enter:submit Esc:back",
-        AppMode::UserQuestion => " | Enter:submit Esc:cancel",
-        AppMode::FingerprintVerification => {
-            if app
-                .pending_fingerprint
-                .as_ref()
-                .is_some_and(super::super::tui::fingerprint_panel::FingerprintPrompt::needs_action)
-            {
-                " | Y:accept N/Esc:reject"
-            } else {
-                " | Press any key to continue"
+    let keys_hint =
+        match app.mode {
+            AppMode::PermissionPrompt => " | Y:allow A:session Tab:edit N:deny X:deny+stop",
+            AppMode::PermissionEditInput
+            | AppMode::PermissionComment
+            | AppMode::PermissionDenyMessage => " | Enter:submit Esc:back",
+            AppMode::UserQuestion => " | Enter:submit Esc:cancel",
+            AppMode::FingerprintVerification => {
+                if app.pending_fingerprint.as_ref().is_some_and(
+                    super::super::tui::fingerprint_panel::FingerprintPrompt::needs_action,
+                ) {
+                    " | Y:accept N/Esc:reject"
+                } else {
+                    " | Press any key to continue"
+                }
             }
-        }
-        AppMode::Normal | AppMode::SessionList => " | Ctrl+C: quit | Enter: send",
-    };
+            AppMode::Normal | AppMode::SessionList => " | Ctrl+C: quit | Enter: send",
+        };
 
     let status = Paragraph::new(Line::from(vec![
         Span::styled(&app.status, Style::default().fg(Color::DarkGray)),
@@ -431,7 +427,11 @@ pub fn compute_wrapped_cursor(text: &str, cursor_pos: usize, max_width: usize) -
 /// - The space before a wrapped word is consumed (not rendered)
 /// - Whitespace is preserved as leading indent when trim=false
 /// - Long words exceeding the line width are broken at character boundaries
-#[allow(clippy::too_many_lines, clippy::cast_possible_truncation, clippy::expect_used)]
+#[allow(
+    clippy::too_many_lines,
+    clippy::cast_possible_truncation,
+    clippy::expect_used
+)]
 fn compute_word_wrap_breaks(text: &str, max_width: u16) -> Vec<usize> {
     if text.is_empty() {
         return Vec::new();
@@ -553,8 +553,7 @@ fn compute_word_wrap_breaks(text: &str, max_width: u16) -> Vec<usize> {
             }
             // Word alone may exceed line width: break at character boundary
             if tok_w > max_width {
-                let remaining =
-                    break_long_word(text, tok_start, tok_end, max_width, &mut breaks);
+                let remaining = break_long_word(text, tok_start, tok_end, max_width, &mut breaks);
                 line_width = remaining;
             } else {
                 line_width = tok_w;

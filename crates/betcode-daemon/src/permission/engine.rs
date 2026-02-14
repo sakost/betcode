@@ -14,7 +14,9 @@ use betcode_core::permissions::{PermissionAction, PermissionEngine};
 use crate::storage::Database;
 
 use super::pending::{PendingConfig, PendingManager, PendingRequest, PendingRequestParams};
-use super::types::{SessionGrant, PermissionEvaluation, PermissionResponse, ProcessedResponse, PermissionError};
+use super::types::{
+    PermissionError, PermissionEvaluation, PermissionResponse, ProcessedResponse, SessionGrant,
+};
 
 /// Parameters for a permission evaluation request.
 pub struct PermissionEvalRequest<'a> {

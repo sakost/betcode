@@ -105,7 +105,13 @@ pub async fn binary_download(
 }
 
 /// Build a download link cell, or an em-dash if the binary is not available.
-fn platform_cell(repo: &str, bin: &str, os: platform::Os, arch: platform::Arch, label: &str) -> String {
+fn platform_cell(
+    repo: &str,
+    bin: &str,
+    os: platform::Os,
+    arch: platform::Arch,
+    label: &str,
+) -> String {
     let p = platform::Platform { os, arch };
     if registry::is_available(bin, &p) {
         let ext = p.ext();
@@ -131,9 +137,27 @@ fn binary_table_rows(repo: &str) -> String {
   <td>{darwin_arm64}</td>
   <td>{windows}</td>
 </tr>"#,
-            darwin_amd64 = platform_cell(repo, bin, platform::Os::Darwin, platform::Arch::Amd64, "macOS x64"),
-            darwin_arm64 = platform_cell(repo, bin, platform::Os::Darwin, platform::Arch::Arm64, "macOS ARM64"),
-            windows = platform_cell(repo, bin, platform::Os::Windows, platform::Arch::Amd64, "Windows x64"),
+            darwin_amd64 = platform_cell(
+                repo,
+                bin,
+                platform::Os::Darwin,
+                platform::Arch::Amd64,
+                "macOS x64"
+            ),
+            darwin_arm64 = platform_cell(
+                repo,
+                bin,
+                platform::Os::Darwin,
+                platform::Arch::Arm64,
+                "macOS ARM64"
+            ),
+            windows = platform_cell(
+                repo,
+                bin,
+                platform::Os::Windows,
+                platform::Arch::Amd64,
+                "Windows x64"
+            ),
         );
     }
     rows

@@ -709,7 +709,10 @@ async fn handler_encrypts_outgoing_response() {
         assert!(!resp.was_active);
         // Ciphertext must differ from plaintext — proves encryption happened
         let plaintext = resp.encode_to_vec();
-        assert_ne!(enc.ciphertext, plaintext, "ciphertext should differ from plaintext");
+        assert_ne!(
+            enc.ciphertext, plaintext,
+            "ciphertext should differ from plaintext"
+        );
     } else {
         panic!("wrong payload");
     }
@@ -2342,11 +2345,12 @@ async fn relay_forwarded_response_has_empty_nonce_when_crypto_active() {
 
 #[tokio::test]
 async fn list_repos_through_tunnel() {
-    let HandlerTestOutput { handler: h, .. } = HandlerTestBuilder::new()
-        .with_repo_service()
-        .build()
-        .await;
-    let req = ListReposRequest { limit: 0, offset: 0 };
+    let HandlerTestOutput { handler: h, .. } =
+        HandlerTestBuilder::new().with_repo_service().build().await;
+    let req = ListReposRequest {
+        limit: 0,
+        offset: 0,
+    };
     let r = h
         .handle_frame(req_frame("repo1", METHOD_LIST_REPOS, encode(&req)))
         .await;
@@ -2354,8 +2358,7 @@ async fn list_repos_through_tunnel() {
     assert_eq!(r[0].frame_type, FrameType::Response as i32);
     if let Some(betcode_proto::v1::tunnel_frame::Payload::StreamData(p)) = &r[0].payload {
         let resp =
-            ListReposResponse::decode(p.encrypted.as_ref().unwrap().ciphertext.as_slice())
-                .unwrap();
+            ListReposResponse::decode(p.encrypted.as_ref().unwrap().ciphertext.as_slice()).unwrap();
         assert!(resp.repos.is_empty());
     } else {
         panic!("wrong payload");
@@ -2364,10 +2367,8 @@ async fn list_repos_through_tunnel() {
 
 #[tokio::test]
 async fn unregister_repo_nonexistent_through_tunnel() {
-    let HandlerTestOutput { handler: h, .. } = HandlerTestBuilder::new()
-        .with_repo_service()
-        .build()
-        .await;
+    let HandlerTestOutput { handler: h, .. } =
+        HandlerTestBuilder::new().with_repo_service().build().await;
     let req = UnregisterRepoRequest {
         id: "nonexistent".into(),
         remove_worktrees: false,
@@ -2390,7 +2391,10 @@ async fn unregister_repo_nonexistent_through_tunnel() {
 #[tokio::test]
 async fn repo_service_not_set_returns_error() {
     let HandlerTestOutput { handler: h, .. } = HandlerTestBuilder::new().build().await; // No repo service set
-    let req = ListReposRequest { limit: 0, offset: 0 };
+    let req = ListReposRequest {
+        limit: 0,
+        offset: 0,
+    };
     let r = h
         .handle_frame(req_frame("repo-err", METHOD_LIST_REPOS, encode(&req)))
         .await;
@@ -2432,10 +2436,8 @@ async fn repo_all_methods_dispatch_without_service() {
 
 #[tokio::test]
 async fn repo_malformed_data_returns_error() {
-    let HandlerTestOutput { handler: h, .. } = HandlerTestBuilder::new()
-        .with_repo_service()
-        .build()
-        .await;
+    let HandlerTestOutput { handler: h, .. } =
+        HandlerTestBuilder::new().with_repo_service().build().await;
     let r = h
         .handle_frame(req_frame("repo-bad", METHOD_LIST_REPOS, vec![0xFF, 0xFF]))
         .await;
@@ -2462,8 +2464,7 @@ async fn config_service_dispatches_when_set() {
     assert_eq!(r.len(), 1);
     assert_eq!(r[0].frame_type, FrameType::Response as i32);
     if let Some(betcode_proto::v1::tunnel_frame::Payload::StreamData(p)) = &r[0].payload {
-        let resp =
-            Settings::decode(p.encrypted.as_ref().unwrap().ciphertext.as_slice()).unwrap();
+        let resp = Settings::decode(p.encrypted.as_ref().unwrap().ciphertext.as_slice()).unwrap();
         // Should contain daemon settings from default ServerConfig
         assert!(resp.daemon.is_some());
     } else {
@@ -2531,11 +2532,7 @@ async fn set_session_grant_empty_tool_name_returns_invalid_argument() {
         granted: true,
     };
     let r = h
-        .handle_frame(req_frame(
-            "ssg1",
-            METHOD_SET_SESSION_GRANT,
-            encode(&req),
-        ))
+        .handle_frame(req_frame("ssg1", METHOD_SET_SESSION_GRANT, encode(&req)))
         .await;
     assert_eq!(r.len(), 1);
     assert_eq!(r[0].frame_type, FrameType::Error as i32);

@@ -173,15 +173,13 @@ fn replace_token(app: &mut App, replacement: &str) {
     let before_cursor = &app.input[..pos];
 
     // Find the start of the current token by scanning backwards to whitespace
-    let token_start = before_cursor
-        .rfind(char::is_whitespace)
-        .map_or(0, |i| {
-            i + before_cursor[i..]
-                .chars()
-                .next()
-                .expect("rfind returned a valid char index")
-                .len_utf8()
-        });
+    let token_start = before_cursor.rfind(char::is_whitespace).map_or(0, |i| {
+        i + before_cursor[i..]
+            .chars()
+            .next()
+            .expect("rfind returned a valid char index")
+            .len_utf8()
+    });
 
     // Find the end of the current token by scanning forward to whitespace
     let token_end = app.input[pos..]
@@ -303,8 +301,7 @@ async fn handle_input_key(
             // Replace only the trigger token, preserving the prefix character(s).
             // A trailing space is appended so the cursor moves past the token
             // boundary, preventing the completion popup from reopening.
-            let trigger =
-                crate::completion::controller::detect_trigger(&app.input, app.cursor_pos);
+            let trigger = crate::completion::controller::detect_trigger(&app.input, app.cursor_pos);
             match trigger {
                 Some(crate::completion::controller::CompletionTrigger::Command { .. }) => {
                     replace_token(app, &format!("/{text} "));
@@ -317,8 +314,7 @@ async fn handle_input_key(
                 }
                 Some(
                     crate::completion::controller::CompletionTrigger::Agent {
-                        forced: false,
-                        ..
+                        forced: false, ..
                     }
                     | crate::completion::controller::CompletionTrigger::File { .. },
                 ) => {
@@ -353,7 +349,11 @@ async fn handle_input_key(
                     let command = parts.next().unwrap_or("").to_string();
                     let args: Vec<String> = parts
                         .next()
-                        .map(|a| a.split_whitespace().map(std::string::ToString::to_string).collect())
+                        .map(|a| {
+                            a.split_whitespace()
+                                .map(std::string::ToString::to_string)
+                                .collect()
+                        })
                         .unwrap_or_default();
 
                     // Determine routing based on command category from cache.

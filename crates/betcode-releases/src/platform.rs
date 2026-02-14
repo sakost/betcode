@@ -111,20 +111,27 @@ mod tests {
 
     #[test]
     fn chrome_on_macos() {
-        let p = detect("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36").unwrap();
+        let p =
+            detect("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36").unwrap();
         assert_eq!(p.os, Os::Darwin);
         assert_eq!(p.arch, Arch::Amd64);
     }
 
     #[test]
     fn windows_extension() {
-        let p = Platform { os: Os::Windows, arch: Arch::Amd64 };
+        let p = Platform {
+            os: Os::Windows,
+            arch: Arch::Amd64,
+        };
         assert_eq!(p.ext(), "zip");
     }
 
     #[test]
     fn linux_extension() {
-        let p = Platform { os: Os::Linux, arch: Arch::Amd64 };
+        let p = Platform {
+            os: Os::Linux,
+            arch: Arch::Amd64,
+        };
         assert_eq!(p.ext(), "tar.gz");
     }
 }

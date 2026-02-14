@@ -38,7 +38,10 @@ impl RelaySetupConfig {
             bail!("domain must not be empty");
         }
         if self.jwt_secret.len() < 32 {
-            bail!("JWT secret must be at least 32 characters (got {})", self.jwt_secret.len());
+            bail!(
+                "JWT secret must be at least 32 characters (got {})",
+                self.jwt_secret.len()
+            );
         }
         if self.deployment_mode == DeploymentMode::Systemd
             && self.relay_binary_path.is_none()

@@ -5,8 +5,8 @@ use std::path::{Path, PathBuf};
 use thiserror::Error;
 use tracing::{debug, info, warn};
 
-use crate::storage::{Database, DatabaseError, Worktree};
 use super::repo::{GitRepo, WorktreeMode};
+use crate::storage::{Database, DatabaseError, Worktree};
 
 /// Errors from worktree operations.
 #[derive(Debug, Error)]
@@ -142,7 +142,9 @@ impl WorktreeManager {
             let subfolder_name = repo.local_subfolder.to_string_lossy();
             let (needs_add, is_new) = if gitignore_path.exists() {
                 let content = tokio::fs::read_to_string(&gitignore_path).await?;
-                let found = content.lines().any(|line| line.trim() == subfolder_name.as_ref());
+                let found = content
+                    .lines()
+                    .any(|line| line.trim() == subfolder_name.as_ref());
                 (!found, false)
             } else {
                 (true, true)
@@ -231,7 +233,10 @@ impl WorktreeManager {
                 effective_script,
             )
             .await?;
-        debug!(elapsed_ms = db_start.elapsed().as_millis(), "create: database insert completed");
+        debug!(
+            elapsed_ms = db_start.elapsed().as_millis(),
+            "create: database insert completed"
+        );
 
         // Run setup script if provided; clean up on failure
         if let Some(script) = effective_script {
@@ -242,7 +247,10 @@ impl WorktreeManager {
                 let _ = self.remove(&id).await;
                 return Err(e);
             }
-            debug!(elapsed_ms = script_start.elapsed().as_millis(), "create: setup script completed");
+            debug!(
+                elapsed_ms = script_start.elapsed().as_millis(),
+                "create: setup script completed"
+            );
         }
 
         Ok(wt)
@@ -413,9 +421,18 @@ mod tests {
     async fn list_with_db_records() {
         let db = Database::open_in_memory().await.unwrap();
         let tmp = tempfile::tempdir().unwrap();
-        db.create_git_repo("r1", "repo", "/repo", "global", ".worktree", None, None, true)
-            .await
-            .unwrap();
+        db.create_git_repo(
+            "r1",
+            "repo",
+            "/repo",
+            "global",
+            ".worktree",
+            None,
+            None,
+            true,
+        )
+        .await
+        .unwrap();
         // Insert directly into DB to test list without git
         db.create_worktree("wt-1", "feat-a", "/tmp/wt-1", "feat-a", "r1", None)
             .await
@@ -439,9 +456,18 @@ mod tests {
     async fn list_with_session_counts() {
         let db = Database::open_in_memory().await.unwrap();
         let tmp = tempfile::tempdir().unwrap();
-        db.create_git_repo("r1", "repo", "/repo", "global", ".worktree", None, None, true)
-            .await
-            .unwrap();
+        db.create_git_repo(
+            "r1",
+            "repo",
+            "/repo",
+            "global",
+            ".worktree",
+            None,
+            None,
+            true,
+        )
+        .await
+        .unwrap();
         db.create_worktree("wt-1", "feat", "/tmp/wt-1", "feat", "r1", None)
             .await
             .unwrap();
@@ -464,9 +490,18 @@ mod tests {
     async fn remove_cleans_db() {
         let db = Database::open_in_memory().await.unwrap();
         let tmp = tempfile::tempdir().unwrap();
-        db.create_git_repo("r1", "repo", "/repo", "global", ".worktree", None, None, true)
-            .await
-            .unwrap();
+        db.create_git_repo(
+            "r1",
+            "repo",
+            "/repo",
+            "global",
+            ".worktree",
+            None,
+            None,
+            true,
+        )
+        .await
+        .unwrap();
         db.create_worktree("wt-1", "feat", "/tmp/nonexistent-wt", "feat", "r1", None)
             .await
             .unwrap();
@@ -553,16 +588,21 @@ mod tests {
 
         // Register the repo in DB (needed for FK)
         db.create_git_repo(
-            "r1", "testrepo", &repo_dir.path().to_string_lossy(),
-            "global", ".worktree", None, None, true,
-        ).await.unwrap();
+            "r1",
+            "testrepo",
+            &repo_dir.path().to_string_lossy(),
+            "global",
+            ".worktree",
+            None,
+            None,
+            true,
+        )
+        .await
+        .unwrap();
 
         let repo = make_test_repo(repo_dir.path().to_path_buf());
         let mgr = WorktreeManager::new(db, wt_base.path().to_path_buf());
-        let wt = mgr
-            .create("feat", &repo, "feat", None)
-            .await
-            .unwrap();
+        let wt = mgr.create("feat", &repo, "feat", None).await.unwrap();
 
         // Worktree path should be under worktree_base_dir
         assert!(
@@ -580,9 +620,7 @@ mod tests {
     async fn create_nonexistent_repo_returns_not_found() {
         let (mgr, _tmp) = test_manager().await;
         let repo = make_test_repo(PathBuf::from("/nonexistent/repo/path"));
-        let result = mgr
-            .create("feat", &repo, "feat", None)
-            .await;
+        let result = mgr.create("feat", &repo, "feat", None).await;
         assert!(result.is_err());
         match result.unwrap_err() {
             WorktreeError::NotFound(msg) => {

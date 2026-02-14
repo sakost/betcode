@@ -313,8 +313,11 @@ impl TunnelClient {
             payload: Some(betcode_proto::v1::tunnel_frame::Payload::Control(
                 TunnelControl {
                     control_type: TunnelControlType::Unspecified as i32,
-                    params: std::iter::once(("machine_id".to_string(), self.config.machine_id.clone()))
-                        .collect(),
+                    params: std::iter::once((
+                        "machine_id".to_string(),
+                        self.config.machine_id.clone(),
+                    ))
+                    .collect(),
                 },
             )),
         };

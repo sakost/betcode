@@ -4,7 +4,11 @@
 
 use serde_json::Value;
 
-use super::types::{Message, ToolSchema, SystemInit, AssistantMessage, ContentBlock, StopReason, Usage, ToolResult, UserMessage, StreamEventType, Delta, StreamEvent, ControlRequestType, ControlRequest, ResultSubtype, SessionResult};
+use super::types::{
+    AssistantMessage, ContentBlock, ControlRequest, ControlRequestType, Delta, Message,
+    ResultSubtype, SessionResult, StopReason, StreamEvent, StreamEventType, SystemInit, ToolResult,
+    ToolSchema, Usage, UserMessage,
+};
 use crate::error::{Error, Result};
 
 /// Parse a single NDJSON line from Claude's stdout.
@@ -267,10 +271,18 @@ fn parse_result(raw: &Value) -> Message {
         Some(other) => ResultSubtype::Unknown(other.to_string()),
     };
 
-    let duration_ms = raw.get("duration_ms").and_then(serde_json::Value::as_u64).unwrap_or(0);
-    let cost_usd = raw.get("total_cost_usd").and_then(serde_json::Value::as_f64);
+    let duration_ms = raw
+        .get("duration_ms")
+        .and_then(serde_json::Value::as_u64)
+        .unwrap_or(0);
+    let cost_usd = raw
+        .get("total_cost_usd")
+        .and_then(serde_json::Value::as_f64);
     let usage = parse_usage(raw.get("usage"));
-    let is_error = raw.get("is_error").and_then(serde_json::Value::as_bool).unwrap_or(false);
+    let is_error = raw
+        .get("is_error")
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false);
     let errors = raw
         .get("errors")
         .and_then(|v| v.as_array())
@@ -330,8 +342,13 @@ mod tests {
         match msg {
             Message::Result(r) => {
                 assert!(r.is_error);
-                assert_eq!(r.errors, vec!["No conversation found with session ID: abc-123"]);
-                assert!(matches!(r.subtype, ResultSubtype::Unknown(s) if s == "error_during_execution"));
+                assert_eq!(
+                    r.errors,
+                    vec!["No conversation found with session ID: abc-123"]
+                );
+                assert!(
+                    matches!(r.subtype, ResultSubtype::Unknown(s) if s == "error_during_execution")
+                );
                 assert_eq!(r.session_id, "new-session");
             }
             other => panic!("expected Result, got {other:?}"),

@@ -13,7 +13,9 @@ use tracing::{debug, info, warn};
 use betcode_proto::v1::AgentEvent;
 
 use super::state::SessionState;
-use super::types::{MultiplexerConfig, ClientHandle, MultiplexerError, InputLockResult, MultiplexerStats};
+use super::types::{
+    ClientHandle, InputLockResult, MultiplexerConfig, MultiplexerError, MultiplexerStats,
+};
 
 /// Session multiplexer manages multiple client connections to sessions.
 pub struct SessionMultiplexer {
@@ -179,7 +181,11 @@ impl SessionMultiplexer {
         if let Some(session) = sessions.get_mut(session_id) {
             event.sequence = session.next_sequence();
 
-            if let Ok(count) = session.event_tx.send(event) { debug!(session_id, receivers = count, "Event broadcast") } else { debug!(session_id, "No receivers for broadcast") }
+            if let Ok(count) = session.event_tx.send(event) {
+                debug!(session_id, receivers = count, "Event broadcast");
+            } else {
+                debug!(session_id, "No receivers for broadcast");
+            }
         }
     }
 
@@ -221,7 +227,10 @@ impl SessionMultiplexer {
     /// Get session statistics.
     pub async fn stats(&self) -> MultiplexerStats {
         let sessions = self.sessions.read().await;
-        let total_clients: usize = sessions.values().map(super::state::SessionState::client_count).sum();
+        let total_clients: usize = sessions
+            .values()
+            .map(super::state::SessionState::client_count)
+            .sum();
 
         MultiplexerStats {
             session_count: sessions.len(),
