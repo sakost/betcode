@@ -669,6 +669,25 @@ fn build_question_response_json(
 mod tests {
     use super::*;
 
+    /// Create a minimal `RelayHandle` for tests. The `stdin_tx` end is connected
+    /// to the returned `mpsc::Receiver`.
+    fn test_relay_handle() -> (RelayHandle, tokio::sync::mpsc::Receiver<String>) {
+        use std::sync::atomic::AtomicU64;
+
+        let (tx, rx) = tokio::sync::mpsc::channel(64);
+        let handle = RelayHandle {
+            process_id: "pid-test".into(),
+            session_id: "sid-test".into(),
+            stdin_tx: tx,
+            sequence_counter: Arc::new(AtomicU64::new(0)),
+            pending_question_inputs: Arc::new(tokio::sync::RwLock::new(HashMap::new())),
+            pending_permission_inputs: Arc::new(tokio::sync::RwLock::new(HashMap::new())),
+            session_grants: Arc::new(tokio::sync::RwLock::new(HashMap::new())),
+            pending_permission_tool_names: Arc::new(tokio::sync::RwLock::new(HashMap::new())),
+        };
+        (handle, rx)
+    }
+
     #[tokio::test]
     async fn relay_creation() {
         let db = Database::open_in_memory().await.unwrap();
@@ -827,19 +846,7 @@ mod tests {
     /// are properly initialized as empty.
     #[tokio::test]
     async fn relay_handle_session_grants_initialized_empty() {
-        use std::sync::atomic::AtomicU64;
-
-        let (tx, _rx) = tokio::sync::mpsc::channel(1);
-        let handle = RelayHandle {
-            process_id: "pid-1".into(),
-            session_id: "sid-1".into(),
-            stdin_tx: tx,
-            sequence_counter: Arc::new(AtomicU64::new(0)),
-            pending_question_inputs: Arc::new(tokio::sync::RwLock::new(HashMap::new())),
-            pending_permission_inputs: Arc::new(tokio::sync::RwLock::new(HashMap::new())),
-            session_grants: Arc::new(tokio::sync::RwLock::new(HashMap::new())),
-            pending_permission_tool_names: Arc::new(tokio::sync::RwLock::new(HashMap::new())),
-        };
+        let (handle, _rx) = test_relay_handle();
 
         assert!(handle.session_grants.read().await.is_empty());
         assert!(handle.pending_permission_tool_names.read().await.is_empty());
@@ -848,19 +855,7 @@ mod tests {
     /// Verify AllowSession populates session_grants via the handle.
     #[tokio::test]
     async fn allow_session_populates_grant() {
-        use std::sync::atomic::AtomicU64;
-
-        let (tx, _rx) = tokio::sync::mpsc::channel(1);
-        let handle = RelayHandle {
-            process_id: "pid-1".into(),
-            session_id: "sid-1".into(),
-            stdin_tx: tx,
-            sequence_counter: Arc::new(AtomicU64::new(0)),
-            pending_question_inputs: Arc::new(tokio::sync::RwLock::new(HashMap::new())),
-            pending_permission_inputs: Arc::new(tokio::sync::RwLock::new(HashMap::new())),
-            session_grants: Arc::new(tokio::sync::RwLock::new(HashMap::new())),
-            pending_permission_tool_names: Arc::new(tokio::sync::RwLock::new(HashMap::new())),
-        };
+        let (handle, _rx) = test_relay_handle();
 
         // Simulate what the handler does on AllowSession
         handle
@@ -896,19 +891,7 @@ mod tests {
     /// Verify AllowOnce does NOT populate session_grants.
     #[tokio::test]
     async fn allow_once_does_not_populate_grant() {
-        use std::sync::atomic::AtomicU64;
-
-        let (tx, _rx) = tokio::sync::mpsc::channel(1);
-        let handle = RelayHandle {
-            process_id: "pid-1".into(),
-            session_id: "sid-1".into(),
-            stdin_tx: tx,
-            sequence_counter: Arc::new(AtomicU64::new(0)),
-            pending_question_inputs: Arc::new(tokio::sync::RwLock::new(HashMap::new())),
-            pending_permission_inputs: Arc::new(tokio::sync::RwLock::new(HashMap::new())),
-            session_grants: Arc::new(tokio::sync::RwLock::new(HashMap::new())),
-            pending_permission_tool_names: Arc::new(tokio::sync::RwLock::new(HashMap::new())),
-        };
+        let (handle, _rx) = test_relay_handle();
 
         // Set up pending state
         handle
@@ -936,19 +919,7 @@ mod tests {
     /// Verify that session_grants auto-respond sends to stdin_tx when a grant exists.
     #[tokio::test]
     async fn session_grant_auto_respond_sends_to_stdin() {
-        use std::sync::atomic::AtomicU64;
-
-        let (tx, mut rx) = tokio::sync::mpsc::channel(16);
-        let handle = RelayHandle {
-            process_id: "pid-1".into(),
-            session_id: "sid-1".into(),
-            stdin_tx: tx.clone(),
-            sequence_counter: Arc::new(AtomicU64::new(0)),
-            pending_question_inputs: Arc::new(tokio::sync::RwLock::new(HashMap::new())),
-            pending_permission_inputs: Arc::new(tokio::sync::RwLock::new(HashMap::new())),
-            session_grants: Arc::new(tokio::sync::RwLock::new(HashMap::new())),
-            pending_permission_tool_names: Arc::new(tokio::sync::RwLock::new(HashMap::new())),
-        };
+        let (handle, mut rx) = test_relay_handle();
 
         // Add a grant for "Bash"
         handle
@@ -963,7 +934,7 @@ mod tests {
 
         let original_input = serde_json::json!({"command": "ls"});
         let line = build_permission_response_json("req-auto", true, &original_input);
-        tx.send(line.clone()).await.unwrap();
+        handle.stdin_tx.send(line.clone()).await.unwrap();
 
         // Verify the line was sent
         let received = rx.recv().await.unwrap();
@@ -977,19 +948,7 @@ mod tests {
     /// stored in pending maps for the handler to process.
     #[tokio::test]
     async fn no_grant_stores_in_pending_maps() {
-        use std::sync::atomic::AtomicU64;
-
-        let (tx, _rx) = tokio::sync::mpsc::channel(1);
-        let handle = RelayHandle {
-            process_id: "pid-1".into(),
-            session_id: "sid-1".into(),
-            stdin_tx: tx,
-            sequence_counter: Arc::new(AtomicU64::new(0)),
-            pending_question_inputs: Arc::new(tokio::sync::RwLock::new(HashMap::new())),
-            pending_permission_inputs: Arc::new(tokio::sync::RwLock::new(HashMap::new())),
-            session_grants: Arc::new(tokio::sync::RwLock::new(HashMap::new())),
-            pending_permission_tool_names: Arc::new(tokio::sync::RwLock::new(HashMap::new())),
-        };
+        let (handle, _rx) = test_relay_handle();
 
         // No grants — simulate what pipeline does: store in pending maps
         let grant = handle.session_grants.read().await.get("Write").copied();
@@ -1020,19 +979,7 @@ mod tests {
         tool_name: &str,
         original_input: serde_json::Value,
     ) -> RelayHandle {
-        use std::sync::atomic::AtomicU64;
-
-        let (tx, _rx) = tokio::sync::mpsc::channel(1);
-        let handle = RelayHandle {
-            process_id: "pid-test".into(),
-            session_id: "sid-test".into(),
-            stdin_tx: tx,
-            sequence_counter: Arc::new(AtomicU64::new(0)),
-            pending_question_inputs: Arc::new(tokio::sync::RwLock::new(HashMap::new())),
-            pending_permission_inputs: Arc::new(tokio::sync::RwLock::new(HashMap::new())),
-            session_grants: Arc::new(tokio::sync::RwLock::new(HashMap::new())),
-            pending_permission_tool_names: Arc::new(tokio::sync::RwLock::new(HashMap::new())),
-        };
+        let (handle, _rx) = test_relay_handle();
         handle
             .pending_permission_inputs
             .write()

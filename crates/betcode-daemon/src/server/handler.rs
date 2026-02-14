@@ -35,11 +35,7 @@ pub async fn handle_agent_request(
         }
         Some(Request::Message(msg)) => {
             if let Some(ref sid) = session_id {
-                let agent_id = if msg.agent_id.is_empty() {
-                    None
-                } else {
-                    Some(msg.agent_id.as_str())
-                };
+                let agent_id = Some(msg.agent_id.as_str()).filter(|s| !s.is_empty());
                 info!(session_id = %sid, content_len = msg.content.len(), "User message");
                 ctx.relay
                     .send_user_message(sid, &msg.content, agent_id)
