@@ -6,15 +6,7 @@ use std::sync::Arc;
 use tonic::{Request, Response, Status};
 use tracing::instrument;
 
-use betcode_proto::v1::command_service_server::CommandService;
-use betcode_proto::v1::{
-    AddPluginRequest, AddPluginResponse, DisablePluginRequest, DisablePluginResponse,
-    EnablePluginRequest, EnablePluginResponse, ExecuteServiceCommandRequest,
-    GetCommandRegistryRequest, GetCommandRegistryResponse, GetPluginStatusRequest,
-    GetPluginStatusResponse, ListAgentsRequest, ListAgentsResponse, ListPathRequest,
-    ListPathResponse, ListPluginsRequest, ListPluginsResponse, RemovePluginRequest,
-    RemovePluginResponse, ServiceCommandOutput,
-};
+use betcode_proto::v1::{self, command_service_server::CommandService};
 
 use betcode_proto::methods::{
     METHOD_ADD_PLUGIN, METHOD_DISABLE_PLUGIN, METHOD_ENABLE_PLUGIN, METHOD_EXECUTE_SERVICE_COMMAND,
@@ -25,7 +17,7 @@ use betcode_proto::methods::{
 use crate::router::RequestRouter;
 
 type ServiceCommandStream =
-    Pin<Box<dyn tokio_stream::Stream<Item = Result<ServiceCommandOutput, Status>> + Send>>;
+    Pin<Box<dyn tokio_stream::Stream<Item = Result<v1::ServiceCommandOutput, Status>> + Send>>;
 
 /// Proxies `CommandService` calls through the tunnel to a target daemon.
 pub struct CommandProxyService {
@@ -45,8 +37,8 @@ impl CommandService for CommandProxyService {
     #[instrument(skip(self, request), fields(rpc = "GetCommandRegistry"))]
     async fn get_command_registry(
         &self,
-        request: Request<GetCommandRegistryRequest>,
-    ) -> Result<Response<GetCommandRegistryResponse>, Status> {
+        request: Request<v1::GetCommandRegistryRequest>,
+    ) -> Result<Response<v1::GetCommandRegistryResponse>, Status> {
         super::grpc_util::forward_unary_rpc(&self.router, request, METHOD_GET_COMMAND_REGISTRY)
             .await
     }
@@ -54,23 +46,23 @@ impl CommandService for CommandProxyService {
     #[instrument(skip(self, request), fields(rpc = "ListAgents"))]
     async fn list_agents(
         &self,
-        request: Request<ListAgentsRequest>,
-    ) -> Result<Response<ListAgentsResponse>, Status> {
+        request: Request<v1::ListAgentsRequest>,
+    ) -> Result<Response<v1::ListAgentsResponse>, Status> {
         super::grpc_util::forward_unary_rpc(&self.router, request, METHOD_LIST_AGENTS).await
     }
 
     #[instrument(skip(self, request), fields(rpc = "ListPath"))]
     async fn list_path(
         &self,
-        request: Request<ListPathRequest>,
-    ) -> Result<Response<ListPathResponse>, Status> {
+        request: Request<v1::ListPathRequest>,
+    ) -> Result<Response<v1::ListPathResponse>, Status> {
         super::grpc_util::forward_unary_rpc(&self.router, request, METHOD_LIST_PATH).await
     }
 
     #[instrument(skip(self, request), fields(rpc = "ExecuteServiceCommand"))]
     async fn execute_service_command(
         &self,
-        request: Request<ExecuteServiceCommandRequest>,
+        request: Request<v1::ExecuteServiceCommandRequest>,
     ) -> Result<Response<Self::ExecuteServiceCommandStream>, Status> {
         super::grpc_util::forward_stream_rpc(
             &self.router,
@@ -84,48 +76,48 @@ impl CommandService for CommandProxyService {
     #[instrument(skip(self, request), fields(rpc = "ListPlugins"))]
     async fn list_plugins(
         &self,
-        request: Request<ListPluginsRequest>,
-    ) -> Result<Response<ListPluginsResponse>, Status> {
+        request: Request<v1::ListPluginsRequest>,
+    ) -> Result<Response<v1::ListPluginsResponse>, Status> {
         super::grpc_util::forward_unary_rpc(&self.router, request, METHOD_LIST_PLUGINS).await
     }
 
     #[instrument(skip(self, request), fields(rpc = "GetPluginStatus"))]
     async fn get_plugin_status(
         &self,
-        request: Request<GetPluginStatusRequest>,
-    ) -> Result<Response<GetPluginStatusResponse>, Status> {
+        request: Request<v1::GetPluginStatusRequest>,
+    ) -> Result<Response<v1::GetPluginStatusResponse>, Status> {
         super::grpc_util::forward_unary_rpc(&self.router, request, METHOD_GET_PLUGIN_STATUS).await
     }
 
     #[instrument(skip(self, request), fields(rpc = "AddPlugin"))]
     async fn add_plugin(
         &self,
-        request: Request<AddPluginRequest>,
-    ) -> Result<Response<AddPluginResponse>, Status> {
+        request: Request<v1::AddPluginRequest>,
+    ) -> Result<Response<v1::AddPluginResponse>, Status> {
         super::grpc_util::forward_unary_rpc(&self.router, request, METHOD_ADD_PLUGIN).await
     }
 
     #[instrument(skip(self, request), fields(rpc = "RemovePlugin"))]
     async fn remove_plugin(
         &self,
-        request: Request<RemovePluginRequest>,
-    ) -> Result<Response<RemovePluginResponse>, Status> {
+        request: Request<v1::RemovePluginRequest>,
+    ) -> Result<Response<v1::RemovePluginResponse>, Status> {
         super::grpc_util::forward_unary_rpc(&self.router, request, METHOD_REMOVE_PLUGIN).await
     }
 
     #[instrument(skip(self, request), fields(rpc = "EnablePlugin"))]
     async fn enable_plugin(
         &self,
-        request: Request<EnablePluginRequest>,
-    ) -> Result<Response<EnablePluginResponse>, Status> {
+        request: Request<v1::EnablePluginRequest>,
+    ) -> Result<Response<v1::EnablePluginResponse>, Status> {
         super::grpc_util::forward_unary_rpc(&self.router, request, METHOD_ENABLE_PLUGIN).await
     }
 
     #[instrument(skip(self, request), fields(rpc = "DisablePlugin"))]
     async fn disable_plugin(
         &self,
-        request: Request<DisablePluginRequest>,
-    ) -> Result<Response<DisablePluginResponse>, Status> {
+        request: Request<v1::DisablePluginRequest>,
+    ) -> Result<Response<v1::DisablePluginResponse>, Status> {
         super::grpc_util::forward_unary_rpc(&self.router, request, METHOD_DISABLE_PLUGIN).await
     }
 }

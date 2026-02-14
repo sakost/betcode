@@ -48,52 +48,45 @@ pub fn hardcoded_cc_commands(version: &str) -> Vec<CommandEntry> {
         .collect()
 }
 
-/// Discovers user-defined commands from `.claude/commands/*.md` files.
-pub fn discover_user_commands(working_dir: &Path) -> Vec<CommandEntry> {
-    let commands_dir = working_dir.join(".claude").join("commands");
-
-    let Ok(entries) = std::fs::read_dir(&commands_dir) else {
+/// Collects file stems (without extension) from all `.md` files in a directory.
+///
+/// Returns an empty `Vec` if the directory does not exist or is unreadable.
+fn collect_md_stems(dir: &Path) -> Vec<String> {
+    let Ok(entries) = std::fs::read_dir(dir) else {
         return Vec::new();
     };
 
-    let mut commands = Vec::new();
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if path.extension().and_then(|e| e.to_str()) == Some("md")
-            && let Some(stem) = path.file_stem().and_then(|s| s.to_str())
-        {
-            commands.push(CommandEntry::new(
-                stem,
+    entries
+        .flatten()
+        .filter_map(|entry| {
+            let path = entry.path();
+            (path.extension().and_then(|e| e.to_str()) == Some("md"))
+                .then(|| path.file_stem()?.to_str().map(String::from))?
+        })
+        .collect()
+}
+
+/// Discovers user-defined commands from `.claude/commands/*.md` files.
+pub fn discover_user_commands(working_dir: &Path) -> Vec<CommandEntry> {
+    collect_md_stems(&working_dir.join(".claude").join("commands"))
+        .into_iter()
+        .map(|stem| {
+            CommandEntry::new(
+                &stem,
                 &format!("User command: {stem}"),
                 CommandCategory::ClaudeCode,
                 ExecutionMode::Passthrough,
                 "user",
-            ));
-        }
-    }
-    commands
+            )
+        })
+        .collect()
 }
 
 /// Discovers agent names from `.claude/agents/*.md` files.
 ///
 /// Each `.md` file stem is treated as an agent name.
 pub fn discover_agents(working_dir: &Path) -> Vec<String> {
-    let agents_dir = working_dir.join(".claude").join("agents");
-
-    let Ok(entries) = std::fs::read_dir(&agents_dir) else {
-        return Vec::new();
-    };
-
-    let mut agents = Vec::new();
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if path.extension().and_then(|e| e.to_str()) == Some("md")
-            && let Some(stem) = path.file_stem().and_then(|s| s.to_str())
-        {
-            agents.push(stem.to_string());
-        }
-    }
-    agents
+    collect_md_stems(&working_dir.join(".claude").join("agents"))
 }
 
 /// Parses Claude Code `/help` output, extracting command names.
