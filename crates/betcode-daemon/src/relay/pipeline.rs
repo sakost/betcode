@@ -7,7 +7,7 @@
 //! gRPC PermissionResponse → control_response JSON → subprocess stdin
 //! ```
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
@@ -355,8 +355,12 @@ fn spawn_stdout_pipeline(ctx: StdoutPipelineContext) {
         let mut bridge = EventBridge::with_start_sequence(start_seq);
         let mut event_count = 0u64;
         let mut had_session_error = false;
+        // Track which permission request IDs were auto-responded so we
+        // can skip forwarding them to the client.
+        let mut auto_responded_requests: HashSet<String> = HashSet::new();
 
         while let Some(line) = stdout_rx.recv().await {
+            auto_responded_requests.clear();
             let msg = match ndjson::parse_line(&line) {
                 Ok(msg) => msg,
                 Err(e) => {
@@ -374,11 +378,6 @@ fn spawn_stdout_pipeline(ctx: StdoutPipelineContext) {
             }
 
             let events = bridge.convert(msg);
-
-            // Track which permission request IDs were auto-responded so we
-            // can skip forwarding them to the client.
-            let mut auto_responded_requests: std::collections::HashSet<String> =
-                std::collections::HashSet::new();
 
             for event in &events {
                 // Transfer pending question inputs from bridge → shared map

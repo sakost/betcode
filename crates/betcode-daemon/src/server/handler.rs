@@ -109,45 +109,21 @@ async fn handle_permission(
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let decision = PermissionDecision::try_from(perm.decision)
         .unwrap_or(PermissionDecision::Deny);
-    let granted = matches!(
-        decision,
-        PermissionDecision::AllowOnce | PermissionDecision::AllowSession
-    );
-    info!(session_id = %sid, request_id = %perm.request_id, granted, ?decision, "Permission");
+    info!(session_id = %sid, request_id = %perm.request_id, ?decision, "Permission");
 
-    // Look up original tool input and tool name from pending maps.
-    let original_input = if let Some(handle) = ctx.relay.get_handle(sid).await {
-        let input = handle
-            .pending_permission_inputs
-            .write()
+    let (granted, original_input) = if let Some(handle) = ctx.relay.get_handle(sid).await {
+        handle
+            .process_permission_response(&perm.request_id, decision)
             .await
-            .remove(&perm.request_id)
-            .unwrap_or_else(|| serde_json::Value::Object(serde_json::Map::default()));
-        let tool = handle
-            .pending_permission_tool_names
-            .write()
-            .await
-            .remove(&perm.request_id);
-
-        // On AllowSession, cache the grant for this tool
-        if decision == PermissionDecision::AllowSession {
-            if let Some(ref tool_name) = tool {
-                handle
-                    .session_grants
-                    .write()
-                    .await
-                    .insert(tool_name.clone(), true);
-                info!(
-                    session_id = %sid,
-                    tool_name = %tool_name,
-                    "Cached AllowSession grant"
-                );
-            }
-        }
-
-        input
     } else {
-        serde_json::Value::Object(serde_json::Map::default())
+        let fallback_granted = matches!(
+            decision,
+            PermissionDecision::AllowOnce | PermissionDecision::AllowSession
+        );
+        (
+            fallback_granted,
+            serde_json::Value::Object(serde_json::Map::default()),
+        )
     };
 
     ctx.relay

@@ -6,6 +6,7 @@ use std::sync::atomic::AtomicU64;
 use std::sync::Arc;
 
 use tokio::sync::RwLock;
+use tracing::info;
 
 /// Configuration for starting a relay session.
 #[derive(Debug, Clone)]
@@ -50,6 +51,52 @@ pub struct RelayHandle {
     /// Used by the handler to look up which tool was granted when
     /// processing `AllowSession` decisions.
     pub pending_permission_tool_names: Arc<RwLock<HashMap<String, String>>>,
+}
+
+impl RelayHandle {
+    /// Process a permission response: remove pending entries and cache `AllowSession` grants.
+    /// Returns `(granted, original_input)`.
+    pub async fn process_permission_response(
+        &self,
+        request_id: &str,
+        decision: betcode_proto::v1::PermissionDecision,
+    ) -> (bool, serde_json::Value) {
+        let granted = matches!(
+            decision,
+            betcode_proto::v1::PermissionDecision::AllowOnce
+                | betcode_proto::v1::PermissionDecision::AllowSession
+        );
+
+        let input = self
+            .pending_permission_inputs
+            .write()
+            .await
+            .remove(request_id)
+            .unwrap_or_else(|| serde_json::Value::Object(serde_json::Map::default()));
+
+        let tool = self
+            .pending_permission_tool_names
+            .write()
+            .await
+            .remove(request_id);
+
+        // On AllowSession, cache the grant for this tool
+        if decision == betcode_proto::v1::PermissionDecision::AllowSession {
+            if let Some(ref tool_name) = tool {
+                self.session_grants
+                    .write()
+                    .await
+                    .insert(tool_name.clone(), true);
+                info!(
+                    session_id = %self.session_id,
+                    tool_name = %tool_name,
+                    "Cached AllowSession grant"
+                );
+            }
+        }
+
+        (granted, input)
+    }
 }
 
 /// Errors from relay operations.
