@@ -19,7 +19,7 @@ crates/betcode-releases  - Release artifact packaging
 ## Code Conventions
 
 - No unwrap() in production code (denied by clippy)
-- No panic!, todo!, dbg! in production code
+- No todo!, dbg! in production code (denied by clippy). panic! is warned -- avoid in production
 - Clippy pedantic + nursery lints enabled
 - In tests: expect()/unwrap() are fine with granular #[allow(clippy::...)]
 - Error handling: thiserror for libraries, anyhow for binaries
@@ -41,7 +41,7 @@ cargo build -p betcode-proto     # Rebuild after .proto changes
 
 Conventional Commits: type(scope): description
 Types: feat, fix, refactor, test, docs, ci, chore, style
-Scopes: daemon, relay, cli, proto, setup, releases, crypto, core
+Scopes: daemon, relay, cli, proto, setup, releases, crypto, core, lint, deps
 
 ## Architecture Docs
 

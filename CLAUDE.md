@@ -23,7 +23,7 @@ cargo build -p betcode-proto     # Rebuild proto after .proto changes
 ## Code Quality Rules
 
 - **No `unwrap()` in production code** -- denied by Clippy (`unwrap_used = "deny"`)
-- **No `panic!`, `todo!`, `dbg!`** in production code
+- **No `todo!`, `dbg!`** in production code (denied by Clippy). **`panic!` is warned** -- avoid in production code
 - **Clippy pedantic + nursery** lints enabled workspace-wide
 - In test code: `expect()`, `unwrap()`, `panic!()` are acceptable -- use granular `#[allow(clippy::...)]` on specific test functions
 - Code duplication must stay under 0.07% (enforced by jscpd)

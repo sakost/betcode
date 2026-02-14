@@ -116,7 +116,9 @@ Detailed architecture documentation lives in [`docs/architecture/`](docs/archite
 | [CONFIG_REFERENCE.md](docs/architecture/CONFIG_REFERENCE.md) | Configuration reference and sub-docs |
 | [ROADMAP.md](docs/architecture/ROADMAP.md) | Phased implementation plan |
 | [GLOSSARY.md](docs/architecture/GLOSSARY.md) | Terminology definitions |
+| [COMPATIBILITY.md](docs/architecture/COMPATIBILITY.md) | Claude Code version compatibility |
 | [ARCHITECTURE_DECISIONS.md](docs/architecture/ARCHITECTURE_DECISIONS.md) | ADR index |
+| [release-policy.md](docs/policies/release-policy.md) | Versioning, release process, changelog |
 
 ---
 
