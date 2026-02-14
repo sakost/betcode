@@ -24,22 +24,46 @@ intercept tool-level behavior, no local-only model path through agent.
 
 **v0.1.0-alpha.1**
 
-Phase 1 is complete. The foundation crates are implemented and passing CI:
+Phases 1-3 are complete and most of Phase 4 is implemented. All 8 Rust crates and the Flutter mobile app are functional and passing CI.
+
+### Rust Crates
 
 | Crate | Status | Description |
 |-------|--------|-------------|
-| betcode-proto | Done | Protobuf codegen, shared gRPC types |
+| betcode-proto | Done | 13 gRPC services, ~70 RPCs, tonic-build codegen |
 | betcode-core | Done | Config parsing, NDJSON types, shared errors |
-| betcode-crypto | Done | mTLS certificate generation and management |
-| betcode-daemon | Done | Subprocess manager, session store, gRPC server |
-| betcode-cli | Done | clap CLI, ratatui TUI, daemon connection |
-| betcode-relay | Done | gRPC router, JWT auth, message buffer |
+| betcode-crypto | Done | mTLS certificate generation, E2E encryption (X25519 + ChaCha20-Poly1305) |
+| betcode-daemon | Done | Subprocess manager, session store, worktree manager, tunnel client, GitLab API |
+| betcode-cli | Done | clap CLI, ratatui TUI, worktree/machine/gitlab/auth/repo commands |
+| betcode-relay | Done | gRPC router, JWT auth, tunnel service, message buffer, user management |
 | betcode-setup | Done | First-run setup wizard |
 | betcode-releases | Done | Release artifact packaging |
 
-Additional crates beyond the original Phase 1 plan (betcode-crypto, betcode-setup, betcode-releases) were added during implementation.
+### Flutter Mobile App ([betcode-app](https://github.com/sakost/betcode-app))
 
-Phases 2-4 remain as future work.
+| Feature | Status |
+|---------|--------|
+| Riverpod + go_router + drift scaffold | Done |
+| JWT auth (login, register, refresh) | Done |
+| gRPC client with reconnection | Done |
+| Conversation UI (streaming, tools, permissions, todos) | Done |
+| Machine list + switching | Done |
+| Session list + resume + rename | Done |
+| Offline sync engine (priority queue, retry, TTL) | Done |
+| GitLab screens (pipelines, MRs, issues) | Done |
+| Worktree + repo management | Done |
+| Settings screen | Done |
+| Push notifications | Schema only |
+
+### Phase Status
+
+| Phase | Status | Notes |
+|-------|--------|-------|
+| Phase 1: Foundation | Complete | All 8 crates |
+| Phase 2: Worktrees & Sessions | Complete | Worktrees, input locking, session lifecycle |
+| Phase 3: Relay & Mobile | Complete | Relay, tunnel, Flutter app with offline sync |
+| Phase 4: Multi-Machine & Polish | Mostly complete | Cross-machine and GitLab done |
+| Subagent Orchestration | Partial | ListAgents only; spawn/watch/DAG not started |
 
 ---
 
@@ -59,15 +83,15 @@ Phases 2-4 remain as future work.
 
 ---
 
-## Phase 1: Foundation -- Single Machine CLI
+## Phase 1: Foundation -- Single Machine CLI [Complete]
 
 **Goal**: Daemon + CLI on one machine. Full agent capability via Claude Code subprocess.
-**Scope**: 4 crates (proto, core, daemon, cli), ~8,000-12,000 LOC Rust.
 
-**betcode-proto**: AgentService proto (Converse, ListSessions, ResumeSession,
-CompactSession, CancelTurn), ConfigService proto, tonic-build codegen, shared
-message types (AgentEvent, AgentRequest, TextDelta, ToolCallStart, ToolCallResult,
-PermissionRequest, PermissionResponse, StatusChange).
+**betcode-proto**: 13 gRPC services (~70 RPCs) including AgentService (Converse,
+ListSessions, ResumeSession, CompactSession, CancelTurn, InputLock, KeyExchange,
+SessionGrants, RenameSession), ConfigService, CommandService, WorktreeService,
+GitRepoService, TunnelService, AuthService, MachineService, GitLabService,
+PluginService, Health, BetCodeHealth, VersionService.
 
 **betcode-core**: NDJSON stream parser (all Claude Code message types: assistant,
 tool_use, tool_result, result, system, control_request, input_request), typed Rust
@@ -77,95 +101,125 @@ permission rule parsing (Claude Code "Tool(pattern)" format), shared error types
 **betcode-daemon**: Claude subprocess manager (spawn with --output-format stream-json,
 --resume, stdin/stdout I/O bridge, health monitoring), permission bridge
 (control_request -> auto-respond or forward to client, timeout 60s default), session
-store (SQLite: sessions, messages, permission_grants), local gRPC server (named pipe
-on Windows, Unix socket on Linux/macOS), config resolver (merge hierarchy: CLI > env >
-project local > project > user), first-run import (~/.claude/ -> config dir), daemon
-lifecycle (signal handling, graceful shutdown, PID file, tracing).
+store (SQLite: sessions, messages, permission_grants), local gRPC server (Unix socket),
+config resolver (merge hierarchy: CLI > env > project local > project > user),
+daemon lifecycle (signal handling, graceful shutdown, PID file, tracing).
 
 **betcode-cli**: clap parsing (chat, -p, --resume, --model, session, daemon
 subcommands), ratatui TUI (input pane, streaming markdown output, tool call
 indicators, permission prompt dialogs, status bar), local daemon connection
-(auto-detect socket, offer to start), headless mode (-p with json/stream-json output).
-
-**Deliverable**: `betcode` drops into any project with CLAUDE.md + .claude/settings.json.
-All 17+ tools, MCP, hooks, sub-agents, skills work because it IS Claude Code.
+(auto-detect socket, offer to start), headless mode (-p with text streaming),
+tab-completion (slash commands, agent mentions, file paths).
 
 ---
 
-## Phase 2: Worktrees and Session Management
+## Phase 2: Worktrees and Session Management [Complete]
 
 **Goal**: Git worktree orchestration, multi-session support, input locking.
 
-**Worktree manager**: create/remove/list/switch worktrees, auto-setup hooks (npm
-install, cargo build, etc.), health checks for prunable/locked/broken worktrees.
+**Worktree manager**: WorktreeManager with create/remove/list/get, name validation
+(path traversal protection), auto-setup script execution on creation with rollback
+on failure, worktree modes (global, local, custom), .gitignore management for local
+mode. GitRepoService for repository registration/scanning.
 
-**Per-worktree sessions**: each worktree gets own Claude subprocess with correct CWD,
-worktrees table in SQLite, session-worktree binding, cascade cleanup on deletion.
+**Per-worktree sessions**: sessions.worktree_id FK with cascade cleanup,
+bind_session_to_worktree/get_worktree_sessions queries, WorktreeDetail includes
+session_count.
 
-**Session lifecycle**: resume via --resume with claude_session_id, compact via RPC,
-session list with metadata (tokens, last message, duration, worktree).
+**Session lifecycle**: ResumeSession RPC with from_sequence replay, CompactSession
+RPC (keeps newest 50%, minimum 10 messages), ListSessions with pagination and
+working_directory filter, RenameSession RPC, session metadata (tokens, cost,
+last_message_preview, status).
 
-**Input locking**: one client controls input per session, lock on first UserMessage,
-release on turn completion or disconnect, other clients get read-only event stream,
-connected_clients tracking with heartbeat cleanup.
+**Input locking**: SessionState.input_lock_holder with atomic DB transactions,
+acquire_input_lock RPC, connected_clients table (client_id, session_id, client_type,
+has_input_lock, last_heartbeat), auto-release on disconnect.
 
-**CLI additions**: `betcode worktree create/list/switch/remove`, session list with
-worktree info.
+**CLI additions**: `betcode worktree create/list/get/remove`, `betcode repo
+register/unregister/list/get/update`.
 
 ---
 
-## Phase 3: Relay and Mobile
+## Phase 3: Relay and Mobile [Complete]
 
 **Goal**: Remote access via relay + Flutter mobile app.
 
-**betcode-relay** (new crate): TunnelService (bidirectional stream), JWT auth for
-clients, mTLS auth for daemons, connection registry (machine_id -> tunnel), request
-routing through tunnel with request_id correlation, message buffering for offline
-daemons (SQLite, 24h TTL, 1000 msg cap), user registration/login, relay database
-(users, tokens, machines, message_buffer, certificates).
+**betcode-relay**: TunnelService (bidirectional streaming with frame routing),
+JWT auth for clients (jsonwebtoken HMAC-SHA256, access + refresh tokens, Bearer
+interceptor), server-side TLS (dev self-signed or custom certs), connection
+registry (machine_id -> tunnel with dual-channel unary/streaming support), request
+routing with request_id correlation and timeout enforcement, message buffering
+(SQLite, 1hr TTL, priority ordering, auto-drain on reconnect), user
+registration/login (argon2id password hashing), relay database (users, tokens,
+machines, message_buffer, certificates tables).
 
-**Daemon additions**: reverse tunnel client (mTLS to relay), reconnection state
-machine (exponential backoff 1s-60s), certificate management (generate keypair,
-CSR, auto-renewal).
+**Daemon additions**: TunnelClient with reverse tunnel to relay, reconnection
+state machine (exponential backoff 1s-60s), TunnelRequestHandler routing all
+services through tunnel, E2E encryption (X25519 key exchange + ChaCha20-Poly1305),
+HTTP/2 keepalive (30s interval, 10s timeout).
 
-**Flutter app**: Riverpod + go_router + drift + flutter_secure_storage scaffold,
-JWT auth flow, gRPC client with reconnection, conversation screen (streaming text,
-tool cards, permission dialogs, task list), machine list + switching, session
-list + resume, offline sync engine (queue requests, replay on reconnect).
-
-**Deliverable**: Use BetCode from phone via relay to any registered machine.
+**Flutter app** ([betcode-app](https://github.com/sakost/betcode-app)):
+Riverpod + go_router + drift + flutter_secure_storage scaffold, JWT auth with
+token refresh and expiry detection, gRPC client with exponential backoff
+reconnection (100ms-30s), conversation screen (streaming text deltas, tool call
+cards with status/duration, permission bottom sheets, todo list panel with
+progress, user question dialogs, plan mode banner, agent bar for multi-agent),
+machine list + switching with persistence, session list + resume + rename +
+caching, offline sync engine (priority queue with 7-day TTL, UUIDv7 idempotency,
+max 5 retries with jitter), worktree and repo management screens, settings screen.
 
 ---
 
-## Phase 4: Multi-Machine and Polish
+## Phase 4: Multi-Machine and Polish [In Progress]
 
 **Goal**: Cross-machine switching, GitLab integration, LAN mode, production readiness.
 
-**Cross-machine**: machine_id routing via relay, CLI `betcode machine list/switch`,
-Flutter machine switching, persisted active machine.
+**Cross-machine** [Done]: machine_id routing via relay, CLI `betcode machine
+register/list/switch/status`, Flutter machine list + switching with persistence,
+MachineService gRPC (RegisterMachine, ListMachines, RemoveMachine, GetMachine).
 
-**GitLab integration**: reqwest API client in daemon (MRs, pipelines, issues),
-GitLabService gRPC, Flutter GitLab screens, CLI `betcode gitlab` commands.
+**GitLab integration** [Done]: GitLabService gRPC in daemon (ListMergeRequests,
+GetMergeRequest, ListPipelines, GetPipeline, ListIssues, GetIssue), Flutter GitLab
+tab (pipelines, MRs, issues -- read-only), CLI `betcode gitlab mr/pipeline/issue
+list/get` commands.
 
-**Direct LAN mode**: mDNS discovery, explicit config, mTLS reuse, automatic prefer
-LAN over relay.
+**Remaining work**:
 
-**Flutter web**: PWA build, same codebase, gRPC-web transport.
-
-**Polish**: connection pooling, keepalive tuning, structured logging with trace IDs,
-error codes and diagnostic dumps, opt-in metrics, push notifications for completions.
+- **Direct LAN mode**: mDNS discovery, explicit config, mTLS reuse, automatic
+  prefer LAN over relay.
+- **Flutter web**: PWA build, same codebase, gRPC-web transport.
+- **Push notifications**: drift schema exists (NotificationCache table) but not
+  wired to FCM/APNs or agent events.
+- **Mutual TLS for daemons**: Server TLS exists but daemons authenticate via JWT,
+  not client certificates. Certificates table exists in relay DB but unused for auth.
+- **Configurable buffer TTL/cap**: Message buffer uses fixed 1hr TTL with no
+  per-machine capacity cap (roadmap specified 24h TTL, 1000 msg cap).
+- **CLI JSON output**: Headless mode outputs plain text only; no structured
+  JSON/stream-json output format.
+- **Opt-in metrics**: Not started.
+- **Session delete**: Flutter shows "coming soon" stub.
+- **GitLab write operations**: Currently read-only (no create/edit/approve MRs).
 
 ---
 
-## Subagent Orchestration (Cross-Phase)
+## Subagent Orchestration (Cross-Phase) [Partial]
 
-BetCode exposes a `SubagentService` gRPC API for spawning and coordinating
-multiple independent Claude Code subprocesses. This enables external
-orchestrators (separate projects) to build sophisticated feature-development
-workflows on top of BetCode.
+BetCode exposes agent listing via CommandService and a plugin system for
+extending daemon capabilities. Full subagent orchestration (spawning and
+coordinating multiple Claude Code subprocesses) is planned but not yet
+implemented.
 
-- **Phase 2**: Basic subagent spawning (SpawnSubagent, WatchSubagent, ListSubagents)
-- **Phase 4**: Full orchestration API (OrchestrationPlan, DAG scheduler, context sharing)
+**Implemented**:
+- ListAgents RPC with AgentKind enum (ClaudeInternal, DaemonOrchestrated,
+  TeamMember) and AgentStatus (Idle, Working, Done, Failed)
+- Plugin infrastructure (PluginManager lifecycle, PluginService gRPC interface
+  with Register/Execute/HealthCheck, socket-based communication)
+
+**Remaining work**:
+- SpawnSubagent / WatchSubagent RPCs for subprocess orchestration
+- Team management (creation, member assignment, distributed sessions)
+- OrchestrationPlan, DAG scheduler, context sharing
+- Agent persistence (DB tables for agent metadata and session bindings)
 
 See [SUBAGENTS.md](./SUBAGENTS.md) for the complete design.
 
@@ -185,8 +239,8 @@ construction. Every Claude Code update is automatically available to BetCode use
 | Metric | Value |
 |--------|-------|
 | Rust crates | 8 (proto, core, crypto, daemon, cli, relay, setup, releases) |
-| Estimated Rust LOC | ~10,000-15,000 |
-| NDJSON + subprocess + bridge | ~1,800 LOC |
+| gRPC services | 13 services, ~70 RPCs |
+| Flutter app | Separate repo ([betcode-app](https://github.com/sakost/betcode-app)) |
 | Agent fidelity risk | Zero (Claude Code handles it) |
 
 ## Risk Register
