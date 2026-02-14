@@ -107,8 +107,10 @@ async fn handle_permission(
     sid: &str,
     perm: betcode_proto::v1::PermissionResponse,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let decision = PermissionDecision::try_from(perm.decision)
-        .unwrap_or(PermissionDecision::Deny);
+    let decision = PermissionDecision::try_from(perm.decision).unwrap_or_else(|_| {
+        warn!(raw_decision = perm.decision, "Unknown PermissionDecision, defaulting to Deny");
+        PermissionDecision::Deny
+    });
 
     let (granted, original_input) = if let Some(handle) = ctx.relay.get_handle(sid).await {
         handle
