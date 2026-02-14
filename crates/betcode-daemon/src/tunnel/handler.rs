@@ -1008,7 +1008,7 @@ impl TunnelRequestHandler {
                 let (granted, original_input) =
                     if let Some(handle) = self.relay.get_handle(&sid).await {
                         handle
-                            .process_permission_response(&perm.request_id, decision)
+                            .process_permission_response(&perm.request_id, decision, "tunnel")
                             .await
                     } else {
                         let fallback_granted = matches!(

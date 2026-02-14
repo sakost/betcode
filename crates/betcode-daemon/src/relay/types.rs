@@ -60,6 +60,7 @@ impl RelayHandle {
         &self,
         request_id: &str,
         decision: betcode_proto::v1::PermissionDecision,
+        source: &str,
     ) -> (bool, serde_json::Value) {
         let granted = matches!(
             decision,
@@ -90,6 +91,7 @@ impl RelayHandle {
                 info!(
                     session_id = %self.session_id,
                     tool_name = %tool_name,
+                    source,
                     "Cached AllowSession grant"
                 );
             }

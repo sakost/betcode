@@ -109,11 +109,10 @@ async fn handle_permission(
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let decision = PermissionDecision::try_from(perm.decision)
         .unwrap_or(PermissionDecision::Deny);
-    info!(session_id = %sid, request_id = %perm.request_id, ?decision, "Permission");
 
     let (granted, original_input) = if let Some(handle) = ctx.relay.get_handle(sid).await {
         handle
-            .process_permission_response(&perm.request_id, decision)
+            .process_permission_response(&perm.request_id, decision, "grpc")
             .await
     } else {
         let fallback_granted = matches!(
@@ -125,6 +124,8 @@ async fn handle_permission(
             serde_json::Value::Object(serde_json::Map::default()),
         )
     };
+
+    info!(session_id = %sid, request_id = %perm.request_id, granted, ?decision, "Permission");
 
     ctx.relay
         .send_permission_response(sid, &perm.request_id, granted, &original_input)
