@@ -15,7 +15,7 @@ use betcode_proto::v1::{
     CompactSessionRequest, CompactSessionResponse, InputLockRequest, InputLockResponse,
     KeyExchangeRequest, KeyExchangeResponse, ListSessionGrantsRequest, ListSessionGrantsResponse,
     ListSessionsRequest, ListSessionsResponse, RenameSessionRequest, RenameSessionResponse,
-    ResumeSessionRequest, SessionGrantEntry, SessionSummary, SetSessionGrantRequest,
+    ResumeSessionRequest, SessionSummary, SetSessionGrantRequest,
     SetSessionGrantResponse,
 };
 
@@ -325,7 +325,6 @@ impl AgentService for AgentServiceImpl {
     }
 
     #[instrument(skip(self, request), fields(rpc = "ListSessionGrants"))]
-    #[allow(clippy::significant_drop_tightening)]
     async fn list_session_grants(
         &self,
         request: Request<ListSessionGrantsRequest>,
@@ -337,21 +336,11 @@ impl AgentService for AgentServiceImpl {
             .await
             .ok_or_else(|| Status::not_found(format!("Session {} not active", req.session_id)))?;
 
-        let grants = handle.session_grants.read().await;
-        let entries: Vec<SessionGrantEntry> = grants
-            .iter()
-            .map(|(tool_name, granted)| SessionGrantEntry {
-                tool_name: tool_name.clone(),
-                granted: *granted,
-            })
-            .collect();
-        drop(grants);
-
+        let entries = handle.list_grants().await;
         Ok(Response::new(ListSessionGrantsResponse { grants: entries }))
     }
 
     #[instrument(skip(self, request), fields(rpc = "ClearSessionGrants"))]
-    #[allow(clippy::significant_drop_tightening)]
     async fn clear_session_grants(
         &self,
         request: Request<ClearSessionGrantsRequest>,
@@ -363,14 +352,10 @@ impl AgentService for AgentServiceImpl {
             .await
             .ok_or_else(|| Status::not_found(format!("Session {} not active", req.session_id)))?;
 
-        let mut grants = handle.session_grants.write().await;
+        handle.clear_grants(&req.tool_name).await;
         if req.tool_name.is_empty() {
-            grants.clear();
-            drop(grants);
             info!(session_id = %req.session_id, "Cleared all session grants");
         } else {
-            grants.remove(&req.tool_name);
-            drop(grants);
             info!(session_id = %req.session_id, tool_name = %req.tool_name, "Cleared session grant");
         }
 
@@ -392,12 +377,7 @@ impl AgentService for AgentServiceImpl {
             .await
             .ok_or_else(|| Status::not_found(format!("Session {} not active", req.session_id)))?;
 
-        handle
-            .session_grants
-            .write()
-            .await
-            .insert(req.tool_name.clone(), req.granted);
-
+        handle.set_grant(req.tool_name.clone(), req.granted).await;
         info!(
             session_id = %req.session_id,
             tool_name = %req.tool_name,

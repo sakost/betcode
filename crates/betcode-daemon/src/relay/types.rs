@@ -5,6 +5,7 @@ use std::path::PathBuf;
 use std::sync::atomic::AtomicU64;
 use std::sync::Arc;
 
+use betcode_proto::v1::SessionGrantEntry;
 use tokio::sync::RwLock;
 use tracing::info;
 
@@ -102,6 +103,40 @@ impl RelayHandle {
         }
 
         (granted, input)
+    }
+
+    /// List all session grants as proto entries.
+    pub async fn list_grants(&self) -> Vec<SessionGrantEntry> {
+        self.session_grants
+            .read()
+            .await
+            .iter()
+            .map(|(tool_name, granted)| SessionGrantEntry {
+                tool_name: tool_name.clone(),
+                granted: *granted,
+            })
+            .collect()
+    }
+
+    /// Clear session grants. If `tool_name` is empty, clears all.
+    /// Returns the tool names that were cleared.
+    pub async fn clear_grants(&self, tool_name: &str) -> Vec<String> {
+        let mut grants = self.session_grants.write().await;
+        if tool_name.is_empty() {
+            let names: Vec<String> = grants.keys().cloned().collect();
+            grants.clear();
+            drop(grants);
+            names
+        } else {
+            grants.remove(tool_name);
+            drop(grants);
+            vec![tool_name.to_string()]
+        }
+    }
+
+    /// Set a session grant for a tool.
+    pub async fn set_grant(&self, tool_name: String, granted: bool) {
+        self.session_grants.write().await.insert(tool_name, granted);
     }
 }
 

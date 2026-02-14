@@ -28,7 +28,7 @@ use betcode_proto::v1::{
     ListSessionGrantsRequest, ListSessionGrantsResponse, ListSessionsRequest,
     ListSessionsResponse, ListWorktreesRequest, RegisterRepoRequest, RemovePluginRequest,
     RemoveWorktreeRequest, RenameSessionRequest, RenameSessionResponse, ResumeSessionRequest,
-    ScanReposRequest, SessionGrantEntry, SessionSummary, SetSessionGrantRequest,
+    ScanReposRequest, SessionSummary, SetSessionGrantRequest,
     SetSessionGrantResponse, StreamPayload, TunnelError, TunnelErrorCode, TunnelFrame,
     UnregisterRepoRequest, UpdateRepoRequest, UpdateSettingsRequest,
 };
@@ -699,7 +699,6 @@ impl TunnelRequestHandler {
         }
     }
 
-    #[allow(clippy::significant_drop_tightening)]
     async fn handle_list_session_grants(
         &self,
         request_id: &str,
@@ -723,15 +722,7 @@ impl TunnelRequestHandler {
                 &format!("Session {} not active", req.session_id),
             )];
         };
-        let grants = handle.session_grants.read().await;
-        let entries: Vec<SessionGrantEntry> = grants
-            .iter()
-            .map(|(tool_name, granted)| SessionGrantEntry {
-                tool_name: tool_name.clone(),
-                granted: *granted,
-            })
-            .collect();
-        drop(grants);
+        let entries = handle.list_grants().await;
         vec![
             self.unary_response_frame(
                 request_id,
@@ -742,7 +733,6 @@ impl TunnelRequestHandler {
         ]
     }
 
-    #[allow(clippy::significant_drop_tightening)]
     async fn handle_clear_session_grants(
         &self,
         request_id: &str,
@@ -766,14 +756,10 @@ impl TunnelRequestHandler {
                 &format!("Session {} not active", req.session_id),
             )];
         };
-        let mut grants = handle.session_grants.write().await;
+        handle.clear_grants(&req.tool_name).await;
         if req.tool_name.is_empty() {
-            grants.clear();
-            drop(grants);
             info!(session_id = %req.session_id, "Cleared all session grants via tunnel");
         } else {
-            grants.remove(&req.tool_name);
-            drop(grants);
             info!(session_id = %req.session_id, tool_name = %req.tool_name, "Cleared session grant via tunnel");
         }
         vec![
@@ -816,14 +802,8 @@ impl TunnelRequestHandler {
                 &format!("Session {} not active", req.session_id),
             )];
         };
-        let tool_name = req.tool_name.clone();
-        let granted = req.granted;
-        handle
-            .session_grants
-            .write()
-            .await
-            .insert(req.tool_name, req.granted);
-        info!(session_id = %req.session_id, tool_name = %tool_name, granted = granted, "Set session grant via tunnel");
+        handle.set_grant(req.tool_name.clone(), req.granted).await;
+        info!(session_id = %req.session_id, tool_name = %req.tool_name, granted = req.granted, "Set session grant via tunnel");
         vec![
             self.unary_response_frame(
                 request_id,
@@ -972,11 +952,7 @@ impl TunnelRequestHandler {
         use betcode_proto::v1::agent_request::Request;
         match req.request {
             Some(Request::Message(msg)) => {
-                let agent_id = if msg.agent_id.is_empty() {
-                    None
-                } else {
-                    Some(msg.agent_id.as_str())
-                };
+                let agent_id = Some(msg.agent_id.as_str()).filter(|s| !s.is_empty());
                 if let Err(e) = self
                     .relay
                     .send_user_message(&sid, &msg.content, agent_id)
