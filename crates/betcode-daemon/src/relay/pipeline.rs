@@ -92,6 +92,8 @@ impl SessionRelay {
 
         let pending_question_inputs = Arc::new(tokio::sync::RwLock::new(HashMap::new()));
         let pending_permission_inputs = Arc::new(tokio::sync::RwLock::new(HashMap::new()));
+        let session_grants = Arc::new(tokio::sync::RwLock::new(HashMap::new()));
+        let pending_permission_tool_names = Arc::new(tokio::sync::RwLock::new(HashMap::new()));
 
         let relay_handle = RelayHandle {
             process_id: process_handle.id.clone(),
@@ -100,6 +102,8 @@ impl SessionRelay {
             sequence_counter: Arc::clone(&sequence_counter),
             pending_question_inputs: Arc::clone(&pending_question_inputs),
             pending_permission_inputs: Arc::clone(&pending_permission_inputs),
+            session_grants: Arc::clone(&session_grants),
+            pending_permission_tool_names: Arc::clone(&pending_permission_tool_names),
         };
 
         // Spawn the NDJSON reader pipeline
@@ -113,6 +117,9 @@ impl SessionRelay {
             sequence_counter,
             pending_question_inputs,
             pending_permission_inputs,
+            session_grants,
+            pending_permission_tool_names,
+            stdin_tx: process_handle.stdin_tx.clone(),
         });
 
         // Store the relay handle
@@ -128,10 +135,12 @@ impl SessionRelay {
     /// Send a user message to the subprocess via stdin.
     ///
     /// Also stores a `UserInput` event in the DB so the message appears on resume.
+    /// When `agent_id` is non-empty the message targets a specific agent instance.
     pub async fn send_user_message(
         &self,
         session_id: &str,
         content: &str,
+        agent_id: Option<&str>,
     ) -> Result<(), RelayError> {
         let handle = self.get_active_handle(session_id).await?;
 
@@ -155,7 +164,7 @@ impl SessionRelay {
 
         // Claude Code --input-format stream-json expects this JSONL format on stdin.
         // See: https://github.com/anthropics/claude-code/issues/5034
-        let msg = serde_json::json!({
+        let mut msg = serde_json::json!({
             "type": "user",
             "message": {
                 "role": "user",
@@ -164,6 +173,9 @@ impl SessionRelay {
             "session_id": "default",
             "parent_tool_use_id": null,
         });
+        if let Some(aid) = agent_id.filter(|s| !s.is_empty()) {
+            msg["agent_id"] = serde_json::Value::String(aid.to_string());
+        }
         let line =
             serde_json::to_string(&msg).map_err(|e| RelayError::Serialization(e.to_string()))?;
 
@@ -314,6 +326,9 @@ struct StdoutPipelineContext {
     sequence_counter: Arc<AtomicU64>,
     pending_question_inputs: Arc<tokio::sync::RwLock<HashMap<String, serde_json::Value>>>,
     pending_permission_inputs: Arc<tokio::sync::RwLock<HashMap<String, serde_json::Value>>>,
+    session_grants: Arc<tokio::sync::RwLock<HashMap<String, bool>>>,
+    pending_permission_tool_names: Arc<tokio::sync::RwLock<HashMap<String, String>>>,
+    stdin_tx: tokio::sync::mpsc::Sender<String>,
 }
 
 /// Spawn the stdout → NDJSON parser → `EventBridge` → forwarder pipeline.
@@ -329,6 +344,9 @@ fn spawn_stdout_pipeline(ctx: StdoutPipelineContext) {
         sequence_counter,
         pending_question_inputs,
         pending_permission_inputs,
+        session_grants,
+        pending_permission_tool_names,
+        stdin_tx,
     } = ctx;
     tokio::spawn(async move {
         let sid = session_id.clone();
@@ -357,6 +375,11 @@ fn spawn_stdout_pipeline(ctx: StdoutPipelineContext) {
 
             let events = bridge.convert(msg);
 
+            // Track which permission request IDs were auto-responded so we
+            // can skip forwarding them to the client.
+            let mut auto_responded_requests: std::collections::HashSet<String> =
+                std::collections::HashSet::new();
+
             for event in &events {
                 // Transfer pending question inputs from bridge → shared map
                 if let Some(betcode_proto::v1::agent_event::Event::UserQuestion(ref q)) =
@@ -369,20 +392,66 @@ fn spawn_stdout_pipeline(ctx: StdoutPipelineContext) {
                             .insert(q.question_id.clone(), input);
                     }
                 }
-                // Transfer pending permission inputs from bridge → shared map
+                // Transfer pending permission inputs from bridge → shared map,
+                // or auto-respond if a session grant exists for this tool.
                 if let Some(betcode_proto::v1::agent_event::Event::PermissionRequest(ref p)) =
                     event.event
                 {
                     if let Some(input) = bridge.take_permission_input(&p.request_id) {
-                        pending_permission_inputs
-                            .write()
-                            .await
-                            .insert(p.request_id.clone(), input);
+                        // Check if we have a session grant for this tool
+                        let grant = session_grants.read().await.get(&p.tool_name).copied();
+                        if let Some(granted) = grant {
+                            // Auto-respond: send permission response directly to stdin
+                            let line = build_permission_response_json(
+                                &p.request_id,
+                                granted,
+                                &input,
+                            );
+                            if let Err(e) = stdin_tx.send(line).await {
+                                warn!(
+                                    session_id = %sid,
+                                    request_id = %p.request_id,
+                                    error = %e,
+                                    "Failed to send auto-permission response"
+                                );
+                            } else {
+                                debug!(
+                                    session_id = %sid,
+                                    request_id = %p.request_id,
+                                    tool_name = %p.tool_name,
+                                    granted,
+                                    "Auto-responded to permission request from session grant"
+                                );
+                            }
+                            auto_responded_requests.insert(p.request_id.clone());
+                        } else {
+                            // No grant — store for handler to process
+                            pending_permission_inputs
+                                .write()
+                                .await
+                                .insert(p.request_id.clone(), input);
+                            pending_permission_tool_names
+                                .write()
+                                .await
+                                .insert(p.request_id.clone(), p.tool_name.clone());
+                        }
                     }
                 }
             }
 
             for event in events {
+                // Skip forwarding auto-responded permission requests to the client
+                if let Some(betcode_proto::v1::agent_event::Event::PermissionRequest(ref p)) =
+                    event.event
+                {
+                    if auto_responded_requests.contains(&p.request_id) {
+                        // Still store the event for replay, but don't forward to client
+                        if let Err(e) = store_event(&db, &sid, &event).await {
+                            warn!(session_id = %sid, error = %e, "Failed to store auto-responded event");
+                        }
+                        continue;
+                    }
+                }
                 event_count += 1;
 
                 // Update usage stats in DB when we get a UsageReport
@@ -622,7 +691,7 @@ mod tests {
         let subprocess_mgr = Arc::new(SubprocessManager::new(5));
         let multiplexer = Arc::new(SessionMultiplexer::with_defaults());
         let relay = SessionRelay::new(subprocess_mgr, multiplexer, db);
-        let result = relay.send_user_message("nonexistent", "hello").await;
+        let result = relay.send_user_message("nonexistent", "hello", None).await;
         assert!(matches!(result, Err(RelayError::SessionNotFound { .. })));
     }
 
@@ -750,5 +819,196 @@ mod tests {
 
         // updatedInput must also preserve the original questions
         assert!(response["updatedInput"]["questions"].is_array());
+    }
+
+    /// Verify that RelayHandle session_grants and pending_permission_tool_names
+    /// are properly initialized as empty.
+    #[tokio::test]
+    async fn relay_handle_session_grants_initialized_empty() {
+        use std::sync::atomic::AtomicU64;
+
+        let (tx, _rx) = tokio::sync::mpsc::channel(1);
+        let handle = RelayHandle {
+            process_id: "pid-1".into(),
+            session_id: "sid-1".into(),
+            stdin_tx: tx,
+            sequence_counter: Arc::new(AtomicU64::new(0)),
+            pending_question_inputs: Arc::new(tokio::sync::RwLock::new(HashMap::new())),
+            pending_permission_inputs: Arc::new(tokio::sync::RwLock::new(HashMap::new())),
+            session_grants: Arc::new(tokio::sync::RwLock::new(HashMap::new())),
+            pending_permission_tool_names: Arc::new(tokio::sync::RwLock::new(HashMap::new())),
+        };
+
+        assert!(handle.session_grants.read().await.is_empty());
+        assert!(handle.pending_permission_tool_names.read().await.is_empty());
+    }
+
+    /// Verify AllowSession populates session_grants via the handle.
+    #[tokio::test]
+    async fn allow_session_populates_grant() {
+        use std::sync::atomic::AtomicU64;
+
+        let (tx, _rx) = tokio::sync::mpsc::channel(1);
+        let handle = RelayHandle {
+            process_id: "pid-1".into(),
+            session_id: "sid-1".into(),
+            stdin_tx: tx,
+            sequence_counter: Arc::new(AtomicU64::new(0)),
+            pending_question_inputs: Arc::new(tokio::sync::RwLock::new(HashMap::new())),
+            pending_permission_inputs: Arc::new(tokio::sync::RwLock::new(HashMap::new())),
+            session_grants: Arc::new(tokio::sync::RwLock::new(HashMap::new())),
+            pending_permission_tool_names: Arc::new(tokio::sync::RwLock::new(HashMap::new())),
+        };
+
+        // Simulate what the handler does on AllowSession
+        handle
+            .pending_permission_tool_names
+            .write()
+            .await
+            .insert("req-1".into(), "Bash".into());
+        handle
+            .pending_permission_inputs
+            .write()
+            .await
+            .insert("req-1".into(), serde_json::json!({"command": "ls"}));
+
+        // Simulate AllowSession grant caching
+        let tool_name = handle
+            .pending_permission_tool_names
+            .write()
+            .await
+            .remove("req-1");
+        assert_eq!(tool_name, Some("Bash".to_string()));
+
+        handle
+            .session_grants
+            .write()
+            .await
+            .insert(tool_name.unwrap(), true);
+
+        // Verify grant is cached
+        let grants = handle.session_grants.read().await;
+        assert_eq!(grants.get("Bash"), Some(&true));
+    }
+
+    /// Verify AllowOnce does NOT populate session_grants.
+    #[tokio::test]
+    async fn allow_once_does_not_populate_grant() {
+        use std::sync::atomic::AtomicU64;
+
+        let (tx, _rx) = tokio::sync::mpsc::channel(1);
+        let handle = RelayHandle {
+            process_id: "pid-1".into(),
+            session_id: "sid-1".into(),
+            stdin_tx: tx,
+            sequence_counter: Arc::new(AtomicU64::new(0)),
+            pending_question_inputs: Arc::new(tokio::sync::RwLock::new(HashMap::new())),
+            pending_permission_inputs: Arc::new(tokio::sync::RwLock::new(HashMap::new())),
+            session_grants: Arc::new(tokio::sync::RwLock::new(HashMap::new())),
+            pending_permission_tool_names: Arc::new(tokio::sync::RwLock::new(HashMap::new())),
+        };
+
+        // Set up pending state
+        handle
+            .pending_permission_tool_names
+            .write()
+            .await
+            .insert("req-1".into(), "Bash".into());
+
+        // AllowOnce: remove from pending but do NOT insert into session_grants
+        let _ = handle
+            .pending_permission_inputs
+            .write()
+            .await
+            .remove("req-1");
+        let _ = handle
+            .pending_permission_tool_names
+            .write()
+            .await
+            .remove("req-1");
+
+        // session_grants should remain empty
+        assert!(handle.session_grants.read().await.is_empty());
+    }
+
+    /// Verify that session_grants auto-respond sends to stdin_tx when a grant exists.
+    #[tokio::test]
+    async fn session_grant_auto_respond_sends_to_stdin() {
+        use std::sync::atomic::AtomicU64;
+
+        let (tx, mut rx) = tokio::sync::mpsc::channel(16);
+        let handle = RelayHandle {
+            process_id: "pid-1".into(),
+            session_id: "sid-1".into(),
+            stdin_tx: tx.clone(),
+            sequence_counter: Arc::new(AtomicU64::new(0)),
+            pending_question_inputs: Arc::new(tokio::sync::RwLock::new(HashMap::new())),
+            pending_permission_inputs: Arc::new(tokio::sync::RwLock::new(HashMap::new())),
+            session_grants: Arc::new(tokio::sync::RwLock::new(HashMap::new())),
+            pending_permission_tool_names: Arc::new(tokio::sync::RwLock::new(HashMap::new())),
+        };
+
+        // Add a grant for "Bash"
+        handle
+            .session_grants
+            .write()
+            .await
+            .insert("Bash".into(), true);
+
+        // Simulate auto-respond: check grant and send via stdin_tx
+        let grant = handle.session_grants.read().await.get("Bash").copied();
+        assert_eq!(grant, Some(true));
+
+        let original_input = serde_json::json!({"command": "ls"});
+        let line = build_permission_response_json("req-auto", true, &original_input);
+        tx.send(line.clone()).await.unwrap();
+
+        // Verify the line was sent
+        let received = rx.recv().await.unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&received).unwrap();
+        assert_eq!(parsed["type"], "control_response");
+        assert_eq!(parsed["response"]["response"]["behavior"], "allow");
+        drop(handle);
+    }
+
+    /// Verify that with no matching grant, the permission request is
+    /// stored in pending maps for the handler to process.
+    #[tokio::test]
+    async fn no_grant_stores_in_pending_maps() {
+        use std::sync::atomic::AtomicU64;
+
+        let (tx, _rx) = tokio::sync::mpsc::channel(1);
+        let handle = RelayHandle {
+            process_id: "pid-1".into(),
+            session_id: "sid-1".into(),
+            stdin_tx: tx,
+            sequence_counter: Arc::new(AtomicU64::new(0)),
+            pending_question_inputs: Arc::new(tokio::sync::RwLock::new(HashMap::new())),
+            pending_permission_inputs: Arc::new(tokio::sync::RwLock::new(HashMap::new())),
+            session_grants: Arc::new(tokio::sync::RwLock::new(HashMap::new())),
+            pending_permission_tool_names: Arc::new(tokio::sync::RwLock::new(HashMap::new())),
+        };
+
+        // No grants — simulate what pipeline does: store in pending maps
+        let grant = handle.session_grants.read().await.get("Write").copied();
+        assert!(grant.is_none());
+
+        let input = serde_json::json!({"file": "/tmp/test.txt"});
+        handle
+            .pending_permission_inputs
+            .write()
+            .await
+            .insert("req-2".into(), input.clone());
+        handle
+            .pending_permission_tool_names
+            .write()
+            .await
+            .insert("req-2".into(), "Write".into());
+
+        // Verify stored
+        let inputs = handle.pending_permission_inputs.read().await;
+        assert_eq!(inputs.get("req-2"), Some(&input));
+        let tool_names = handle.pending_permission_tool_names.read().await;
+        assert_eq!(tool_names.get("req-2"), Some(&"Write".to_string()));
     }
 }

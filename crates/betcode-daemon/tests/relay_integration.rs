@@ -145,7 +145,7 @@ async fn message_fk_requires_session() {
 #[tokio::test]
 async fn relay_send_requires_active_session() {
     let (_db, relay, _mux) = test_components().await;
-    assert!(relay.send_user_message("missing", "hello").await.is_err());
+    assert!(relay.send_user_message("missing", "hello", None).await.is_err());
     assert!(relay
         .send_permission_response("missing", "r1", true, &serde_json::json!({}))
         .await

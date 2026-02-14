@@ -391,6 +391,7 @@ async fn handle_input_key(
                                             betcode_proto::v1::UserMessage {
                                                 content: trimmed.to_string(),
                                                 attachments: Vec::new(),
+                                                agent_id: String::new(),
                                             },
                                         ),
                                     ),
@@ -407,6 +408,7 @@ async fn handle_input_key(
                                 betcode_proto::v1::UserMessage {
                                     content: text,
                                     attachments: Vec::new(),
+                                    agent_id: String::new(),
                                 },
                             )),
                         })

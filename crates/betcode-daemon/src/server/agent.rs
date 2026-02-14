@@ -11,15 +11,18 @@ use tracing::{error, info, instrument, warn};
 
 use betcode_proto::v1::{
     agent_service_server::AgentService, AgentEvent, AgentRequest, CancelTurnRequest,
-    CancelTurnResponse, CompactSessionRequest, CompactSessionResponse, InputLockRequest,
-    InputLockResponse, KeyExchangeRequest, KeyExchangeResponse, ListSessionsRequest,
-    ListSessionsResponse, ResumeSessionRequest, SessionSummary,
+    CancelTurnResponse, ClearSessionGrantsRequest, ClearSessionGrantsResponse,
+    CompactSessionRequest, CompactSessionResponse, InputLockRequest, InputLockResponse,
+    KeyExchangeRequest, KeyExchangeResponse, ListSessionGrantsRequest, ListSessionGrantsResponse,
+    ListSessionsRequest, ListSessionsResponse, RenameSessionRequest, RenameSessionResponse,
+    ResumeSessionRequest, SessionGrantEntry, SessionSummary, SetSessionGrantRequest,
+    SetSessionGrantResponse,
 };
 
 use super::handler::{handle_agent_request, HandlerContext};
 use crate::relay::SessionRelay;
 use crate::session::SessionMultiplexer;
-use crate::storage::Database;
+use crate::storage::{Database, DatabaseError};
 
 /// `AgentService` implementation backed by `SessionRelay`.
 pub struct AgentServiceImpl {
@@ -143,6 +146,7 @@ impl AgentService for AgentServiceImpl {
                     nanos: 0,
                 }),
                 last_message_preview: s.last_message_preview.unwrap_or_default(),
+                name: s.name,
             })
             .collect();
 
@@ -342,6 +346,109 @@ impl AgentService for AgentServiceImpl {
         Err(Status::unimplemented(
             "ExchangeKeys is only supported over tunnel connections",
         ))
+    }
+
+    #[instrument(skip(self, request), fields(rpc = "ListSessionGrants"))]
+    #[allow(clippy::significant_drop_tightening)]
+    async fn list_session_grants(
+        &self,
+        request: Request<ListSessionGrantsRequest>,
+    ) -> Result<Response<ListSessionGrantsResponse>, Status> {
+        let req = request.into_inner();
+        let handle = self
+            .relay
+            .get_handle(&req.session_id)
+            .await
+            .ok_or_else(|| Status::not_found(format!("Session {} not active", req.session_id)))?;
+
+        let grants = handle.session_grants.read().await;
+        let entries: Vec<SessionGrantEntry> = grants
+            .iter()
+            .map(|(tool_name, granted)| SessionGrantEntry {
+                tool_name: tool_name.clone(),
+                granted: *granted,
+            })
+            .collect();
+        drop(grants);
+
+        Ok(Response::new(ListSessionGrantsResponse { grants: entries }))
+    }
+
+    #[instrument(skip(self, request), fields(rpc = "ClearSessionGrants"))]
+    #[allow(clippy::significant_drop_tightening)]
+    async fn clear_session_grants(
+        &self,
+        request: Request<ClearSessionGrantsRequest>,
+    ) -> Result<Response<ClearSessionGrantsResponse>, Status> {
+        let req = request.into_inner();
+        let handle = self
+            .relay
+            .get_handle(&req.session_id)
+            .await
+            .ok_or_else(|| Status::not_found(format!("Session {} not active", req.session_id)))?;
+
+        let mut grants = handle.session_grants.write().await;
+        if req.tool_name.is_empty() {
+            grants.clear();
+            drop(grants);
+            info!(session_id = %req.session_id, "Cleared all session grants");
+        } else {
+            grants.remove(&req.tool_name);
+            drop(grants);
+            info!(session_id = %req.session_id, tool_name = %req.tool_name, "Cleared session grant");
+        }
+
+        Ok(Response::new(ClearSessionGrantsResponse {}))
+    }
+
+    #[instrument(skip(self, request), fields(rpc = "SetSessionGrant"))]
+    async fn set_session_grant(
+        &self,
+        request: Request<SetSessionGrantRequest>,
+    ) -> Result<Response<SetSessionGrantResponse>, Status> {
+        let req = request.into_inner();
+        if req.tool_name.is_empty() {
+            return Err(Status::invalid_argument("tool_name must not be empty"));
+        }
+        let handle = self
+            .relay
+            .get_handle(&req.session_id)
+            .await
+            .ok_or_else(|| Status::not_found(format!("Session {} not active", req.session_id)))?;
+
+        handle
+            .session_grants
+            .write()
+            .await
+            .insert(req.tool_name.clone(), req.granted);
+
+        info!(
+            session_id = %req.session_id,
+            tool_name = %req.tool_name,
+            granted = req.granted,
+            "Set session grant"
+        );
+
+        Ok(Response::new(SetSessionGrantResponse {}))
+    }
+
+    #[instrument(skip(self, request), fields(rpc = "RenameSession"))]
+    async fn rename_session(
+        &self,
+        request: Request<RenameSessionRequest>,
+    ) -> Result<Response<RenameSessionResponse>, Status> {
+        let req = request.into_inner();
+        self.db
+            .update_session_name(&req.session_id, &req.name)
+            .await
+            .map_err(|e| match e {
+                DatabaseError::NotFound(_) => Status::not_found(e.to_string()),
+                _ => Status::internal(e.to_string()),
+            })?;
+
+        info!(session_id = %req.session_id, name = %req.name, "Session renamed");
+
+        Ok(Response::new(RenameSessionResponse {}))
     }
 }
 

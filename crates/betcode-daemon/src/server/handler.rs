@@ -35,9 +35,14 @@ pub async fn handle_agent_request(
         }
         Some(Request::Message(msg)) => {
             if let Some(ref sid) = session_id {
+                let agent_id = if msg.agent_id.is_empty() {
+                    None
+                } else {
+                    Some(msg.agent_id.as_str())
+                };
                 info!(session_id = %sid, content_len = msg.content.len(), "User message");
                 ctx.relay
-                    .send_user_message(sid, &msg.content)
+                    .send_user_message(sid, &msg.content, agent_id)
                     .await
                     .map_err(|e| e.to_string())?;
             } else {
@@ -46,26 +51,7 @@ pub async fn handle_agent_request(
         }
         Some(Request::Permission(perm)) => {
             if let Some(ref sid) = session_id {
-                let granted = perm.decision == PermissionDecision::AllowOnce as i32
-                    || perm.decision == PermissionDecision::AllowSession as i32;
-                info!(session_id = %sid, request_id = %perm.request_id, granted, "Permission");
-
-                // Look up original tool input from pending map.
-                let original_input = if let Some(handle) = ctx.relay.get_handle(sid).await {
-                    handle
-                        .pending_permission_inputs
-                        .write()
-                        .await
-                        .remove(&perm.request_id)
-                        .unwrap_or_else(|| serde_json::Value::Object(serde_json::Map::default()))
-                } else {
-                    serde_json::Value::Object(serde_json::Map::default())
-                };
-
-                ctx.relay
-                    .send_permission_response(sid, &perm.request_id, granted, &original_input)
-                    .await
-                    .map_err(|e| e.to_string())?;
+                handle_permission(ctx, sid, perm).await?;
             }
         }
         Some(Request::QuestionResponse(qr)) => {
@@ -111,6 +97,63 @@ pub async fn handle_agent_request(
             warn!("Received empty request");
         }
     }
+
+    Ok(())
+}
+
+/// Handle a `PermissionResponse` request.
+async fn handle_permission(
+    ctx: &HandlerContext<'_>,
+    sid: &str,
+    perm: betcode_proto::v1::PermissionResponse,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let decision = PermissionDecision::try_from(perm.decision)
+        .unwrap_or(PermissionDecision::Deny);
+    let granted = matches!(
+        decision,
+        PermissionDecision::AllowOnce | PermissionDecision::AllowSession
+    );
+    info!(session_id = %sid, request_id = %perm.request_id, granted, ?decision, "Permission");
+
+    // Look up original tool input and tool name from pending maps.
+    let original_input = if let Some(handle) = ctx.relay.get_handle(sid).await {
+        let input = handle
+            .pending_permission_inputs
+            .write()
+            .await
+            .remove(&perm.request_id)
+            .unwrap_or_else(|| serde_json::Value::Object(serde_json::Map::default()));
+        let tool = handle
+            .pending_permission_tool_names
+            .write()
+            .await
+            .remove(&perm.request_id);
+
+        // On AllowSession, cache the grant for this tool
+        if decision == PermissionDecision::AllowSession {
+            if let Some(ref tool_name) = tool {
+                handle
+                    .session_grants
+                    .write()
+                    .await
+                    .insert(tool_name.clone(), true);
+                info!(
+                    session_id = %sid,
+                    tool_name = %tool_name,
+                    "Cached AllowSession grant"
+                );
+            }
+        }
+
+        input
+    } else {
+        serde_json::Value::Object(serde_json::Map::default())
+    };
+
+    ctx.relay
+        .send_permission_response(sid, &perm.request_id, granted, &original_input)
+        .await
+        .map_err(|e| e.to_string())?;
 
     Ok(())
 }

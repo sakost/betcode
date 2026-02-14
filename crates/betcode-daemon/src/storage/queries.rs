@@ -105,6 +105,29 @@ impl Database {
         Ok(())
     }
 
+    /// Update the user-visible name of a session.
+    pub async fn update_session_name(
+        &self,
+        id: &str,
+        name: &str,
+    ) -> Result<(), DatabaseError> {
+        let now = unix_timestamp();
+
+        let result =
+            sqlx::query("UPDATE sessions SET name = ?, updated_at = ? WHERE id = ?")
+                .bind(name)
+                .bind(now)
+                .bind(id)
+                .execute(self.pool())
+                .await?;
+
+        if result.rows_affected() == 0 {
+            return Err(DatabaseError::NotFound(format!("Session {id} not found")));
+        }
+
+        Ok(())
+    }
+
     /// List sessions, optionally filtered.
     pub async fn list_sessions(
         &self,
@@ -772,5 +795,51 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(db.max_message_sequence("s1").await.unwrap(), 0);
+    }
+
+    #[tokio::test]
+    async fn update_session_name_persists() {
+        let db = Database::open_in_memory().await.unwrap();
+        db.create_session("s1", "claude-sonnet-4", "/tmp")
+            .await
+            .unwrap();
+
+        // Default name should be empty
+        let s = db.get_session("s1").await.unwrap();
+        assert_eq!(s.name, "");
+
+        // Set a name
+        db.update_session_name("s1", "my-feature-branch")
+            .await
+            .unwrap();
+        let s = db.get_session("s1").await.unwrap();
+        assert_eq!(s.name, "my-feature-branch");
+
+        // Update name
+        db.update_session_name("s1", "renamed-session")
+            .await
+            .unwrap();
+        let s = db.get_session("s1").await.unwrap();
+        assert_eq!(s.name, "renamed-session");
+    }
+
+    #[tokio::test]
+    async fn list_sessions_includes_name() {
+        let db = Database::open_in_memory().await.unwrap();
+        db.create_session("s1", "claude-sonnet-4", "/tmp")
+            .await
+            .unwrap();
+        db.update_session_name("s1", "my-session").await.unwrap();
+
+        let sessions = db.list_sessions(None, 50, 0).await.unwrap();
+        assert_eq!(sessions.len(), 1);
+        assert_eq!(sessions[0].name, "my-session");
+    }
+
+    #[tokio::test]
+    async fn update_session_name_nonexistent_returns_not_found() {
+        let db = Database::open_in_memory().await.unwrap();
+        let result = db.update_session_name("nonexistent", "name").await;
+        assert!(matches!(result, Err(DatabaseError::NotFound(_))));
     }
 }

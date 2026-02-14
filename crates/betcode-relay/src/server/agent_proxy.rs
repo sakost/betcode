@@ -17,15 +17,19 @@ use tracing::{info, instrument, warn};
 
 use betcode_proto::v1::agent_service_server::AgentService;
 use betcode_proto::v1::{
-    AgentEvent, AgentRequest, CancelTurnRequest, CancelTurnResponse, CompactSessionRequest,
-    CompactSessionResponse, EncryptedPayload, FrameType, InputLockRequest, InputLockResponse,
-    KeyExchangeRequest, KeyExchangeResponse, ListSessionsRequest, ListSessionsResponse,
-    ResumeSessionRequest, StreamPayload, TunnelFrame,
+    AgentEvent, AgentRequest, CancelTurnRequest, CancelTurnResponse, ClearSessionGrantsRequest,
+    ClearSessionGrantsResponse, CompactSessionRequest, CompactSessionResponse, EncryptedPayload,
+    FrameType, InputLockRequest, InputLockResponse, KeyExchangeRequest, KeyExchangeResponse,
+    ListSessionGrantsRequest, ListSessionGrantsResponse, ListSessionsRequest,
+    ListSessionsResponse, RenameSessionRequest, RenameSessionResponse, ResumeSessionRequest,
+    SetSessionGrantRequest, SetSessionGrantResponse, StreamPayload, TunnelFrame,
 };
 
 use betcode_proto::methods::{
-    METHOD_CANCEL_TURN, METHOD_COMPACT_SESSION, METHOD_CONVERSE, METHOD_EXCHANGE_KEYS,
-    METHOD_LIST_SESSIONS, METHOD_REQUEST_INPUT_LOCK, METHOD_RESUME_SESSION,
+    METHOD_CANCEL_TURN, METHOD_CLEAR_SESSION_GRANTS, METHOD_COMPACT_SESSION, METHOD_CONVERSE,
+    METHOD_EXCHANGE_KEYS, METHOD_LIST_SESSIONS, METHOD_LIST_SESSION_GRANTS,
+    METHOD_RENAME_SESSION, METHOD_REQUEST_INPUT_LOCK, METHOD_RESUME_SESSION,
+    METHOD_SET_SESSION_GRANT,
 };
 
 use crate::router::{RequestRouter, RouterError};
@@ -413,6 +417,74 @@ impl AgentService for AgentProxyService {
             &self.router,
             &machine_id,
             METHOD_EXCHANGE_KEYS,
+            &request.into_inner(),
+        )
+        .await?;
+        Ok(Response::new(resp))
+    }
+
+    #[instrument(skip(self, request), fields(rpc = "ListSessionGrants"))]
+    async fn list_session_grants(
+        &self,
+        request: Request<ListSessionGrantsRequest>,
+    ) -> Result<Response<ListSessionGrantsResponse>, Status> {
+        let _claims = extract_claims(&request)?;
+        let machine_id = extract_machine_id(&request)?;
+        let resp = super::grpc_util::forward_unary(
+            &self.router,
+            &machine_id,
+            METHOD_LIST_SESSION_GRANTS,
+            &request.into_inner(),
+        )
+        .await?;
+        Ok(Response::new(resp))
+    }
+
+    #[instrument(skip(self, request), fields(rpc = "ClearSessionGrants"))]
+    async fn clear_session_grants(
+        &self,
+        request: Request<ClearSessionGrantsRequest>,
+    ) -> Result<Response<ClearSessionGrantsResponse>, Status> {
+        let _claims = extract_claims(&request)?;
+        let machine_id = extract_machine_id(&request)?;
+        let resp = super::grpc_util::forward_unary(
+            &self.router,
+            &machine_id,
+            METHOD_CLEAR_SESSION_GRANTS,
+            &request.into_inner(),
+        )
+        .await?;
+        Ok(Response::new(resp))
+    }
+
+    #[instrument(skip(self, request), fields(rpc = "SetSessionGrant"))]
+    async fn set_session_grant(
+        &self,
+        request: Request<SetSessionGrantRequest>,
+    ) -> Result<Response<SetSessionGrantResponse>, Status> {
+        let _claims = extract_claims(&request)?;
+        let machine_id = extract_machine_id(&request)?;
+        let resp = super::grpc_util::forward_unary(
+            &self.router,
+            &machine_id,
+            METHOD_SET_SESSION_GRANT,
+            &request.into_inner(),
+        )
+        .await?;
+        Ok(Response::new(resp))
+    }
+
+    #[instrument(skip(self, request), fields(rpc = "RenameSession"))]
+    async fn rename_session(
+        &self,
+        request: Request<RenameSessionRequest>,
+    ) -> Result<Response<RenameSessionResponse>, Status> {
+        let _claims = extract_claims(&request)?;
+        let machine_id = extract_machine_id(&request)?;
+        let resp = super::grpc_util::forward_unary(
+            &self.router,
+            &machine_id,
+            METHOD_RENAME_SESSION,
             &request.into_inner(),
         )
         .await?;

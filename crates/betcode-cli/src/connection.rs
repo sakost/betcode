@@ -1532,6 +1532,7 @@ mod tests {
                 betcode_proto::v1::UserMessage {
                     content: "hello".into(),
                     attachments: vec![],
+                    agent_id: String::new(),
                 },
             )),
         };

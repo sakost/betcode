@@ -16,7 +16,8 @@ use betcode_proto::v1::git_lab_service_server::GitLabService as GitLabServiceTra
 use betcode_proto::v1::git_repo_service_server::GitRepoService as GitRepoServiceTrait;
 use betcode_proto::v1::worktree_service_server::WorktreeService as WorktreeServiceTrait;
 use betcode_proto::v1::{
-    AddPluginRequest, AgentRequest, CancelTurnRequest, CancelTurnResponse, CompactSessionRequest,
+    AddPluginRequest, AgentRequest, CancelTurnRequest, CancelTurnResponse,
+    ClearSessionGrantsRequest, ClearSessionGrantsResponse, CompactSessionRequest,
     CompactSessionResponse, CreateWorktreeRequest, DisablePluginRequest, EnablePluginRequest,
     EncryptedPayload, ExecuteServiceCommandRequest, FrameType, GetCommandRegistryRequest,
     GetIssueRequest, GetMergeRequestRequest, GetPermissionsRequest, GetPipelineRequest,
@@ -24,9 +25,11 @@ use betcode_proto::v1::{
     InputLockRequest, InputLockResponse, KeyExchangeRequest, KeyExchangeResponse,
     ListAgentsRequest, ListIssuesRequest, ListMcpServersRequest, ListMergeRequestsRequest,
     ListPathRequest, ListPipelinesRequest, ListPluginsRequest, ListReposRequest,
-    ListSessionsRequest, ListSessionsResponse, ListWorktreesRequest, RegisterRepoRequest,
-    RemovePluginRequest, RemoveWorktreeRequest, ResumeSessionRequest, ScanReposRequest,
-    SessionSummary, StreamPayload, TunnelError, TunnelErrorCode, TunnelFrame,
+    ListSessionGrantsRequest, ListSessionGrantsResponse, ListSessionsRequest,
+    ListSessionsResponse, ListWorktreesRequest, RegisterRepoRequest, RemovePluginRequest,
+    RemoveWorktreeRequest, RenameSessionRequest, RenameSessionResponse, ResumeSessionRequest,
+    ScanReposRequest, SessionGrantEntry, SessionSummary, SetSessionGrantRequest,
+    SetSessionGrantResponse, StreamPayload, TunnelError, TunnelErrorCode, TunnelFrame,
     UnregisterRepoRequest, UpdateRepoRequest, UpdateSettingsRequest,
 };
 
@@ -43,16 +46,17 @@ use crate::storage::Database;
 // Re-export method constants from betcode-proto so that tests (which use `use super::*`)
 // and any other in-crate consumers continue to see them at the same path.
 pub use betcode_proto::methods::{
-    METHOD_ADD_PLUGIN, METHOD_CANCEL_TURN, METHOD_COMPACT_SESSION, METHOD_CONVERSE,
-    METHOD_CREATE_WORKTREE, METHOD_DISABLE_PLUGIN, METHOD_ENABLE_PLUGIN, METHOD_EXCHANGE_KEYS,
-    METHOD_EXECUTE_SERVICE_COMMAND, METHOD_GET_COMMAND_REGISTRY, METHOD_GET_ISSUE,
-    METHOD_GET_MERGE_REQUEST, METHOD_GET_PERMISSIONS, METHOD_GET_PIPELINE,
+    METHOD_ADD_PLUGIN, METHOD_CANCEL_TURN, METHOD_CLEAR_SESSION_GRANTS, METHOD_COMPACT_SESSION,
+    METHOD_CONVERSE, METHOD_CREATE_WORKTREE, METHOD_DISABLE_PLUGIN, METHOD_ENABLE_PLUGIN,
+    METHOD_EXCHANGE_KEYS, METHOD_EXECUTE_SERVICE_COMMAND, METHOD_GET_COMMAND_REGISTRY,
+    METHOD_GET_ISSUE, METHOD_GET_MERGE_REQUEST, METHOD_GET_PERMISSIONS, METHOD_GET_PIPELINE,
     METHOD_GET_PLUGIN_STATUS, METHOD_GET_REPO, METHOD_GET_SETTINGS, METHOD_GET_WORKTREE,
     METHOD_LIST_AGENTS, METHOD_LIST_ISSUES, METHOD_LIST_MCP_SERVERS, METHOD_LIST_MERGE_REQUESTS,
     METHOD_LIST_PATH, METHOD_LIST_PIPELINES, METHOD_LIST_PLUGINS, METHOD_LIST_REPOS,
-    METHOD_LIST_SESSIONS, METHOD_LIST_WORKTREES, METHOD_REGISTER_REPO, METHOD_REMOVE_PLUGIN,
-    METHOD_REMOVE_WORKTREE, METHOD_REQUEST_INPUT_LOCK, METHOD_RESUME_SESSION, METHOD_SCAN_REPOS,
-    METHOD_UNREGISTER_REPO, METHOD_UPDATE_REPO, METHOD_UPDATE_SETTINGS,
+    METHOD_LIST_SESSIONS, METHOD_LIST_SESSION_GRANTS, METHOD_LIST_WORKTREES,
+    METHOD_REGISTER_REPO, METHOD_REMOVE_PLUGIN, METHOD_REMOVE_WORKTREE, METHOD_RENAME_SESSION,
+    METHOD_REQUEST_INPUT_LOCK, METHOD_RESUME_SESSION, METHOD_SCAN_REPOS,
+    METHOD_SET_SESSION_GRANT, METHOD_UNREGISTER_REPO, METHOD_UPDATE_REPO, METHOD_UPDATE_SETTINGS,
 };
 
 /// Default maximum number of sessions returned by `ListSessions`.
@@ -441,6 +445,24 @@ impl TunnelRequestHandler {
                 )
                 .await
             }
+            // Session grant management RPCs
+            METHOD_LIST_SESSION_GRANTS => {
+                self.handle_list_session_grants(&request_id, &data, relay_forwarded)
+                    .await
+            }
+            METHOD_CLEAR_SESSION_GRANTS => {
+                self.handle_clear_session_grants(&request_id, &data, relay_forwarded)
+                    .await
+            }
+            METHOD_SET_SESSION_GRANT => {
+                self.handle_set_session_grant(&request_id, &data, relay_forwarded)
+                    .await
+            }
+            // Session rename RPC
+            METHOD_RENAME_SESSION => {
+                self.handle_rename_session(&request_id, &data, relay_forwarded)
+                    .await
+            }
             other => vec![Self::error_response(
                 &request_id,
                 TunnelErrorCode::NotFound,
@@ -501,6 +523,7 @@ impl TunnelRequestHandler {
                             nanos: 0,
                         }),
                         last_message_preview: s.last_message_preview.unwrap_or_default(),
+                        name: s.name,
                     })
                     .collect();
                 #[allow(clippy::cast_possible_truncation)]
@@ -700,6 +723,177 @@ impl TunnelRequestHandler {
         }
     }
 
+    #[allow(clippy::significant_drop_tightening)]
+    async fn handle_list_session_grants(
+        &self,
+        request_id: &str,
+        data: &[u8],
+        relay_forwarded: bool,
+    ) -> Vec<TunnelFrame> {
+        let req = match ListSessionGrantsRequest::decode(data) {
+            Ok(r) => r,
+            Err(e) => {
+                return vec![Self::error_response(
+                    request_id,
+                    TunnelErrorCode::Internal,
+                    &format!("Decode error: {e}"),
+                )]
+            }
+        };
+        let Some(handle) = self.relay.get_handle(&req.session_id).await else {
+            return vec![Self::error_response(
+                request_id,
+                TunnelErrorCode::NotFound,
+                &format!("Session {} not active", req.session_id),
+            )];
+        };
+        let grants = handle.session_grants.read().await;
+        let entries: Vec<SessionGrantEntry> = grants
+            .iter()
+            .map(|(tool_name, granted)| SessionGrantEntry {
+                tool_name: tool_name.clone(),
+                granted: *granted,
+            })
+            .collect();
+        drop(grants);
+        vec![
+            self.unary_response_frame(
+                request_id,
+                &ListSessionGrantsResponse { grants: entries },
+                relay_forwarded,
+            )
+            .await,
+        ]
+    }
+
+    #[allow(clippy::significant_drop_tightening)]
+    async fn handle_clear_session_grants(
+        &self,
+        request_id: &str,
+        data: &[u8],
+        relay_forwarded: bool,
+    ) -> Vec<TunnelFrame> {
+        let req = match ClearSessionGrantsRequest::decode(data) {
+            Ok(r) => r,
+            Err(e) => {
+                return vec![Self::error_response(
+                    request_id,
+                    TunnelErrorCode::Internal,
+                    &format!("Decode error: {e}"),
+                )]
+            }
+        };
+        let Some(handle) = self.relay.get_handle(&req.session_id).await else {
+            return vec![Self::error_response(
+                request_id,
+                TunnelErrorCode::NotFound,
+                &format!("Session {} not active", req.session_id),
+            )];
+        };
+        let mut grants = handle.session_grants.write().await;
+        if req.tool_name.is_empty() {
+            grants.clear();
+        } else {
+            grants.remove(&req.tool_name);
+        }
+        drop(grants);
+        vec![
+            self.unary_response_frame(
+                request_id,
+                &ClearSessionGrantsResponse {},
+                relay_forwarded,
+            )
+            .await,
+        ]
+    }
+
+    async fn handle_set_session_grant(
+        &self,
+        request_id: &str,
+        data: &[u8],
+        relay_forwarded: bool,
+    ) -> Vec<TunnelFrame> {
+        let req = match SetSessionGrantRequest::decode(data) {
+            Ok(r) => r,
+            Err(e) => {
+                return vec![Self::error_response(
+                    request_id,
+                    TunnelErrorCode::Internal,
+                    &format!("Decode error: {e}"),
+                )]
+            }
+        };
+        if req.tool_name.is_empty() {
+            return vec![Self::error_response(
+                request_id,
+                TunnelErrorCode::Internal,
+                "tool_name must not be empty",
+            )];
+        }
+        let Some(handle) = self.relay.get_handle(&req.session_id).await else {
+            return vec![Self::error_response(
+                request_id,
+                TunnelErrorCode::NotFound,
+                &format!("Session {} not active", req.session_id),
+            )];
+        };
+        handle
+            .session_grants
+            .write()
+            .await
+            .insert(req.tool_name, req.granted);
+        vec![
+            self.unary_response_frame(
+                request_id,
+                &SetSessionGrantResponse {},
+                relay_forwarded,
+            )
+            .await,
+        ]
+    }
+
+    async fn handle_rename_session(
+        &self,
+        request_id: &str,
+        data: &[u8],
+        relay_forwarded: bool,
+    ) -> Vec<TunnelFrame> {
+        let req = match RenameSessionRequest::decode(data) {
+            Ok(r) => r,
+            Err(e) => {
+                return vec![Self::error_response(
+                    request_id,
+                    TunnelErrorCode::Internal,
+                    &format!("Decode error: {e}"),
+                )]
+            }
+        };
+        match self
+            .db
+            .update_session_name(&req.session_id, &req.name)
+            .await
+        {
+            Ok(()) => vec![
+                self.unary_response_frame(
+                    request_id,
+                    &RenameSessionResponse {},
+                    relay_forwarded,
+                )
+                .await,
+            ],
+            Err(crate::storage::DatabaseError::NotFound(_)) => vec![Self::error_response(
+                request_id,
+                TunnelErrorCode::NotFound,
+                &format!("Session {} not found", req.session_id),
+            )],
+            Err(e) => vec![Self::error_response(
+                request_id,
+                TunnelErrorCode::Internal,
+                &format!("RenameSession failed: {e}"),
+            )],
+        }
+    }
+
     /// Handle an incoming `StreamData` frame for an active streaming session.
     /// Routes user messages, permissions, etc. to the relay.
     ///
@@ -793,23 +987,60 @@ impl TunnelRequestHandler {
         use betcode_proto::v1::agent_request::Request;
         match req.request {
             Some(Request::Message(msg)) => {
-                if let Err(e) = self.relay.send_user_message(&sid, &msg.content).await {
+                let agent_id = if msg.agent_id.is_empty() {
+                    None
+                } else {
+                    Some(msg.agent_id.as_str())
+                };
+                if let Err(e) = self
+                    .relay
+                    .send_user_message(&sid, &msg.content, agent_id)
+                    .await
+                {
                     warn!(session_id = %sid, error = %e, "Failed to send user message via tunnel");
                 }
             }
             Some(Request::Permission(perm)) => {
-                let granted = perm.decision
-                    == betcode_proto::v1::PermissionDecision::AllowOnce as i32
-                    || perm.decision == betcode_proto::v1::PermissionDecision::AllowSession as i32;
+                let decision =
+                    betcode_proto::v1::PermissionDecision::try_from(perm.decision)
+                        .unwrap_or(betcode_proto::v1::PermissionDecision::Deny);
+                let granted = matches!(
+                    decision,
+                    betcode_proto::v1::PermissionDecision::AllowOnce
+                        | betcode_proto::v1::PermissionDecision::AllowSession
+                );
 
-                // Look up original tool input from pending map.
+                // Look up original tool input and tool name from pending maps.
                 let original_input = if let Some(handle) = self.relay.get_handle(&sid).await {
-                    handle
+                    let input = handle
                         .pending_permission_inputs
                         .write()
                         .await
                         .remove(&perm.request_id)
-                        .unwrap_or_else(|| serde_json::Value::Object(serde_json::Map::default()))
+                        .unwrap_or_else(|| serde_json::Value::Object(serde_json::Map::default()));
+                    let tool = handle
+                        .pending_permission_tool_names
+                        .write()
+                        .await
+                        .remove(&perm.request_id);
+
+                    // On AllowSession, cache the grant for this tool
+                    if decision == betcode_proto::v1::PermissionDecision::AllowSession {
+                        if let Some(ref tool_name) = tool {
+                            handle
+                                .session_grants
+                                .write()
+                                .await
+                                .insert(tool_name.clone(), true);
+                            info!(
+                                session_id = %sid,
+                                tool_name = %tool_name,
+                                "Cached AllowSession grant via tunnel"
+                            );
+                        }
+                    }
+
+                    input
                 } else {
                     serde_json::Value::Object(serde_json::Map::default())
                 };

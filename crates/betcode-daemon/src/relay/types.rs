@@ -42,6 +42,14 @@ pub struct RelayHandle {
     /// Written by the stdout pipeline bridge, read by the handler to
     /// build the correct `control_response` with `updatedInput`.
     pub pending_permission_inputs: Arc<RwLock<HashMap<String, serde_json::Value>>>,
+    /// Session-scoped permission grants keyed by `tool_name` → granted.
+    /// Written by the handler on `AllowSession`, read by the stdout pipeline
+    /// to auto-respond to subsequent matching permission requests.
+    pub session_grants: Arc<RwLock<HashMap<String, bool>>>,
+    /// Maps `request_id` → `tool_name` for pending permission requests.
+    /// Used by the handler to look up which tool was granted when
+    /// processing `AllowSession` decisions.
+    pub pending_permission_tool_names: Arc<RwLock<HashMap<String, String>>>,
 }
 
 /// Errors from relay operations.

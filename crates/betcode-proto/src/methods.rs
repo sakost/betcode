@@ -29,6 +29,18 @@ pub const METHOD_RESUME_SESSION: &str = "AgentService/ResumeSession";
 /// `AgentService/ExchangeKeys`
 pub const METHOD_EXCHANGE_KEYS: &str = "AgentService/ExchangeKeys";
 
+/// `AgentService/ListSessionGrants`
+pub const METHOD_LIST_SESSION_GRANTS: &str = "AgentService/ListSessionGrants";
+
+/// `AgentService/ClearSessionGrants`
+pub const METHOD_CLEAR_SESSION_GRANTS: &str = "AgentService/ClearSessionGrants";
+
+/// `AgentService/SetSessionGrant`
+pub const METHOD_SET_SESSION_GRANT: &str = "AgentService/SetSessionGrant";
+
+/// `AgentService/RenameSession`
+pub const METHOD_RENAME_SESSION: &str = "AgentService/RenameSession";
+
 // ---------------------------------------------------------------------------
 // CommandService
 // ---------------------------------------------------------------------------

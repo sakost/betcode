@@ -126,6 +126,7 @@ async fn submit_permission_edit(app: &mut App, tx: &mpsc::Sender<AgentRequest>) 
                             UserMessage {
                                 content: comment,
                                 attachments: Vec::new(),
+                                agent_id: String::new(),
                             },
                         )),
                     })

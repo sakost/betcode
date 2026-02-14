@@ -19,6 +19,8 @@ pub struct Session {
     pub total_cost_usd: f64,
     pub last_message_preview: Option<String>,
     pub compaction_sequence: i64,
+    #[serde(default)]
+    pub name: String,
 }
 
 /// Message record from the database.

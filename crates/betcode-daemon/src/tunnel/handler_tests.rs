@@ -453,6 +453,7 @@ async fn converse_non_start_sends_error_on_outbound() {
         request: Some(Request::Message(UserMessage {
             content: "hello".into(),
             attachments: vec![],
+            agent_id: String::new(),
         })),
     };
     let result = h
@@ -488,6 +489,7 @@ async fn converse_start_session_failure_sends_error_cleans_active() {
         request: Some(Request::Message(UserMessage {
             content: "hello".into(),
             attachments: vec![],
+            agent_id: String::new(),
         })),
     };
     let stream_frame = TunnelFrame {
@@ -1090,6 +1092,7 @@ async fn encrypted_agent_request_is_decrypted() {
             betcode_proto::v1::UserMessage {
                 content: "encrypted hello".into(),
                 attachments: vec![],
+                agent_id: String::new(),
             },
         )),
     };
@@ -1160,6 +1163,7 @@ async fn encrypted_agent_request_with_wrong_key_rejected() {
             betcode_proto::v1::UserMessage {
                 content: "wrong key".into(),
                 attachments: vec![],
+                agent_id: String::new(),
             },
         )),
     };
@@ -1220,6 +1224,7 @@ async fn encrypted_agent_request_with_corrupted_data_rejected() {
             betcode_proto::v1::UserMessage {
                 content: "will be corrupted".into(),
                 attachments: vec![],
+                agent_id: String::new(),
             },
         )),
     };
@@ -1290,6 +1295,7 @@ async fn plaintext_agent_request_rejected_when_crypto_active() {
             betcode_proto::v1::UserMessage {
                 content: "injected plaintext".into(),
                 attachments: vec![],
+                agent_id: String::new(),
             },
         )),
     };
@@ -1498,6 +1504,7 @@ async fn decrypt_payload_passthrough_on_empty_nonce_with_crypto_active() {
             betcode_proto::v1::UserMessage {
                 content: "hello from relay".into(),
                 attachments: vec![],
+                agent_id: String::new(),
             },
         )),
     };
@@ -1535,6 +1542,7 @@ async fn relay_forwarded_plaintext_request_rejected_when_crypto_active() {
             betcode_proto::v1::UserMessage {
                 content: "plain attack".into(),
                 attachments: vec![],
+                agent_id: String::new(),
             },
         )),
     };

@@ -103,6 +103,7 @@ pub async fn run(conn: &mut DaemonConnection, config: HeadlessConfig) -> Result<
                 UserMessage {
                     content: config.prompt,
                     attachments: Vec::new(),
+                    agent_id: String::new(),
                 },
             )),
         })
