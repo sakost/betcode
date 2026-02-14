@@ -92,6 +92,19 @@ pub struct RelayArgs {
     /// Listen address for the relay server.
     #[arg(long, default_value = "0.0.0.0:443")]
     pub addr: SocketAddr,
+
+    /// Path to the betcode-releases binary (for deploying the download server).
+    #[arg(long)]
+    pub releases_binary: Option<PathBuf>,
+
+    /// Domain for the releases download server (e.g. get.betcode.dev).
+    /// Required when --releases-binary is provided.
+    #[arg(long)]
+    pub releases_domain: Option<String>,
+
+    /// GitHub repository for release downloads (used with --releases-binary).
+    #[arg(long, default_value = "sakost/betcode")]
+    pub github_repo: String,
 }
 
 fn parse_mode(s: &str) -> Result<DeploymentMode, String> {
@@ -177,6 +190,16 @@ pub fn run(args: RelayArgs, non_interactive: bool) -> Result<()> {
             let compose_cmd = validate::detect_compose_command()?;
             docker::generate(&config, &compose_cmd)?;
         }
+    }
+
+    // Optionally deploy the releases download server
+    if let Some(releases_binary) = args.releases_binary {
+        let releases_domain = args.releases_domain.unwrap_or_else(|| {
+            format!("get.{}", config.domain.trim_start_matches("relay."))
+        });
+        let releases_binary = std::fs::canonicalize(&releases_binary)
+            .with_context(|| format!("releases binary not found: {}", releases_binary.display()))?;
+        systemd::deploy_releases(&releases_binary, &releases_domain, &args.github_repo)?;
     }
 
     Ok(())

@@ -58,6 +58,36 @@ pub fn env_file(config: &RelaySetupConfig) -> String {
     )
 }
 
+/// Generate the systemd unit file for the betcode-releases download server.
+pub fn releases_systemd_unit(domain: &str, repo: &str) -> String {
+    format!(
+        r"[Unit]
+Description=BetCode Release Download Server
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=betcode
+Group=betcode
+ExecStart=/usr/local/bin/betcode-releases \
+  --addr 0.0.0.0:8090 \
+  --repo {repo} \
+  --base-url {domain}
+Restart=on-failure
+RestartSec=5
+
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target
+"
+    )
+}
+
 /// Generate the certbot pre-hook script (stop relay before renewal).
 pub const fn certbot_pre_hook() -> &'static str {
     "#!/bin/sh\nsystemctl stop betcode-relay\n"
@@ -227,5 +257,14 @@ mod tests {
         let config = test_config("0.0.0.0:443".parse().unwrap());
         let compose = docker_compose(&config);
         assert!(compose.contains("\"443:443\""));
+    }
+
+    #[test]
+    fn releases_unit_contains_domain_and_repo() {
+        let unit = releases_systemd_unit("get.example.com", "sakost/betcode");
+        assert!(unit.contains("get.example.com"), "unit must contain domain");
+        assert!(unit.contains("sakost/betcode"), "unit must contain repo");
+        assert!(unit.contains("--addr 0.0.0.0:8090"), "unit must contain listen address");
+        assert!(unit.contains("betcode-releases"), "unit must reference the releases binary");
     }
 }

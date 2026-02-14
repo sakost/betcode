@@ -236,6 +236,52 @@ fn start_command_args(is_update: bool) -> (&'static str, Vec<&'static str>) {
     }
 }
 
+/// Deploy the betcode-releases download server as a systemd service.
+pub fn deploy_releases(releases_binary: &std::path::Path, domain: &str, repo: &str) -> Result<()> {
+    let dest = "/usr/local/bin/betcode-releases";
+    let unit_path = "/etc/systemd/system/betcode-releases.service";
+
+    // Stop existing service if running
+    if std::process::Command::new("systemctl")
+        .args(["is-active", "--quiet", "betcode-releases"])
+        .status()
+        .is_ok_and(|s| s.success())
+    {
+        tracing::info!("stopping betcode-releases before update");
+        run_cmd(
+            "stopping betcode-releases",
+            "systemctl",
+            &["stop", "betcode-releases"],
+        )?;
+    }
+
+    // Install binary
+    tracing::info!(
+        "installing releases binary: {} -> {dest}",
+        releases_binary.display()
+    );
+    fs::copy(releases_binary, dest).with_context(|| {
+        format!("failed to copy {} to {dest}", releases_binary.display())
+    })?;
+    fs::set_permissions(dest, fs::Permissions::from_mode(0o755))
+        .context("failed to set permissions on releases binary")?;
+
+    // Write systemd unit
+    tracing::info!("writing systemd unit: {unit_path}");
+    let content = templates::releases_systemd_unit(domain, repo);
+    fs::write(unit_path, content).context("failed to write releases systemd unit")?;
+
+    run_cmd("reloading systemd daemon", "systemctl", &["daemon-reload"])?;
+    run_cmd(
+        "enabling and starting betcode-releases",
+        "systemctl",
+        &["enable", "--now", "betcode-releases"],
+    )?;
+
+    tracing::info!("betcode-releases is deployed and running on port 8090");
+    Ok(())
+}
+
 fn enable_and_start(is_update: bool) -> Result<()> {
     let (description, args) = start_command_args(is_update);
     run_cmd(description, "systemctl", &args)?;
