@@ -22,5 +22,9 @@ tracing-subscriber.workspace = true
 [dev-dependencies]
 tempfile.workspace = true
 
+[features]
+default = ["releases"]
+releases = []
+
 [lints]
 workspace = true

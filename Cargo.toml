@@ -72,6 +72,9 @@ tempfile = "3"
 toml = "0.8"
 notify = "7"
 
+# Pre-commit hooks
+cargo-husky = { version = "1", default-features = false, features = ["precommit-hook", "run-cargo-test", "run-cargo-clippy", "run-cargo-fmt"] }
+
 # Internal crates
 betcode-proto = { path = "crates/betcode-proto" }
 betcode-core = { path = "crates/betcode-core" }

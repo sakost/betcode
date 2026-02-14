@@ -4,6 +4,8 @@ use tracing_subscriber::EnvFilter;
 
 use betcode_setup::cli::CliArgs;
 use betcode_setup::relay::RelayArgs;
+#[cfg(feature = "releases")]
+use betcode_setup::releases::ReleasesArgs;
 
 /// `BetCode` deployment setup tool.
 #[derive(Debug, Parser)]
@@ -23,6 +25,9 @@ enum Commands {
     Relay(RelayArgs),
     /// Set up the betcode CLI for relay access
     Cli(CliArgs),
+    /// Set up the betcode releases download server
+    #[cfg(feature = "releases")]
+    Releases(ReleasesArgs),
 }
 
 fn main() -> Result<()> {
@@ -40,6 +45,11 @@ fn main() -> Result<()> {
             betcode_setup::relay::run(args, cli.non_interactive)?;
         }
         Commands::Cli(ref args) => betcode_setup::cli::run(args, cli.non_interactive)?,
+        #[cfg(feature = "releases")]
+        Commands::Releases(args) => {
+            betcode_setup::os::ensure_ubuntu()?;
+            betcode_setup::releases::run(args, cli.non_interactive)?;
+        }
     }
 
     Ok(())

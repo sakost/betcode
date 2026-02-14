@@ -181,6 +181,9 @@ impl WorktreeManager {
                 .args(["worktree", "add", "-b", branch])
                 .arg(&worktree_path)
                 .current_dir(&repo.repo_path)
+                .env_remove("GIT_DIR")
+                .env_remove("GIT_INDEX_FILE")
+                .env_remove("GIT_WORK_TREE")
                 .output(),
         )
         .await
@@ -280,6 +283,9 @@ impl WorktreeManager {
                 .args(["worktree", "remove", "--force"])
                 .arg(path)
                 .current_dir(current_dir)
+                .env_remove("GIT_DIR")
+                .env_remove("GIT_INDEX_FILE")
+                .env_remove("GIT_WORK_TREE")
                 .output()
                 .await?;
 
