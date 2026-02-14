@@ -2,12 +2,7 @@ use std::net::{SocketAddr, TcpListener};
 
 use anyhow::{bail, Result};
 
-use crate::cmd::command_exists;
-
-/// Check whether the port check should be skipped.
-const fn should_skip_port_check(is_update: bool, service_is_active: bool) -> bool {
-    is_update && service_is_active
-}
+use crate::cmd::{command_exists, should_skip_port_check};
 
 /// Check whether the betcode-relay systemd service is currently active.
 pub fn is_betcode_relay_active() -> bool {
@@ -42,27 +37,6 @@ pub fn check_systemd_prereqs(addr: SocketAddr, is_update: bool) -> Result<()> {
     }
 
     Ok(())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn skip_port_check_when_update_and_service_active() {
-        assert!(should_skip_port_check(true, true));
-    }
-
-    #[test]
-    fn no_skip_port_check_on_fresh_install() {
-        assert!(!should_skip_port_check(false, false));
-        assert!(!should_skip_port_check(false, true));
-    }
-
-    #[test]
-    fn no_skip_port_check_when_update_but_service_inactive() {
-        assert!(!should_skip_port_check(true, false));
-    }
 }
 
 /// Detect a container compose command. Checks in order:

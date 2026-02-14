@@ -30,8 +30,6 @@ use crate::app::{CompletionFetchKind, CompletionRequest};
 use crate::commands::cache::CachedCommand;
 use crate::connection::DaemonConnection;
 use crate::ui;
-use betcode_crypto::FingerprintCheck;
-use betcode_proto::v1::{AgentRequest, StartConversation};
 
 /// Response from the async completion fetcher.
 struct CompletionResponse {
@@ -71,21 +69,7 @@ pub async fn run(
 ) -> anyhow::Result<()> {
     // 0. Key exchange for relay connections (before entering raw mode so
     //    Ctrl+C works during the handshake and fingerprint errors are visible).
-    if conn.is_relay() {
-        let machine_id = conn.machine_id().unwrap_or("unknown").to_string();
-        let (_daemon_fp, fp_check) = conn.exchange_keys(&machine_id).await?;
-        match fp_check {
-            FingerprintCheck::TrustOnFirstUse | FingerprintCheck::Matched => {
-                // Proceed — fingerprint accepted
-            }
-            FingerprintCheck::Mismatch { expected, actual } => {
-                return Err(anyhow::anyhow!(
-                    "Daemon fingerprint mismatch!\n  Expected: {expected}\n  Actual:   {actual}\n\
-                     This could indicate a MITM attack. Connection aborted."
-                ));
-            }
-        }
-    }
+    conn.ensure_relay_key_exchange().await?;
 
     // 1. Establish gRPC stream BEFORE entering raw mode so Ctrl+C works
     //    during the (potentially slow) handshake.
@@ -102,19 +86,11 @@ pub async fn run(
     });
 
     request_tx
-        .send(AgentRequest {
-            request: Some(betcode_proto::v1::agent_request::Request::Start(
-                StartConversation {
-                    session_id: sid.clone(),
-                    working_directory: wd,
-                    model: model.clone().unwrap_or_default(),
-                    allowed_tools: Vec::new(),
-                    plan_mode: false,
-                    worktree_id: String::new(),
-                    metadata: std::collections::HashMap::default(),
-                },
-            )),
-        })
+        .send(crate::connection::start_conversation_request(
+            sid.clone(),
+            wd,
+            model.clone().unwrap_or_default(),
+        ))
         .await?;
 
     // 2. Enter raw mode, create terminal

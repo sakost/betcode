@@ -1,41 +1,24 @@
 //! Tests for `CommandProxyService`.
 
-use std::collections::HashMap;
-use std::sync::Arc;
-
-use tonic::Request;
+use tokio_stream::StreamExt;
 
 use betcode_proto::v1::command_service_server::CommandService;
 use betcode_proto::v1::{
     AddPluginRequest, AddPluginResponse, AgentInfo, CommandEntry, DisablePluginRequest,
-    DisablePluginResponse, EnablePluginRequest, EnablePluginResponse, FrameType,
+    DisablePluginResponse, EnablePluginRequest, EnablePluginResponse, ExecuteServiceCommandRequest,
     GetCommandRegistryRequest, GetCommandRegistryResponse, GetPluginStatusRequest,
     GetPluginStatusResponse, ListAgentsRequest, ListAgentsResponse, ListPathRequest,
     ListPathResponse, ListPluginsRequest, ListPluginsResponse, PathEntry, PluginInfo,
-    RemovePluginRequest, RemovePluginResponse, TunnelFrame,
+    RemovePluginRequest, RemovePluginResponse, ServiceCommandOutput,
 };
 
 use super::CommandProxyService;
 use crate::server::test_helpers::{
-    make_request, setup_offline_router, setup_router_with_machine, spawn_error_responder,
-    spawn_responder, test_claims,
+    assert_daemon_error, assert_no_claims_error, assert_no_machine_error, assert_offline_error,
+    make_request, proxy_test_setup, spawn_responder, spawn_stream_responder,
 };
 
-async fn setup_with_machine(
-    mid: &str,
-) -> (
-    CommandProxyService,
-    Arc<crate::router::RequestRouter>,
-    tokio::sync::mpsc::Receiver<TunnelFrame>,
-) {
-    let (router, rx) = setup_router_with_machine(mid).await;
-    (CommandProxyService::new(Arc::clone(&router)), router, rx)
-}
-
-async fn setup_offline() -> CommandProxyService {
-    let router = setup_offline_router().await;
-    CommandProxyService::new(router)
-}
+proxy_test_setup!(CommandProxyService);
 
 // --- Unary RPC routing ---
 
@@ -294,89 +277,48 @@ async fn disable_plugin_routes_to_machine() {
 #[tokio::test]
 async fn machine_offline_returns_unavailable() {
     let svc = setup_offline().await;
-    let req = make_request(GetCommandRegistryRequest {}, "m-off");
-    let err = svc.get_command_registry(req).await.unwrap_err();
-    assert_eq!(err.code(), tonic::Code::Unavailable);
+    assert_offline_error!(svc, get_command_registry, GetCommandRegistryRequest {});
 }
 
 #[tokio::test]
 async fn missing_machine_id_returns_invalid_argument() {
     let (svc, _router, _rx) = setup_with_machine("m1").await;
-    let mut req = Request::new(GetCommandRegistryRequest {});
-    req.extensions_mut().insert(test_claims());
-    let err = svc.get_command_registry(req).await.unwrap_err();
-    assert_eq!(err.code(), tonic::Code::InvalidArgument);
+    assert_no_machine_error!(svc, get_command_registry, GetCommandRegistryRequest {});
 }
 
 #[tokio::test]
 async fn missing_claims_returns_internal() {
     let (svc, _router, _rx) = setup_with_machine("m1").await;
-    let mut req = Request::new(GetCommandRegistryRequest {});
-    req.metadata_mut()
-        .insert("x-machine-id", "m1".parse().unwrap());
-    let err = svc.get_command_registry(req).await.unwrap_err();
-    assert_eq!(err.code(), tonic::Code::Internal);
+    assert_no_claims_error!(svc, get_command_registry, GetCommandRegistryRequest {});
 }
 
 #[tokio::test]
 async fn daemon_error_propagated_to_client() {
     let (svc, router, rx) = setup_with_machine("m1").await;
-    spawn_error_responder(&router, "m1", rx, "daemon error");
-    let req = make_request(GetCommandRegistryRequest {}, "m1");
-    let err = svc.get_command_registry(req).await.unwrap_err();
-    assert_eq!(err.code(), tonic::Code::Internal);
-    assert!(err.message().contains("daemon error"));
+    assert_daemon_error!(
+        svc,
+        get_command_registry,
+        GetCommandRegistryRequest {},
+        router,
+        rx,
+        "daemon error"
+    );
 }
 
 // --- I-2: ExecuteServiceCommand streaming test (relay side) ---
 
-use betcode_proto::v1::{
-    EncryptedPayload, ExecuteServiceCommandRequest, ServiceCommandOutput, StreamPayload,
-};
-use tokio_stream::StreamExt;
-
-use crate::server::test_helpers::encode_msg;
-
 #[tokio::test]
 async fn execute_service_command_streams_output() {
-    let (svc, router, mut tunnel_rx) = setup_with_machine("m1").await;
-    let rc = Arc::clone(&router);
-    tokio::spawn(async move {
-        if let Some(frame) = tunnel_rx.recv().await {
-            let rid = frame.request_id.clone();
-            let conn = rc.registry().get("m1").await.unwrap();
-            // Send two StreamData frames with ServiceCommandOutput payloads
-            for (seq, line) in ["first line", "second line"].iter().enumerate() {
-                let output = ServiceCommandOutput {
-                    output: Some(
-                        betcode_proto::v1::service_command_output::Output::StdoutLine(
-                            (*line).into(),
-                        ),
-                    ),
-                };
-                let f = TunnelFrame {
-                    request_id: rid.clone(),
-                    frame_type: FrameType::StreamData as i32,
-                    timestamp: None,
-                    payload: Some(betcode_proto::v1::tunnel_frame::Payload::StreamData(
-                        StreamPayload {
-                            method: String::new(),
-                            encrypted: Some(EncryptedPayload {
-                                ciphertext: encode_msg(&output),
-                                nonce: Vec::new(),
-                                ephemeral_pubkey: Vec::new(),
-                            }),
-                            sequence: seq as u64,
-                            metadata: HashMap::new(),
-                        },
-                    )),
-                };
-                conn.send_stream_frame(&rid, f).await;
-            }
-            // Close the stream
-            conn.complete_stream(&rid).await;
-        }
-    });
+    let (svc, router, rx) = setup_with_machine("m1").await;
+    let outputs: Vec<ServiceCommandOutput> = ["first line", "second line"]
+        .iter()
+        .map(|line| ServiceCommandOutput {
+            output: Some(
+                betcode_proto::v1::service_command_output::Output::StdoutLine((*line).into()),
+            ),
+        })
+        .collect();
+    spawn_stream_responder(&router, "m1", rx, outputs);
 
     let req = make_request(
         ExecuteServiceCommandRequest {

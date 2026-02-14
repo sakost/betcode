@@ -16,8 +16,6 @@ use betcode_proto::methods::{
 };
 
 use crate::router::RequestRouter;
-use crate::server::agent_proxy::extract_machine_id;
-use crate::server::interceptor::extract_claims;
 
 /// Proxies `ConfigService` calls through the tunnel to a target daemon.
 pub struct ConfigProxyService {
@@ -37,16 +35,7 @@ impl ConfigService for ConfigProxyService {
         &self,
         request: Request<GetSettingsRequest>,
     ) -> Result<Response<Settings>, Status> {
-        let _claims = extract_claims(&request)?;
-        let machine_id = extract_machine_id(&request)?;
-        let resp = super::grpc_util::forward_unary(
-            &self.router,
-            &machine_id,
-            METHOD_GET_SETTINGS,
-            &request.into_inner(),
-        )
-        .await?;
-        Ok(Response::new(resp))
+        super::grpc_util::forward_unary_rpc(&self.router, request, METHOD_GET_SETTINGS).await
     }
 
     #[instrument(skip(self, request), fields(rpc = "UpdateSettings"))]
@@ -54,16 +43,7 @@ impl ConfigService for ConfigProxyService {
         &self,
         request: Request<UpdateSettingsRequest>,
     ) -> Result<Response<Settings>, Status> {
-        let _claims = extract_claims(&request)?;
-        let machine_id = extract_machine_id(&request)?;
-        let resp = super::grpc_util::forward_unary(
-            &self.router,
-            &machine_id,
-            METHOD_UPDATE_SETTINGS,
-            &request.into_inner(),
-        )
-        .await?;
-        Ok(Response::new(resp))
+        super::grpc_util::forward_unary_rpc(&self.router, request, METHOD_UPDATE_SETTINGS).await
     }
 
     #[instrument(skip(self, request), fields(rpc = "ListMcpServers"))]
@@ -71,16 +51,7 @@ impl ConfigService for ConfigProxyService {
         &self,
         request: Request<ListMcpServersRequest>,
     ) -> Result<Response<ListMcpServersResponse>, Status> {
-        let _claims = extract_claims(&request)?;
-        let machine_id = extract_machine_id(&request)?;
-        let resp = super::grpc_util::forward_unary(
-            &self.router,
-            &machine_id,
-            METHOD_LIST_MCP_SERVERS,
-            &request.into_inner(),
-        )
-        .await?;
-        Ok(Response::new(resp))
+        super::grpc_util::forward_unary_rpc(&self.router, request, METHOD_LIST_MCP_SERVERS).await
     }
 
     #[instrument(skip(self, request), fields(rpc = "GetPermissions"))]
@@ -88,16 +59,7 @@ impl ConfigService for ConfigProxyService {
         &self,
         request: Request<GetPermissionsRequest>,
     ) -> Result<Response<PermissionRules>, Status> {
-        let _claims = extract_claims(&request)?;
-        let machine_id = extract_machine_id(&request)?;
-        let resp = super::grpc_util::forward_unary(
-            &self.router,
-            &machine_id,
-            METHOD_GET_PERMISSIONS,
-            &request.into_inner(),
-        )
-        .await?;
-        Ok(Response::new(resp))
+        super::grpc_util::forward_unary_rpc(&self.router, request, METHOD_GET_PERMISSIONS).await
     }
 }
 

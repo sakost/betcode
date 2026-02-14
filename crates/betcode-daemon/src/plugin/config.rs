@@ -64,21 +64,26 @@ mod tests {
     use super::*;
     use tempfile::TempDir;
 
-    #[test]
-    fn test_load_plugin_config() {
-        let dir = TempDir::new().unwrap();
-        let config_path = dir.path().join("daemon.toml");
-        std::fs::write(
-            &config_path,
-            r#"
+    const SINGLE_PLUGIN_TOML: &str = r#"
 [[plugins]]
 name = "test-plugin"
 socket = "/tmp/test.sock"
 enabled = true
 timeout_secs = 30
-"#,
-        )
-        .unwrap();
+"#;
+
+    /// Write `content` to `daemon.toml` inside a fresh temp dir and return
+    /// the `(TempDir, PathBuf)` pair.
+    fn write_config(content: &str) -> (TempDir, std::path::PathBuf) {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("daemon.toml");
+        std::fs::write(&path, content).unwrap();
+        (dir, path)
+    }
+
+    #[test]
+    fn test_load_plugin_config() {
+        let (_dir, config_path) = write_config(SINGLE_PLUGIN_TOML);
         let config = PluginConfig::load(&config_path).unwrap();
         assert_eq!(config.plugins.len(), 1);
         assert_eq!(config.plugins[0].name, "test-plugin");
@@ -87,9 +92,7 @@ timeout_secs = 30
 
     #[test]
     fn test_add_plugin_to_config() {
-        let dir = TempDir::new().unwrap();
-        let config_path = dir.path().join("daemon.toml");
-        std::fs::write(&config_path, "").unwrap();
+        let (_dir, config_path) = write_config("");
         let mut config = PluginConfig::load(&config_path).unwrap();
         config.add_plugin("new-plugin", "/tmp/new.sock");
         config.save(&config_path).unwrap();
@@ -99,19 +102,7 @@ timeout_secs = 30
 
     #[test]
     fn test_remove_plugin_from_config() {
-        let dir = TempDir::new().unwrap();
-        let config_path = dir.path().join("daemon.toml");
-        std::fs::write(
-            &config_path,
-            r#"
-[[plugins]]
-name = "test-plugin"
-socket = "/tmp/test.sock"
-enabled = true
-timeout_secs = 30
-"#,
-        )
-        .unwrap();
+        let (_dir, config_path) = write_config(SINGLE_PLUGIN_TOML);
         let mut config = PluginConfig::load(&config_path).unwrap();
         config.remove_plugin("test-plugin");
         config.save(&config_path).unwrap();

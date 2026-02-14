@@ -202,13 +202,19 @@ pub fn test_session_pair() -> Result<(CryptoSession, CryptoSession), CryptoError
 mod tests {
     use super::*;
 
-    #[test]
-    fn ecdh_shared_secret_is_symmetric() {
+    /// Generate two X25519 keypairs for testing.
+    fn generate_keypair_pair() -> (StaticSecret, PublicKey, StaticSecret, PublicKey) {
         let a_secret = StaticSecret::random_from_rng(OsRng);
         let a_public = PublicKey::from(&a_secret);
-
         let b_secret = StaticSecret::random_from_rng(OsRng);
         let b_public = PublicKey::from(&b_secret);
+        (a_secret, a_public, b_secret, b_public)
+    }
+
+    #[test]
+    fn ecdh_shared_secret_is_symmetric() {
+        let (a_secret, _a_public, b_secret, b_public) = generate_keypair_pair();
+        let a_public = PublicKey::from(&a_secret);
 
         let shared_ab = ecdh(&a_secret, &b_public);
         let shared_ba = ecdh(&b_secret, &a_public);
@@ -325,10 +331,7 @@ mod tests {
 
     #[test]
     fn session_from_keypairs_encrypts_and_decrypts() {
-        let a_secret = StaticSecret::random_from_rng(OsRng);
-        let a_public = PublicKey::from(&a_secret);
-        let b_secret = StaticSecret::random_from_rng(OsRng);
-        let b_public = PublicKey::from(&b_secret);
+        let (a_secret, a_public, b_secret, b_public) = generate_keypair_pair();
 
         let session_a = CryptoSession::from_keypairs(&a_secret, &b_public).unwrap();
         let session_b = CryptoSession::from_keypairs(&b_secret, &a_public).unwrap();

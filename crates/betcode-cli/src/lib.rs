@@ -13,6 +13,7 @@ pub mod gitlab_cmd;
 pub mod gitlab_fmt;
 pub mod headless;
 pub mod machine_cmd;
+pub mod relay;
 pub mod repo_cmd;
 pub mod tui;
 pub mod ui;

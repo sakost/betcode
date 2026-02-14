@@ -158,6 +158,51 @@ pub fn fingerprint_of(pubkey_bytes: &[u8; 32]) -> String {
 mod tests {
     use super::*;
 
+    /// A temporary test directory that is cleaned up on drop.
+    struct TestDir {
+        dir: std::path::PathBuf,
+    }
+
+    impl TestDir {
+        fn new() -> Self {
+            let dir = std::env::temp_dir().join(format!("betcode-test-{}", rand::random::<u64>()));
+            Self { dir }
+        }
+
+        fn key_path(&self) -> std::path::PathBuf {
+            self.dir.join("identity.key")
+        }
+    }
+
+    impl Drop for TestDir {
+        fn drop(&mut self) {
+            std::fs::remove_dir_all(&self.dir).ok();
+        }
+    }
+
+    /// Write `data` to `path`, creating parent dirs and setting 0o600 permissions on Unix.
+    fn write_test_key_file(path: &Path, data: &[u8]) {
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).unwrap();
+        }
+        std::fs::write(path, data).unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600)).unwrap();
+        }
+    }
+
+    /// Generate a keypair and save it to a temporary directory.
+    /// Returns the `TestDir` (for lifetime/cleanup), the key path, and the keypair.
+    fn generate_and_save_keypair() -> (TestDir, std::path::PathBuf, IdentityKeyPair) {
+        let test_dir = TestDir::new();
+        let path = test_dir.key_path();
+        let kp = IdentityKeyPair::generate();
+        kp.save_to_file(&path).unwrap();
+        (test_dir, path, kp)
+    }
+
     #[test]
     fn generate_identity_keypair_produces_32_byte_keys() {
         let kp = IdentityKeyPair::generate();
@@ -214,23 +259,17 @@ mod tests {
 
     #[test]
     fn save_and_load_identity_key() {
-        let dir = std::env::temp_dir().join(format!("betcode-test-{}", rand::random::<u64>()));
-        let path = dir.join("identity.key");
-
-        let kp = IdentityKeyPair::generate();
-        kp.save_to_file(&path).unwrap();
+        let (_test_dir, path, kp) = generate_and_save_keypair();
 
         let loaded = IdentityKeyPair::load_from_file(&path).unwrap();
         assert_eq!(loaded.public_bytes(), kp.public_bytes());
         assert_eq!(loaded.secret_bytes(), kp.secret_bytes());
-
-        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]
     fn load_nonexistent_generates_new() {
-        let dir = std::env::temp_dir().join(format!("betcode-test-{}", rand::random::<u64>()));
-        let path = dir.join("identity.key");
+        let test_dir = TestDir::new();
+        let path = test_dir.key_path();
 
         let kp = IdentityKeyPair::load_or_generate(&path).unwrap();
         assert!(path.exists());
@@ -238,8 +277,6 @@ mod tests {
         // Loading again returns the same key
         let kp2 = IdentityKeyPair::load_or_generate(&path).unwrap();
         assert_eq!(kp.public_bytes(), kp2.public_bytes());
-
-        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[cfg(unix)]
@@ -247,35 +284,21 @@ mod tests {
     fn file_permissions_are_restrictive() {
         use std::os::unix::fs::PermissionsExt;
 
-        let dir = std::env::temp_dir().join(format!("betcode-test-{}", rand::random::<u64>()));
-        let path = dir.join("identity.key");
-
-        let kp = IdentityKeyPair::generate();
-        kp.save_to_file(&path).unwrap();
+        let (_test_dir, path, _kp) = generate_and_save_keypair();
 
         let perms = std::fs::metadata(&path).unwrap().permissions();
         assert_eq!(perms.mode() & 0o777, 0o600);
-
-        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]
     fn load_wrong_byte_count_file() {
-        let dir = std::env::temp_dir().join(format!("betcode-test-{}", rand::random::<u64>()));
-        let path = dir.join("identity.key");
-        std::fs::create_dir_all(&dir).unwrap();
+        let test_dir = TestDir::new();
+        let path = test_dir.key_path();
 
         // Write 16 bytes instead of 32 — read_exact should fail
-        std::fs::write(&path, [0u8; 16]).unwrap();
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
-        }
+        write_test_key_file(&path, &[0u8; 16]);
         let result = IdentityKeyPair::load_from_file(&path);
         assert!(result.is_err());
-
-        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]
@@ -286,33 +309,21 @@ mod tests {
 
     #[test]
     fn load_truncated_file_fails_gracefully() {
-        let dir = std::env::temp_dir().join(format!("betcode-test-{}", rand::random::<u64>()));
-        let path = dir.join("identity.key");
-        std::fs::create_dir_all(&dir).unwrap();
+        let test_dir = TestDir::new();
+        let path = test_dir.key_path();
 
         // Simulate partial write (20 bytes instead of 32)
-        std::fs::write(&path, [0u8; 20]).unwrap();
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
-        }
+        write_test_key_file(&path, &[0u8; 20]);
 
         let result = IdentityKeyPair::load_from_file(&path);
         assert!(result.is_err());
-
-        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]
     fn load_file_with_trailing_garbage_still_works() {
         use std::io::Write;
 
-        let dir = std::env::temp_dir().join(format!("betcode-test-{}", rand::random::<u64>()));
-        let path = dir.join("identity.key");
-
-        let kp = IdentityKeyPair::generate();
-        kp.save_to_file(&path).unwrap();
+        let (_test_dir, path, kp) = generate_and_save_keypair();
 
         // Append garbage after valid 32 bytes
         let mut file = std::fs::OpenOptions::new()
@@ -324,8 +335,6 @@ mod tests {
         // read_exact only reads first 32 bytes — should still work
         let loaded = IdentityKeyPair::load_from_file(&path).unwrap();
         assert_eq!(loaded.public_bytes(), kp.public_bytes());
-
-        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[cfg(unix)]
@@ -333,11 +342,7 @@ mod tests {
     fn load_rejects_world_readable_permissions() {
         use std::os::unix::fs::PermissionsExt;
 
-        let dir = std::env::temp_dir().join(format!("betcode-test-{}", rand::random::<u64>()));
-        let path = dir.join("identity.key");
-
-        let kp = IdentityKeyPair::generate();
-        kp.save_to_file(&path).unwrap();
+        let (_test_dir, path, _kp) = generate_and_save_keypair();
 
         // Make world-readable
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
@@ -347,7 +352,6 @@ mod tests {
 
         // Restore for cleanup
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
-        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]

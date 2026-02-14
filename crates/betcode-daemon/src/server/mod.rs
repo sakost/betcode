@@ -156,8 +156,11 @@ impl GrpcServer {
         }
     }
 
-    /// Start serving on TCP socket.
-    pub async fn serve_tcp(self, addr: SocketAddr) -> Result<(), ServerError> {
+    /// Build a `tonic::transport::server::Router` with all gRPC services wired in.
+    ///
+    /// Shared between `serve_tcp` and `serve_unix` to avoid duplicating the
+    /// service-creation and server-builder code.
+    async fn build_grpc_router(self) -> tonic::transport::server::Router {
         let agent_service = AgentServiceImpl::new(
             self.db.clone(),
             Arc::clone(&self.relay),
@@ -166,9 +169,6 @@ impl GrpcServer {
         let health_service =
             HealthServiceImpl::new(self.db.clone(), Arc::clone(&self.subprocess_manager));
 
-        info!(%addr, "Starting gRPC server on TCP");
-
-        // Standard grpc.health.v1 health service
         let (grpc_health_reporter, grpc_health_service) = tonic_health::server::health_reporter();
         grpc_health_reporter
             .set_serving::<AgentServiceServer<AgentServiceImpl>>()
@@ -185,9 +185,13 @@ impl GrpcServer {
             .add_service(HealthServer::new(health_service.clone()))
             .add_service(BetCodeHealthServer::new(health_service))
             .add_service(WorktreeServiceServer::new(self.worktree_service))
-            .serve(addr)
-            .await?;
+    }
 
+    /// Start serving on TCP socket.
+    pub async fn serve_tcp(self, addr: SocketAddr) -> Result<(), ServerError> {
+        info!(%addr, "Starting gRPC server on TCP");
+        let router = self.build_grpc_router().await;
+        router.serve(addr).await?;
         Ok(())
     }
 
@@ -207,36 +211,9 @@ impl GrpcServer {
         let listener = UnixListener::bind(&path)?;
         let stream = UnixListenerStream::new(listener);
 
-        let agent_service = AgentServiceImpl::new(
-            self.db.clone(),
-            Arc::clone(&self.relay),
-            Arc::clone(&self.multiplexer),
-        );
-        let health_service =
-            HealthServiceImpl::new(self.db.clone(), Arc::clone(&self.subprocess_manager));
-
-        // Standard grpc.health.v1 health service
-        let (grpc_health_reporter, grpc_health_service) = tonic_health::server::health_reporter();
-        grpc_health_reporter
-            .set_serving::<AgentServiceServer<AgentServiceImpl>>()
-            .await;
-
         info!(path = %path.display(), "Starting gRPC server on Unix socket");
-
-        Server::builder()
-            .http2_keepalive_interval(Some(Duration::from_secs(30)))
-            .http2_keepalive_timeout(Some(Duration::from_secs(10)))
-            .add_service(grpc_health_service)
-            .add_service(AgentServiceServer::new(agent_service))
-            .add_service(CommandServiceServer::new(self.command_service))
-            .add_service(ConfigServiceServer::new(self.config_service))
-            .add_service(GitRepoServiceServer::new(self.repo_service))
-            .add_service(HealthServer::new(health_service.clone()))
-            .add_service(BetCodeHealthServer::new(health_service))
-            .add_service(WorktreeServiceServer::new(self.worktree_service))
-            .serve_with_incoming(stream)
-            .await?;
-
+        let router = self.build_grpc_router().await;
+        router.serve_with_incoming(stream).await?;
         Ok(())
     }
 

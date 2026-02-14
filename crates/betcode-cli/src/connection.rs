@@ -53,6 +53,30 @@ pub fn attach_relay_metadata<T>(
     }
 }
 
+/// Build an `AgentRequest` containing a `StartConversation` with default fields.
+///
+/// Centralises the boilerplate shared by headless mode, TUI init, and
+/// session-clear so the struct layout is defined in one place.
+pub fn start_conversation_request(
+    session_id: String,
+    working_directory: String,
+    model: String,
+) -> AgentRequest {
+    AgentRequest {
+        request: Some(betcode_proto::v1::agent_request::Request::Start(
+            betcode_proto::v1::StartConversation {
+                session_id,
+                working_directory,
+                model,
+                allowed_tools: Vec::new(),
+                plan_mode: false,
+                worktree_id: String::new(),
+                metadata: std::collections::HashMap::default(),
+            },
+        )),
+    }
+}
+
 /// Connection configuration.
 #[derive(Debug, Clone)]
 pub struct ConnectionConfig {
@@ -361,6 +385,28 @@ impl DaemonConnection {
     pub fn verify_fingerprint(&mut self, machine_id: &str) {
         self.fingerprint_store.mark_verified(machine_id);
         let _ = self.fingerprint_store.save(&self.fingerprint_store_path);
+    }
+
+    /// Perform key exchange for relay connections, rejecting fingerprint
+    /// mismatches.
+    ///
+    /// This is a convenience wrapper around [`exchange_keys`] that:
+    /// 1. Skips the exchange entirely for non-relay connections.
+    /// 2. Returns `Ok(())` for TOFU and matching fingerprints.
+    /// 3. Returns `Err(FingerprintRejected)` on a mismatch with a descriptive
+    ///    message including expected/actual values.
+    pub async fn ensure_relay_key_exchange(&mut self) -> Result<(), ConnectionError> {
+        if !self.is_relay() {
+            return Ok(());
+        }
+        let machine_id = self.machine_id().unwrap_or("unknown").to_string();
+        let (_daemon_fp, fp_check) = self.exchange_keys(&machine_id).await?;
+        match fp_check {
+            FingerprintCheck::TrustOnFirstUse | FingerprintCheck::Matched => Ok(()),
+            FingerprintCheck::Mismatch { expected, actual } => {
+                Err(ConnectionError::FingerprintMismatch { expected, actual })
+            }
+        }
     }
 
     /// Whether a crypto session has been established.
@@ -1326,6 +1372,9 @@ pub enum ConnectionError {
 
     #[error("Fingerprint rejected: daemon fingerprint mismatch")]
     FingerprintRejected,
+
+    #[error("Daemon fingerprint mismatch! Expected: {expected}, Actual: {actual}. Possible MITM attack.")]
+    FingerprintMismatch { expected: String, actual: String },
 }
 
 /// Encrypt an `AgentRequest` by serializing it, encrypting the bytes, and

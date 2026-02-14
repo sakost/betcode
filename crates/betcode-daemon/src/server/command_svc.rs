@@ -52,6 +52,15 @@ impl CommandServiceImpl {
     }
 }
 
+/// Normalise a `max_results` value: 0 means "use default" (20).
+const fn effective_max(max_results: u32) -> usize {
+    if max_results == 0 {
+        20
+    } else {
+        max_results as usize
+    }
+}
+
 type ServiceCommandStream =
     Pin<Box<dyn Stream<Item = Result<ServiceCommandOutput, Status>> + Send>>;
 
@@ -80,11 +89,7 @@ impl CommandService for CommandServiceImpl {
         request: Request<ListAgentsRequest>,
     ) -> Result<Response<ListAgentsResponse>, Status> {
         let req = request.into_inner();
-        let max = if req.max_results == 0 {
-            20
-        } else {
-            req.max_results as usize
-        };
+        let max = effective_max(req.max_results);
         let lister = self.agent_lister.read().await;
         let agents = lister
             .search(&req.query, max)
@@ -100,11 +105,7 @@ impl CommandService for CommandServiceImpl {
         request: Request<ListPathRequest>,
     ) -> Result<Response<ListPathResponse>, Status> {
         let req = request.into_inner();
-        let max = if req.max_results == 0 {
-            20
-        } else {
-            req.max_results as usize
-        };
+        let max = effective_max(req.max_results);
         let index = self.file_index.read().await;
         let entries = index
             .search(&req.query, max)
@@ -132,29 +133,21 @@ impl CommandService for CommandServiceImpl {
         tokio::spawn(async move {
             match command.as_str() {
                 "pwd" => {
-                    let exec = executor.read().await;
-                    match exec.execute_pwd() {
-                        Ok(cwd) => {
-                            let _ = tx.send(Ok(stdout_output(&cwd))).await;
-                        }
-                        Err(e) => {
-                            let _ = tx.send(Ok(error_output(&e.to_string()))).await;
-                        }
-                    }
+                    let result = executor.read().await.execute_pwd();
+                    send_result(&tx, result).await;
                 }
                 "cd" => {
                     let path = args.first().map_or("~", std::string::String::as_str);
                     let mut exec = executor.write().await;
-                    match exec.execute_cd(path) {
+                    let result = match exec.execute_cd(path) {
                         Ok(()) => {
                             let cwd = exec.cwd().display().to_string();
                             drop(exec);
-                            let _ = tx.send(Ok(stdout_output(&cwd))).await;
+                            Ok(cwd)
                         }
-                        Err(e) => {
-                            let _ = tx.send(Ok(error_output(&e.to_string()))).await;
-                        }
-                    }
+                        Err(e) => Err(e),
+                    };
+                    send_result(&tx, result).await;
                 }
                 "bash" => {
                     let cmd = args.first().map_or("", std::string::String::as_str);
@@ -389,6 +382,21 @@ fn core_path_to_proto(
 // Output helpers
 // ---------------------------------------------------------------------------
 
+/// Send a `Result<String, E>` as either a stdout or error output event.
+async fn send_result<E: std::fmt::Display>(
+    tx: &mpsc::Sender<Result<ServiceCommandOutput, Status>>,
+    result: Result<String, E>,
+) {
+    match result {
+        Ok(msg) => {
+            let _ = tx.send(Ok(stdout_output(&msg))).await;
+        }
+        Err(e) => {
+            let _ = tx.send(Ok(error_output(&e.to_string()))).await;
+        }
+    }
+}
+
 fn stdout_output(line: &str) -> ServiceCommandOutput {
     ServiceCommandOutput {
         output: Some(
@@ -464,6 +472,22 @@ mod tests {
     use super::*;
     use betcode_proto::v1::*;
 
+    /// Execute a service command and return the first output event.
+    async fn exec_first_output(
+        svc: &CommandServiceImpl,
+        command: &str,
+        args: Vec<String>,
+    ) -> service_command_output::Output {
+        use tokio_stream::StreamExt;
+        let request = tonic::Request::new(ExecuteServiceCommandRequest {
+            command: command.to_string(),
+            args,
+        });
+        let response = svc.execute_service_command(request).await.unwrap();
+        let mut stream = response.into_inner();
+        stream.next().await.unwrap().unwrap().output.unwrap()
+    }
+
     #[tokio::test]
     async fn test_get_command_registry() {
         let service = create_test_service().await;
@@ -502,30 +526,19 @@ mod tests {
     async fn test_execute_pwd() {
         let dir = tempfile::TempDir::new().unwrap();
         let service = create_test_service_with_dir(dir.path()).await;
-        let request = tonic::Request::new(ExecuteServiceCommandRequest {
-            command: "pwd".to_string(),
-            args: vec![],
-        });
-        let response = service.execute_service_command(request).await.unwrap();
-        let mut stream = response.into_inner();
-        use tokio_stream::StreamExt;
-        let first = stream.next().await.unwrap().unwrap();
-        assert!(first.output.is_some());
+        let output = exec_first_output(&service, "pwd", vec![]).await;
+        assert!(matches!(
+            output,
+            service_command_output::Output::StdoutLine(_)
+        ));
     }
 
     #[tokio::test]
     async fn test_execute_unknown_command() {
         let service = create_test_service().await;
-        let request = tonic::Request::new(ExecuteServiceCommandRequest {
-            command: "nonexistent".to_string(),
-            args: vec![],
-        });
-        let response = service.execute_service_command(request).await.unwrap();
-        let mut stream = response.into_inner();
-        use tokio_stream::StreamExt;
-        let first = stream.next().await.unwrap().unwrap();
-        match first.output {
-            Some(service_command_output::Output::Error(msg)) => {
+        let output = exec_first_output(&service, "nonexistent", vec![]).await;
+        match output {
+            service_command_output::Output::Error(msg) => {
                 assert!(msg.contains("Unknown service command"));
             }
             other => panic!("Expected Error output, got {:?}", other),

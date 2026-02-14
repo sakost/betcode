@@ -264,16 +264,7 @@ impl AgentService for AgentProxyService {
         &self,
         request: Request<ListSessionsRequest>,
     ) -> Result<Response<ListSessionsResponse>, Status> {
-        let _claims = extract_claims(&request)?;
-        let machine_id = extract_machine_id(&request)?;
-        let resp = super::grpc_util::forward_unary(
-            &self.router,
-            &machine_id,
-            METHOD_LIST_SESSIONS,
-            &request.into_inner(),
-        )
-        .await?;
-        Ok(Response::new(resp))
+        super::grpc_util::forward_unary_rpc(&self.router, request, METHOD_LIST_SESSIONS).await
     }
 
     #[instrument(skip(self, request), fields(rpc = "ResumeSession"))]
@@ -281,67 +272,8 @@ impl AgentService for AgentProxyService {
         &self,
         request: Request<ResumeSessionRequest>,
     ) -> Result<Response<Self::ResumeSessionStream>, Status> {
-        let _claims = extract_claims(&request)?;
-        let machine_id = extract_machine_id(&request)?;
-        let req = request.into_inner();
-        let request_id = uuid::Uuid::new_v4().to_string();
-        let mut buf = Vec::with_capacity(req.encoded_len());
-        req.encode(&mut buf)
-            .map_err(|e| Status::internal(format!("Encode error: {e}")))?;
-
-        let mut stream_rx = self
-            .router
-            .forward_stream(
-                &machine_id,
-                &request_id,
-                METHOD_RESUME_SESSION,
-                buf,
-                HashMap::new(),
-            )
+        super::grpc_util::forward_stream_rpc(&self.router, request, METHOD_RESUME_SESSION, 128)
             .await
-            .map_err(router_error_to_status)?;
-
-        let (tx, rx) = mpsc::channel::<Result<AgentEvent, Status>>(128);
-        let mid = machine_id;
-        tokio::spawn(async move {
-            while let Some(frame) = stream_rx.recv().await {
-                match FrameType::try_from(frame.frame_type) {
-                    Ok(FrameType::StreamData) => {
-                        if let Some(betcode_proto::v1::tunnel_frame::Payload::StreamData(p)) =
-                            frame.payload
-                        {
-                            let data = p.encrypted.as_ref().map_or(&[][..], |e| &e.ciphertext[..]);
-                            match AgentEvent::decode(data) {
-                                Ok(event) => {
-                                    if tx.send(Ok(event)).await.is_err() {
-                                        break;
-                                    }
-                                }
-                                Err(e) => {
-                                    warn!(error = %e, machine_id = %mid, "Failed to decode AgentEvent in resume");
-                                }
-                            }
-                        }
-                    }
-                    Ok(FrameType::Error) => {
-                        if let Some(betcode_proto::v1::tunnel_frame::Payload::Error(e)) =
-                            frame.payload
-                        {
-                            let _ = tx
-                                .send(Err(Status::internal(format!(
-                                    "Daemon error: {}",
-                                    e.message
-                                ))))
-                                .await;
-                        }
-                        break;
-                    }
-                    _ => {}
-                }
-            }
-            info!(request_id = %request_id, "ResumeSession proxy stream ended");
-        });
-        Ok(Response::new(Box::pin(ReceiverStream::new(rx))))
     }
 
     #[instrument(skip(self, request), fields(rpc = "CompactSession"))]
@@ -349,16 +281,7 @@ impl AgentService for AgentProxyService {
         &self,
         request: Request<CompactSessionRequest>,
     ) -> Result<Response<CompactSessionResponse>, Status> {
-        let _claims = extract_claims(&request)?;
-        let machine_id = extract_machine_id(&request)?;
-        let resp = super::grpc_util::forward_unary(
-            &self.router,
-            &machine_id,
-            METHOD_COMPACT_SESSION,
-            &request.into_inner(),
-        )
-        .await?;
-        Ok(Response::new(resp))
+        super::grpc_util::forward_unary_rpc(&self.router, request, METHOD_COMPACT_SESSION).await
     }
 
     #[instrument(skip(self, request), fields(rpc = "CancelTurn"))]
@@ -366,16 +289,7 @@ impl AgentService for AgentProxyService {
         &self,
         request: Request<CancelTurnRequest>,
     ) -> Result<Response<CancelTurnResponse>, Status> {
-        let _claims = extract_claims(&request)?;
-        let machine_id = extract_machine_id(&request)?;
-        let resp = super::grpc_util::forward_unary(
-            &self.router,
-            &machine_id,
-            METHOD_CANCEL_TURN,
-            &request.into_inner(),
-        )
-        .await?;
-        Ok(Response::new(resp))
+        super::grpc_util::forward_unary_rpc(&self.router, request, METHOD_CANCEL_TURN).await
     }
 
     #[instrument(skip(self, request), fields(rpc = "RequestInputLock"))]
@@ -383,16 +297,7 @@ impl AgentService for AgentProxyService {
         &self,
         request: Request<InputLockRequest>,
     ) -> Result<Response<InputLockResponse>, Status> {
-        let _claims = extract_claims(&request)?;
-        let machine_id = extract_machine_id(&request)?;
-        let resp = super::grpc_util::forward_unary(
-            &self.router,
-            &machine_id,
-            METHOD_REQUEST_INPUT_LOCK,
-            &request.into_inner(),
-        )
-        .await?;
-        Ok(Response::new(resp))
+        super::grpc_util::forward_unary_rpc(&self.router, request, METHOD_REQUEST_INPUT_LOCK).await
     }
 
     #[instrument(skip(self, request), fields(rpc = "ExchangeKeys"))]
@@ -400,16 +305,7 @@ impl AgentService for AgentProxyService {
         &self,
         request: Request<KeyExchangeRequest>,
     ) -> Result<Response<KeyExchangeResponse>, Status> {
-        let _claims = extract_claims(&request)?;
-        let machine_id = extract_machine_id(&request)?;
-        let resp = super::grpc_util::forward_unary(
-            &self.router,
-            &machine_id,
-            METHOD_EXCHANGE_KEYS,
-            &request.into_inner(),
-        )
-        .await?;
-        Ok(Response::new(resp))
+        super::grpc_util::forward_unary_rpc(&self.router, request, METHOD_EXCHANGE_KEYS).await
     }
 
     #[instrument(skip(self, request), fields(rpc = "ListSessionGrants"))]
@@ -417,16 +313,7 @@ impl AgentService for AgentProxyService {
         &self,
         request: Request<ListSessionGrantsRequest>,
     ) -> Result<Response<ListSessionGrantsResponse>, Status> {
-        let _claims = extract_claims(&request)?;
-        let machine_id = extract_machine_id(&request)?;
-        let resp = super::grpc_util::forward_unary(
-            &self.router,
-            &machine_id,
-            METHOD_LIST_SESSION_GRANTS,
-            &request.into_inner(),
-        )
-        .await?;
-        Ok(Response::new(resp))
+        super::grpc_util::forward_unary_rpc(&self.router, request, METHOD_LIST_SESSION_GRANTS).await
     }
 
     #[instrument(skip(self, request), fields(rpc = "ClearSessionGrants"))]
@@ -434,16 +321,8 @@ impl AgentService for AgentProxyService {
         &self,
         request: Request<ClearSessionGrantsRequest>,
     ) -> Result<Response<ClearSessionGrantsResponse>, Status> {
-        let _claims = extract_claims(&request)?;
-        let machine_id = extract_machine_id(&request)?;
-        let resp = super::grpc_util::forward_unary(
-            &self.router,
-            &machine_id,
-            METHOD_CLEAR_SESSION_GRANTS,
-            &request.into_inner(),
-        )
-        .await?;
-        Ok(Response::new(resp))
+        super::grpc_util::forward_unary_rpc(&self.router, request, METHOD_CLEAR_SESSION_GRANTS)
+            .await
     }
 
     #[instrument(skip(self, request), fields(rpc = "SetSessionGrant"))]
@@ -451,16 +330,7 @@ impl AgentService for AgentProxyService {
         &self,
         request: Request<SetSessionGrantRequest>,
     ) -> Result<Response<SetSessionGrantResponse>, Status> {
-        let _claims = extract_claims(&request)?;
-        let machine_id = extract_machine_id(&request)?;
-        let resp = super::grpc_util::forward_unary(
-            &self.router,
-            &machine_id,
-            METHOD_SET_SESSION_GRANT,
-            &request.into_inner(),
-        )
-        .await?;
-        Ok(Response::new(resp))
+        super::grpc_util::forward_unary_rpc(&self.router, request, METHOD_SET_SESSION_GRANT).await
     }
 
     #[instrument(skip(self, request), fields(rpc = "RenameSession"))]
@@ -468,16 +338,7 @@ impl AgentService for AgentProxyService {
         &self,
         request: Request<RenameSessionRequest>,
     ) -> Result<Response<RenameSessionResponse>, Status> {
-        let _claims = extract_claims(&request)?;
-        let machine_id = extract_machine_id(&request)?;
-        let resp = super::grpc_util::forward_unary(
-            &self.router,
-            &machine_id,
-            METHOD_RENAME_SESSION,
-            &request.into_inner(),
-        )
-        .await?;
-        Ok(Response::new(resp))
+        super::grpc_util::forward_unary_rpc(&self.router, request, METHOD_RENAME_SESSION).await
     }
 }
 

@@ -17,8 +17,6 @@ use betcode_proto::methods::{
 };
 
 use crate::router::RequestRouter;
-use crate::server::agent_proxy::extract_machine_id;
-use crate::server::interceptor::extract_claims;
 
 /// Proxies `GitRepoService` calls through the tunnel to a target daemon.
 pub struct GitRepoProxyService {
@@ -38,16 +36,7 @@ impl GitRepoService for GitRepoProxyService {
         &self,
         request: Request<RegisterRepoRequest>,
     ) -> Result<Response<GitRepoDetail>, Status> {
-        let _claims = extract_claims(&request)?;
-        let machine_id = extract_machine_id(&request)?;
-        let resp = super::grpc_util::forward_unary(
-            &self.router,
-            &machine_id,
-            METHOD_REGISTER_REPO,
-            &request.into_inner(),
-        )
-        .await?;
-        Ok(Response::new(resp))
+        super::grpc_util::forward_unary_rpc(&self.router, request, METHOD_REGISTER_REPO).await
     }
 
     #[instrument(skip(self, request), fields(rpc = "UnregisterRepo"))]
@@ -55,16 +44,7 @@ impl GitRepoService for GitRepoProxyService {
         &self,
         request: Request<UnregisterRepoRequest>,
     ) -> Result<Response<UnregisterRepoResponse>, Status> {
-        let _claims = extract_claims(&request)?;
-        let machine_id = extract_machine_id(&request)?;
-        let resp = super::grpc_util::forward_unary(
-            &self.router,
-            &machine_id,
-            METHOD_UNREGISTER_REPO,
-            &request.into_inner(),
-        )
-        .await?;
-        Ok(Response::new(resp))
+        super::grpc_util::forward_unary_rpc(&self.router, request, METHOD_UNREGISTER_REPO).await
     }
 
     #[instrument(skip(self, request), fields(rpc = "ListRepos"))]
@@ -72,16 +52,7 @@ impl GitRepoService for GitRepoProxyService {
         &self,
         request: Request<ListReposRequest>,
     ) -> Result<Response<ListReposResponse>, Status> {
-        let _claims = extract_claims(&request)?;
-        let machine_id = extract_machine_id(&request)?;
-        let resp = super::grpc_util::forward_unary(
-            &self.router,
-            &machine_id,
-            METHOD_LIST_REPOS,
-            &request.into_inner(),
-        )
-        .await?;
-        Ok(Response::new(resp))
+        super::grpc_util::forward_unary_rpc(&self.router, request, METHOD_LIST_REPOS).await
     }
 
     #[instrument(skip(self, request), fields(rpc = "GetRepo"))]
@@ -89,16 +60,7 @@ impl GitRepoService for GitRepoProxyService {
         &self,
         request: Request<GetRepoRequest>,
     ) -> Result<Response<GitRepoDetail>, Status> {
-        let _claims = extract_claims(&request)?;
-        let machine_id = extract_machine_id(&request)?;
-        let resp = super::grpc_util::forward_unary(
-            &self.router,
-            &machine_id,
-            METHOD_GET_REPO,
-            &request.into_inner(),
-        )
-        .await?;
-        Ok(Response::new(resp))
+        super::grpc_util::forward_unary_rpc(&self.router, request, METHOD_GET_REPO).await
     }
 
     #[instrument(skip(self, request), fields(rpc = "UpdateRepo"))]
@@ -106,16 +68,7 @@ impl GitRepoService for GitRepoProxyService {
         &self,
         request: Request<UpdateRepoRequest>,
     ) -> Result<Response<GitRepoDetail>, Status> {
-        let _claims = extract_claims(&request)?;
-        let machine_id = extract_machine_id(&request)?;
-        let resp = super::grpc_util::forward_unary(
-            &self.router,
-            &machine_id,
-            METHOD_UPDATE_REPO,
-            &request.into_inner(),
-        )
-        .await?;
-        Ok(Response::new(resp))
+        super::grpc_util::forward_unary_rpc(&self.router, request, METHOD_UPDATE_REPO).await
     }
 
     #[instrument(skip(self, request), fields(rpc = "ScanRepos"))]
@@ -123,16 +76,7 @@ impl GitRepoService for GitRepoProxyService {
         &self,
         request: Request<ScanReposRequest>,
     ) -> Result<Response<ListReposResponse>, Status> {
-        let _claims = extract_claims(&request)?;
-        let machine_id = extract_machine_id(&request)?;
-        let resp = super::grpc_util::forward_unary(
-            &self.router,
-            &machine_id,
-            METHOD_SCAN_REPOS,
-            &request.into_inner(),
-        )
-        .await?;
-        Ok(Response::new(resp))
+        super::grpc_util::forward_unary_rpc(&self.router, request, METHOD_SCAN_REPOS).await
     }
 }
 

@@ -176,11 +176,29 @@ mod tests {
 
     // -- Permission edit keys --
 
+    /// Create a test app in the given mode with the specified edit buffer and cursor,
+    /// along with a new `mpsc` channel pair. Returns `(app, tx, rx)`.
+    fn make_edit_app(
+        mode: AppMode,
+        buffer: &str,
+        cursor: usize,
+    ) -> (
+        App,
+        mpsc::Sender<AgentRequest>,
+        mpsc::Receiver<AgentRequest>,
+    ) {
+        let mut app = make_app();
+        app.mode = mode;
+        let perm = app.pending_permission.as_mut().unwrap();
+        perm.edit_buffer = buffer.to_string();
+        perm.edit_cursor = cursor;
+        let (tx, rx) = mpsc::channel::<AgentRequest>(8);
+        (app, tx, rx)
+    }
+
     #[tokio::test]
     async fn edit_typing_inserts_chars() {
-        let mut app = make_app();
-        app.mode = AppMode::PermissionComment;
-        let (tx, _rx) = mpsc::channel::<AgentRequest>(8);
+        let (mut app, tx, _rx) = make_edit_app(AppMode::PermissionComment, "", 0);
         for c in "hello".chars() {
             crate::tui::permission_input::handle_permission_edit_key(
                 &mut app,
@@ -196,11 +214,7 @@ mod tests {
 
     #[tokio::test]
     async fn edit_backspace_removes_char() {
-        let mut app = make_app();
-        app.mode = AppMode::PermissionComment;
-        app.pending_permission.as_mut().unwrap().edit_buffer = "abc".to_string();
-        app.pending_permission.as_mut().unwrap().edit_cursor = 3;
-        let (tx, _rx) = mpsc::channel::<AgentRequest>(8);
+        let (mut app, tx, _rx) = make_edit_app(AppMode::PermissionComment, "abc", 3);
         crate::tui::permission_input::handle_permission_edit_key(&mut app, &tx, KeyCode::Backspace)
             .await;
         let perm = app.pending_permission.as_ref().unwrap();
@@ -210,9 +224,7 @@ mod tests {
 
     #[tokio::test]
     async fn edit_esc_returns_to_prompt() {
-        let mut app = make_app();
-        app.mode = AppMode::PermissionComment;
-        let (tx, _rx) = mpsc::channel::<AgentRequest>(8);
+        let (mut app, tx, _rx) = make_edit_app(AppMode::PermissionComment, "", 0);
         crate::tui::permission_input::handle_permission_edit_key(&mut app, &tx, KeyCode::Esc).await;
         assert_eq!(app.mode, AppMode::PermissionPrompt);
         assert!(app.pending_permission.is_some());
@@ -220,11 +232,7 @@ mod tests {
 
     #[tokio::test]
     async fn comment_enter_sends_allow_and_message() {
-        let mut app = make_app();
-        app.mode = AppMode::PermissionComment;
-        app.pending_permission.as_mut().unwrap().edit_buffer = "use caution".to_string();
-        app.pending_permission.as_mut().unwrap().edit_cursor = 11;
-        let (tx, mut rx) = mpsc::channel::<AgentRequest>(8);
+        let (mut app, tx, mut rx) = make_edit_app(AppMode::PermissionComment, "use caution", 11);
         crate::tui::permission_input::handle_permission_edit_key(&mut app, &tx, KeyCode::Enter)
             .await;
 
@@ -243,11 +251,8 @@ mod tests {
 
     #[tokio::test]
     async fn deny_enter_sends_deny_no_interrupt_with_message() {
-        let mut app = make_app();
-        app.mode = AppMode::PermissionDenyMessage;
+        let (mut app, tx, mut rx) = make_edit_app(AppMode::PermissionDenyMessage, "not allowed", 0);
         app.pending_permission.as_mut().unwrap().deny_interrupt = false;
-        app.pending_permission.as_mut().unwrap().edit_buffer = "not allowed".to_string();
-        let (tx, mut rx) = mpsc::channel::<AgentRequest>(8);
         crate::tui::permission_input::handle_permission_edit_key(&mut app, &tx, KeyCode::Enter)
             .await;
         let (d, msg) = extract_decision(&rx.try_recv().unwrap());
@@ -257,11 +262,8 @@ mod tests {
 
     #[tokio::test]
     async fn deny_enter_sends_deny_with_interrupt_and_message() {
-        let mut app = make_app();
-        app.mode = AppMode::PermissionDenyMessage;
+        let (mut app, tx, mut rx) = make_edit_app(AppMode::PermissionDenyMessage, "stop now", 0);
         app.pending_permission.as_mut().unwrap().deny_interrupt = true;
-        app.pending_permission.as_mut().unwrap().edit_buffer = "stop now".to_string();
-        let (tx, mut rx) = mpsc::channel::<AgentRequest>(8);
         crate::tui::permission_input::handle_permission_edit_key(&mut app, &tx, KeyCode::Enter)
             .await;
         let (d, msg) = extract_decision(&rx.try_recv().unwrap());
@@ -271,11 +273,7 @@ mod tests {
 
     #[tokio::test]
     async fn edit_left_right_moves_cursor() {
-        let mut app = make_app();
-        app.mode = AppMode::PermissionComment;
-        app.pending_permission.as_mut().unwrap().edit_buffer = "abc".to_string();
-        app.pending_permission.as_mut().unwrap().edit_cursor = 3;
-        let (tx, _rx) = mpsc::channel::<AgentRequest>(8);
+        let (mut app, tx, _rx) = make_edit_app(AppMode::PermissionComment, "abc", 3);
         crate::tui::permission_input::handle_permission_edit_key(&mut app, &tx, KeyCode::Left)
             .await;
         assert_eq!(app.pending_permission.as_ref().unwrap().edit_cursor, 2);
@@ -286,10 +284,7 @@ mod tests {
 
     #[tokio::test]
     async fn edit_left_clamps_at_zero() {
-        let mut app = make_app();
-        app.mode = AppMode::PermissionComment;
-        app.pending_permission.as_mut().unwrap().edit_cursor = 0;
-        let (tx, _rx) = mpsc::channel::<AgentRequest>(8);
+        let (mut app, tx, _rx) = make_edit_app(AppMode::PermissionComment, "", 0);
         crate::tui::permission_input::handle_permission_edit_key(&mut app, &tx, KeyCode::Left)
             .await;
         assert_eq!(app.pending_permission.as_ref().unwrap().edit_cursor, 0);
@@ -297,11 +292,7 @@ mod tests {
 
     #[tokio::test]
     async fn edit_right_clamps_at_end() {
-        let mut app = make_app();
-        app.mode = AppMode::PermissionComment;
-        app.pending_permission.as_mut().unwrap().edit_buffer = "ab".to_string();
-        app.pending_permission.as_mut().unwrap().edit_cursor = 2;
-        let (tx, _rx) = mpsc::channel::<AgentRequest>(8);
+        let (mut app, tx, _rx) = make_edit_app(AppMode::PermissionComment, "ab", 2);
         crate::tui::permission_input::handle_permission_edit_key(&mut app, &tx, KeyCode::Right)
             .await;
         assert_eq!(app.pending_permission.as_ref().unwrap().edit_cursor, 2);

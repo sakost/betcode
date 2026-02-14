@@ -5,6 +5,34 @@ use betcode_core::db::unix_timestamp;
 use super::db::{Database, DatabaseError};
 use super::models::GitRepoRow;
 
+/// Shared UPDATE statement used by both full and partial repo updates.
+const UPDATE_GIT_REPO_SQL: &str = "UPDATE git_repos SET name = ?, worktree_mode = ?, \
+    local_subfolder = ?, custom_path = ?, setup_script = ?, auto_gitignore = ?, \
+    last_active = ? WHERE id = ?";
+
+/// Bind the common update-repo parameters to `UPDATE_GIT_REPO_SQL`.
+#[allow(clippy::too_many_arguments)]
+fn bind_update_git_repo_params<'q>(
+    name: &'q str,
+    worktree_mode: &'q str,
+    local_subfolder: &'q str,
+    custom_path: Option<&'q str>,
+    setup_script: Option<&'q str>,
+    auto_gitignore: bool,
+    now: i64,
+    id: &'q str,
+) -> sqlx::query::Query<'q, sqlx::Sqlite, sqlx::sqlite::SqliteArguments<'q>> {
+    sqlx::query(UPDATE_GIT_REPO_SQL)
+        .bind(name)
+        .bind(worktree_mode)
+        .bind(local_subfolder)
+        .bind(custom_path)
+        .bind(setup_script)
+        .bind(i64::from(auto_gitignore))
+        .bind(now)
+        .bind(id)
+}
+
 impl Database {
     // =========================================================================
     // GitRepo queries
@@ -107,19 +135,16 @@ impl Database {
     ) -> Result<GitRepoRow, DatabaseError> {
         let now = unix_timestamp();
 
-        sqlx::query(
-            "UPDATE git_repos SET name = ?, worktree_mode = ?, local_subfolder = ?, \
-             custom_path = ?, setup_script = ?, auto_gitignore = ?, last_active = ? \
-             WHERE id = ?",
+        bind_update_git_repo_params(
+            name,
+            worktree_mode,
+            local_subfolder,
+            custom_path,
+            setup_script,
+            auto_gitignore,
+            now,
+            id,
         )
-        .bind(name)
-        .bind(worktree_mode)
-        .bind(local_subfolder)
-        .bind(custom_path)
-        .bind(setup_script)
-        .bind(i64::from(auto_gitignore))
-        .bind(now)
-        .bind(id)
         .execute(self.pool())
         .await?;
 
@@ -166,19 +191,9 @@ impl Database {
         let final_ag = auto_gitignore.unwrap_or(existing.auto_gitignore != 0);
         let now = unix_timestamp();
 
-        sqlx::query(
-            "UPDATE git_repos SET name = ?, worktree_mode = ?, local_subfolder = ?, \
-             custom_path = ?, setup_script = ?, auto_gitignore = ?, last_active = ? \
-             WHERE id = ?",
+        bind_update_git_repo_params(
+            final_name, final_wt, final_sub, final_cp, final_ss, final_ag, now, id,
         )
-        .bind(final_name)
-        .bind(final_wt)
-        .bind(final_sub)
-        .bind(final_cp)
-        .bind(final_ss)
-        .bind(i64::from(final_ag))
-        .bind(now)
-        .bind(id)
         .execute(&mut *tx)
         .await?;
 
@@ -276,6 +291,34 @@ impl Database {
 mod tests {
     use crate::storage::Database;
 
+    /// Create a simple git repo with sensible defaults for testing.
+    async fn create_test_repo(
+        db: &Database,
+        id: &str,
+        name: &str,
+        path: &str,
+    ) -> super::GitRepoRow {
+        db.create_git_repo(id, name, path, "global", ".worktree", None, None, true)
+            .await
+            .unwrap()
+    }
+
+    /// Seed two repos ("ra", "rb") with 3 worktrees: 2 for "ra" and 1 for "rb".
+    async fn seed_repos_and_worktrees(db: &Database) {
+        create_test_repo(db, "ra", "repo-a", "/repo-a").await;
+        create_test_repo(db, "rb", "repo-b", "/repo-b").await;
+
+        db.create_worktree("wt1", "feat1", "/tmp/wt1", "feat1", "ra", None)
+            .await
+            .unwrap();
+        db.create_worktree("wt2", "feat2", "/tmp/wt2", "feat2", "ra", None)
+            .await
+            .unwrap();
+        db.create_worktree("wt3", "feat3", "/tmp/wt3", "feat3", "rb", None)
+            .await
+            .unwrap();
+    }
+
     #[tokio::test]
     async fn create_and_get_git_repo() {
         let db = Database::open_in_memory().await.unwrap();
@@ -324,9 +367,7 @@ mod tests {
     #[tokio::test]
     async fn list_repos() {
         let db = Database::open_in_memory().await.unwrap();
-        db.create_git_repo("r1", "a", "/a", "global", ".worktree", None, None, true)
-            .await
-            .unwrap();
+        create_test_repo(&db, "r1", "a", "/a").await;
         db.create_git_repo("r2", "b", "/b", "local", ".wt", None, None, false)
             .await
             .unwrap();
@@ -438,18 +479,7 @@ mod tests {
     #[tokio::test]
     async fn duplicate_repo_path_fails() {
         let db = Database::open_in_memory().await.unwrap();
-        db.create_git_repo(
-            "r1",
-            "a",
-            "/same/path",
-            "global",
-            ".worktree",
-            None,
-            None,
-            true,
-        )
-        .await
-        .unwrap();
+        create_test_repo(&db, "r1", "a", "/same/path").await;
         let result = db
             .create_git_repo(
                 "r2",
@@ -468,40 +498,7 @@ mod tests {
     #[tokio::test]
     async fn count_worktrees_for_repo() {
         let db = Database::open_in_memory().await.unwrap();
-        db.create_git_repo(
-            "ra",
-            "repo-a",
-            "/repo-a",
-            "global",
-            ".worktree",
-            None,
-            None,
-            true,
-        )
-        .await
-        .unwrap();
-        db.create_git_repo(
-            "rb",
-            "repo-b",
-            "/repo-b",
-            "global",
-            ".worktree",
-            None,
-            None,
-            true,
-        )
-        .await
-        .unwrap();
-
-        db.create_worktree("wt1", "feat1", "/tmp/wt1", "feat1", "ra", None)
-            .await
-            .unwrap();
-        db.create_worktree("wt2", "feat2", "/tmp/wt2", "feat2", "ra", None)
-            .await
-            .unwrap();
-        db.create_worktree("wt3", "feat3", "/tmp/wt3", "feat3", "rb", None)
-            .await
-            .unwrap();
+        seed_repos_and_worktrees(&db).await;
 
         assert_eq!(db.count_worktrees_for_repo("ra").await.unwrap(), 2);
         assert_eq!(db.count_worktrees_for_repo("rb").await.unwrap(), 1);
@@ -513,14 +510,10 @@ mod tests {
         let db = Database::open_in_memory().await.unwrap();
         assert_eq!(db.count_git_repos().await.unwrap(), 0);
 
-        db.create_git_repo("r1", "a", "/a", "global", ".worktree", None, None, true)
-            .await
-            .unwrap();
+        create_test_repo(&db, "r1", "a", "/a").await;
         assert_eq!(db.count_git_repos().await.unwrap(), 1);
 
-        db.create_git_repo("r2", "b", "/b", "global", ".worktree", None, None, true)
-            .await
-            .unwrap();
+        create_test_repo(&db, "r2", "b", "/b").await;
         assert_eq!(db.count_git_repos().await.unwrap(), 2);
     }
 
@@ -563,54 +556,9 @@ mod tests {
         let counts = db.count_worktrees_by_repo().await.unwrap();
         assert!(counts.is_empty());
 
-        // Create 2 repos
-        db.create_git_repo(
-            "ra",
-            "repo-a",
-            "/repo-a",
-            "global",
-            ".worktree",
-            None,
-            None,
-            true,
-        )
-        .await
-        .unwrap();
-        db.create_git_repo(
-            "rb",
-            "repo-b",
-            "/repo-b",
-            "global",
-            ".worktree",
-            None,
-            None,
-            true,
-        )
-        .await
-        .unwrap();
-        db.create_git_repo(
-            "rc",
-            "repo-c",
-            "/repo-c",
-            "global",
-            ".worktree",
-            None,
-            None,
-            true,
-        )
-        .await
-        .unwrap();
-
-        // Add 2 worktrees to repo-a, 1 to repo-b, none to repo-c
-        db.create_worktree("wt1", "feat1", "/tmp/wt1", "feat1", "ra", None)
-            .await
-            .unwrap();
-        db.create_worktree("wt2", "feat2", "/tmp/wt2", "feat2", "ra", None)
-            .await
-            .unwrap();
-        db.create_worktree("wt3", "feat3", "/tmp/wt3", "feat3", "rb", None)
-            .await
-            .unwrap();
+        // Seed 2 repos + 3 worktrees, plus an extra repo with no worktrees
+        seed_repos_and_worktrees(&db).await;
+        create_test_repo(&db, "rc", "repo-c", "/repo-c").await;
 
         let counts = db.count_worktrees_by_repo().await.unwrap();
         assert_eq!(counts.get("ra").copied(), Some(2));

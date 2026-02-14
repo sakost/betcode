@@ -222,21 +222,28 @@ impl PendingManager {
 mod tests {
     use super::*;
 
+    /// Create a `PendingRequestParams` with sensible test defaults.
+    fn test_params(request_id: &str, session_id: &str, tool_name: &str) -> PendingRequestParams {
+        PendingRequestParams {
+            request_id: request_id.to_string(),
+            session_id: session_id.to_string(),
+            tool_name: tool_name.to_string(),
+            description: String::new(),
+            input_json: "{}".to_string(),
+            target_client: None,
+            client_connected: true,
+        }
+    }
+
     #[tokio::test]
     async fn create_pending_request() {
         let manager = PendingManager::with_defaults();
 
-        let request = manager
-            .create(PendingRequestParams {
-                request_id: "req-1".to_string(),
-                session_id: "session-1".to_string(),
-                tool_name: "Bash".to_string(),
-                description: "Run ls command".to_string(),
-                input_json: r#"{"command": "ls"}"#.to_string(),
-                target_client: Some("client-1".to_string()),
-                client_connected: true,
-            })
-            .await;
+        let mut params = test_params("req-1", "session-1", "Bash");
+        params.description = "Run ls command".to_string();
+        params.input_json = r#"{"command": "ls"}"#.to_string();
+        params.target_client = Some("client-1".to_string());
+        let request = manager.create(params).await;
 
         assert_eq!(request.request_id, "req-1");
         assert!(request.client_connected);
@@ -248,15 +255,7 @@ mod tests {
         let manager = PendingManager::with_defaults();
 
         manager
-            .create(PendingRequestParams {
-                request_id: "req-1".to_string(),
-                session_id: "session-1".to_string(),
-                tool_name: "Bash".to_string(),
-                description: "desc".to_string(),
-                input_json: "{}".to_string(),
-                target_client: None,
-                client_connected: true,
-            })
+            .create(test_params("req-1", "session-1", "Bash"))
             .await;
 
         assert!(manager.contains("req-1").await);
@@ -270,37 +269,13 @@ mod tests {
         let manager = PendingManager::with_defaults();
 
         manager
-            .create(PendingRequestParams {
-                request_id: "req-1".to_string(),
-                session_id: "session-1".to_string(),
-                tool_name: "Bash".to_string(),
-                description: String::new(),
-                input_json: "{}".to_string(),
-                target_client: None,
-                client_connected: true,
-            })
+            .create(test_params("req-1", "session-1", "Bash"))
             .await;
         manager
-            .create(PendingRequestParams {
-                request_id: "req-2".to_string(),
-                session_id: "session-1".to_string(),
-                tool_name: "Write".to_string(),
-                description: String::new(),
-                input_json: "{}".to_string(),
-                target_client: None,
-                client_connected: true,
-            })
+            .create(test_params("req-2", "session-1", "Write"))
             .await;
         manager
-            .create(PendingRequestParams {
-                request_id: "req-3".to_string(),
-                session_id: "session-2".to_string(),
-                tool_name: "Edit".to_string(),
-                description: String::new(),
-                input_json: "{}".to_string(),
-                target_client: None,
-                client_connected: true,
-            })
+            .create(test_params("req-3", "session-2", "Edit"))
             .await;
 
         let session1_requests = manager.get_for_session("session-1").await;
@@ -316,15 +291,7 @@ mod tests {
         let manager = PendingManager::new(config);
 
         manager
-            .create(PendingRequestParams {
-                request_id: "req-1".to_string(),
-                session_id: "session-1".to_string(),
-                tool_name: "Bash".to_string(),
-                description: String::new(),
-                input_json: "{}".to_string(),
-                target_client: None,
-                client_connected: true,
-            })
+            .create(test_params("req-1", "session-1", "Bash"))
             .await;
 
         // Wait for expiry

@@ -45,6 +45,20 @@ impl AgentServiceImpl {
     }
 }
 
+impl AgentServiceImpl {
+    /// Look up a session handle from the relay, returning a gRPC `NOT_FOUND`
+    /// status if the session is not currently active.
+    async fn require_session_handle(
+        &self,
+        session_id: &str,
+    ) -> Result<crate::relay::RelayHandle, Status> {
+        self.relay
+            .get_handle(session_id)
+            .await
+            .ok_or_else(|| Status::not_found(format!("Session {session_id} not active")))
+    }
+}
+
 type AgentEventStream = Pin<Box<dyn Stream<Item = Result<AgentEvent, Status>> + Send>>;
 
 #[tonic::async_trait]
@@ -329,11 +343,7 @@ impl AgentService for AgentServiceImpl {
         request: Request<ListSessionGrantsRequest>,
     ) -> Result<Response<ListSessionGrantsResponse>, Status> {
         let req = request.into_inner();
-        let handle = self
-            .relay
-            .get_handle(&req.session_id)
-            .await
-            .ok_or_else(|| Status::not_found(format!("Session {} not active", req.session_id)))?;
+        let handle = self.require_session_handle(&req.session_id).await?;
 
         let entries = handle.list_grants().await;
         Ok(Response::new(ListSessionGrantsResponse { grants: entries }))
@@ -345,11 +355,7 @@ impl AgentService for AgentServiceImpl {
         request: Request<ClearSessionGrantsRequest>,
     ) -> Result<Response<ClearSessionGrantsResponse>, Status> {
         let req = request.into_inner();
-        let handle = self
-            .relay
-            .get_handle(&req.session_id)
-            .await
-            .ok_or_else(|| Status::not_found(format!("Session {} not active", req.session_id)))?;
+        let handle = self.require_session_handle(&req.session_id).await?;
 
         handle.clear_grants(&req.tool_name).await;
         if req.tool_name.is_empty() {
@@ -370,11 +376,7 @@ impl AgentService for AgentServiceImpl {
         if req.tool_name.is_empty() {
             return Err(Status::invalid_argument("tool_name must not be empty"));
         }
-        let handle = self
-            .relay
-            .get_handle(&req.session_id)
-            .await
-            .ok_or_else(|| Status::not_found(format!("Session {} not active", req.session_id)))?;
+        let handle = self.require_session_handle(&req.session_id).await?;
 
         handle.set_grant(req.tool_name.clone(), req.granted).await;
         info!(
@@ -421,32 +423,21 @@ use betcode_core::db::base64_decode;
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::subprocess::SubprocessManager;
+
+    /// Build a minimal `AgentServiceImpl` backed by an in-memory DB.
+    async fn test_agent_service() -> AgentServiceImpl {
+        let tc = crate::testutil::test_components().await;
+        AgentServiceImpl::new(tc.db, tc.relay, tc.multiplexer)
+    }
 
     #[tokio::test]
     async fn agent_service_creation() {
-        let db = Database::open_in_memory().await.unwrap();
-        let subprocess_mgr = Arc::new(SubprocessManager::new(5));
-        let multiplexer = Arc::new(SessionMultiplexer::with_defaults());
-        let relay = Arc::new(SessionRelay::new(
-            subprocess_mgr,
-            Arc::clone(&multiplexer),
-            db.clone(),
-        ));
-        let _service = AgentServiceImpl::new(db, relay, multiplexer);
+        let _service = test_agent_service().await;
     }
 
     #[tokio::test]
     async fn exchange_keys_returns_unimplemented() {
-        let db = Database::open_in_memory().await.unwrap();
-        let subprocess_mgr = Arc::new(SubprocessManager::new(5));
-        let multiplexer = Arc::new(SessionMultiplexer::with_defaults());
-        let relay = Arc::new(SessionRelay::new(
-            subprocess_mgr,
-            Arc::clone(&multiplexer),
-            db.clone(),
-        ));
-        let service = AgentServiceImpl::new(db, relay, multiplexer);
+        let service = test_agent_service().await;
 
         let req = Request::new(KeyExchangeRequest {
             machine_id: "m1".into(),

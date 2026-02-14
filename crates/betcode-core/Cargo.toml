@@ -15,6 +15,7 @@ nucleo-matcher.workspace = true
 regex.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
+tracing-subscriber.workspace = true
 
 [dev-dependencies]
 cargo-husky.workspace = true

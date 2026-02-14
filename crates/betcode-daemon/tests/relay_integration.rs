@@ -5,24 +5,23 @@
 //! Tests the full flow: handler → relay → multiplexer → DB,
 //! without spawning real Claude subprocesses.
 
-use std::sync::Arc;
-
-use betcode_daemon::relay::SessionRelay;
 use betcode_daemon::session::SessionMultiplexer;
 use betcode_daemon::storage::{Database, SessionStatus};
-use betcode_daemon::subprocess::SubprocessManager;
+use betcode_daemon::testutil;
 
-/// Helper to create test components with in-memory DB.
-async fn test_components() -> (Database, Arc<SessionRelay>, Arc<SessionMultiplexer>) {
-    let db = Database::open_in_memory().await.unwrap();
-    let subprocess_mgr = Arc::new(SubprocessManager::new(5));
-    let multiplexer = Arc::new(SessionMultiplexer::with_defaults());
-    let relay = Arc::new(SessionRelay::new(
-        subprocess_mgr,
-        Arc::clone(&multiplexer),
-        db.clone(),
-    ));
-    (db, relay, multiplexer)
+/// Build a minimal `AgentEvent` with a `TextDelta` payload (for testing broadcasts).
+fn text_delta_event(text: &str, is_complete: bool) -> betcode_proto::v1::AgentEvent {
+    betcode_proto::v1::AgentEvent {
+        sequence: 0,
+        timestamp: None,
+        parent_tool_use_id: String::new(),
+        event: Some(betcode_proto::v1::agent_event::Event::TextDelta(
+            betcode_proto::v1::TextDelta {
+                text: text.into(),
+                is_complete,
+            },
+        )),
+    }
 }
 
 // =========================================================================
@@ -144,22 +143,24 @@ async fn message_fk_requires_session() {
 
 #[tokio::test]
 async fn relay_send_requires_active_session() {
-    let (_db, relay, _mux) = test_components().await;
-    assert!(relay
+    let tc = testutil::test_components().await;
+    assert!(tc
+        .relay
         .send_user_message("missing", "hello", None)
         .await
         .is_err());
-    assert!(relay
+    assert!(tc
+        .relay
         .send_permission_response("missing", "r1", true, &serde_json::json!({}))
         .await
         .is_err());
-    assert!(relay.send_raw_stdin("missing", "{}").await.is_err());
+    assert!(tc.relay.send_raw_stdin("missing", "{}").await.is_err());
 }
 
 #[tokio::test]
 async fn relay_cancel_nonexistent_returns_false() {
-    let (_db, relay, _mux) = test_components().await;
-    assert!(!relay.cancel_session("missing").await.unwrap());
+    let tc = testutil::test_components().await;
+    assert!(!tc.relay.cancel_session("missing").await.unwrap());
 }
 
 // =========================================================================
@@ -173,19 +174,7 @@ async fn event_forwarder_assigns_sequences() {
     let fwd = mux.create_event_forwarder("s1".to_string());
 
     for _ in 0..3 {
-        fwd.send(betcode_proto::v1::AgentEvent {
-            sequence: 0,
-            timestamp: None,
-            parent_tool_use_id: String::new(),
-            event: Some(betcode_proto::v1::agent_event::Event::TextDelta(
-                betcode_proto::v1::TextDelta {
-                    text: "x".into(),
-                    is_complete: false,
-                },
-            )),
-        })
-        .await
-        .unwrap();
+        fwd.send(text_delta_event("x", false)).await.unwrap();
     }
 
     tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
@@ -201,21 +190,7 @@ async fn multiple_clients_receive_broadcast() {
     let mut h1 = mux.subscribe("s1", "c1", "cli").await.unwrap();
     let mut h2 = mux.subscribe("s1", "c2", "flutter").await.unwrap();
 
-    mux.broadcast(
-        "s1",
-        betcode_proto::v1::AgentEvent {
-            sequence: 0,
-            timestamp: None,
-            parent_tool_use_id: String::new(),
-            event: Some(betcode_proto::v1::agent_event::Event::TextDelta(
-                betcode_proto::v1::TextDelta {
-                    text: "shared".into(),
-                    is_complete: true,
-                },
-            )),
-        },
-    )
-    .await;
+    mux.broadcast("s1", text_delta_event("shared", true)).await;
 
     let e1 = h1.event_rx.try_recv().unwrap();
     let e2 = h2.event_rx.try_recv().unwrap();

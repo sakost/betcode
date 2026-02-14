@@ -4,7 +4,7 @@
 
 use std::io::{self, Write};
 
-use tonic::transport::{Certificate, Channel, ClientTlsConfig};
+use tonic::transport::Channel;
 use tonic::Request;
 
 use betcode_proto::v1::machine_service_client::MachineServiceClient;
@@ -14,6 +14,7 @@ use betcode_proto::v1::{
 
 use crate::auth_cmd;
 use crate::config::CliConfig;
+use crate::relay::relay_channel;
 
 /// Machine subcommand actions.
 #[derive(clap::Subcommand, Debug)]
@@ -73,23 +74,7 @@ async fn connect_relay(config: &CliConfig) -> anyhow::Result<Channel> {
         .relay_url
         .as_ref()
         .ok_or_else(|| anyhow::anyhow!("No relay URL configured. Use --relay <url>"))?;
-    let mut endpoint = Channel::from_shared(relay_url.clone())?;
-    if relay_url.starts_with("https://") {
-        let mut tls_config = ClientTlsConfig::new().with_enabled_roots();
-        if let Some(ca_path) = &config.relay_ca_cert {
-            let ca_pem = std::fs::read_to_string(ca_path).map_err(|e| {
-                anyhow::anyhow!("Failed to read CA cert {}: {}", ca_path.display(), e)
-            })?;
-            tls_config = tls_config.ca_certificate(Certificate::from_pem(ca_pem));
-        }
-        endpoint = endpoint
-            .tls_config(tls_config)
-            .map_err(|e| anyhow::anyhow!("TLS config error: {e}"))?;
-    }
-    endpoint
-        .connect()
-        .await
-        .map_err(|e| anyhow::anyhow!("Failed to connect to relay: {e}"))
+    relay_channel(relay_url, config.relay_ca_cert.as_deref()).await
 }
 
 async fn register(config: &CliConfig, id: Option<String>, name: &str) -> anyhow::Result<()> {

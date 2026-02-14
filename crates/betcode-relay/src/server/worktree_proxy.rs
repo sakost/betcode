@@ -16,8 +16,6 @@ use betcode_proto::methods::{
 };
 
 use crate::router::RequestRouter;
-use crate::server::agent_proxy::extract_machine_id;
-use crate::server::interceptor::extract_claims;
 
 /// Proxies `WorktreeService` calls through the tunnel to a target daemon.
 pub struct WorktreeProxyService {
@@ -37,16 +35,7 @@ impl WorktreeService for WorktreeProxyService {
         &self,
         request: Request<CreateWorktreeRequest>,
     ) -> Result<Response<WorktreeDetail>, Status> {
-        let _claims = extract_claims(&request)?;
-        let machine_id = extract_machine_id(&request)?;
-        let resp = super::grpc_util::forward_unary(
-            &self.router,
-            &machine_id,
-            METHOD_CREATE_WORKTREE,
-            &request.into_inner(),
-        )
-        .await?;
-        Ok(Response::new(resp))
+        super::grpc_util::forward_unary_rpc(&self.router, request, METHOD_CREATE_WORKTREE).await
     }
 
     #[instrument(skip(self, request), fields(rpc = "RemoveWorktree"))]
@@ -54,16 +43,7 @@ impl WorktreeService for WorktreeProxyService {
         &self,
         request: Request<RemoveWorktreeRequest>,
     ) -> Result<Response<RemoveWorktreeResponse>, Status> {
-        let _claims = extract_claims(&request)?;
-        let machine_id = extract_machine_id(&request)?;
-        let resp = super::grpc_util::forward_unary(
-            &self.router,
-            &machine_id,
-            METHOD_REMOVE_WORKTREE,
-            &request.into_inner(),
-        )
-        .await?;
-        Ok(Response::new(resp))
+        super::grpc_util::forward_unary_rpc(&self.router, request, METHOD_REMOVE_WORKTREE).await
     }
 
     #[instrument(skip(self, request), fields(rpc = "ListWorktrees"))]
@@ -71,16 +51,7 @@ impl WorktreeService for WorktreeProxyService {
         &self,
         request: Request<ListWorktreesRequest>,
     ) -> Result<Response<ListWorktreesResponse>, Status> {
-        let _claims = extract_claims(&request)?;
-        let machine_id = extract_machine_id(&request)?;
-        let resp = super::grpc_util::forward_unary(
-            &self.router,
-            &machine_id,
-            METHOD_LIST_WORKTREES,
-            &request.into_inner(),
-        )
-        .await?;
-        Ok(Response::new(resp))
+        super::grpc_util::forward_unary_rpc(&self.router, request, METHOD_LIST_WORKTREES).await
     }
 
     #[instrument(skip(self, request), fields(rpc = "GetWorktree"))]
@@ -88,16 +59,7 @@ impl WorktreeService for WorktreeProxyService {
         &self,
         request: Request<GetWorktreeRequest>,
     ) -> Result<Response<WorktreeDetail>, Status> {
-        let _claims = extract_claims(&request)?;
-        let machine_id = extract_machine_id(&request)?;
-        let resp = super::grpc_util::forward_unary(
-            &self.router,
-            &machine_id,
-            METHOD_GET_WORKTREE,
-            &request.into_inner(),
-        )
-        .await?;
-        Ok(Response::new(resp))
+        super::grpc_util::forward_unary_rpc(&self.router, request, METHOD_GET_WORKTREE).await
     }
 }
 

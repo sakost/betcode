@@ -120,9 +120,21 @@ mod tests {
     use ratatui::backend::TestBackend;
     use ratatui::Terminal;
 
+    /// Draw the status panel with the given info on a 60x20 test terminal.
+    /// Panics if rendering fails.
+    fn draw_status(info: &SessionStatusInfo) {
+        let backend = TestBackend::new(60, 20);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal
+            .draw(|f| {
+                render_status_panel(f, f.area(), info);
+            })
+            .unwrap();
+    }
+
     #[test]
     fn test_status_panel_render() {
-        let info = SessionStatusInfo {
+        draw_status(&SessionStatusInfo {
             cwd: "/home/user/project".to_string(),
             session_id: "sess-abc123".to_string(),
             connection: "local".to_string(),
@@ -131,14 +143,7 @@ mod tests {
             pending_permissions: 0,
             worktree: Some("feature/auth".to_string()),
             uptime_secs: 3600,
-        };
-        let backend = TestBackend::new(60, 20);
-        let mut terminal = Terminal::new(backend).unwrap();
-        terminal
-            .draw(|f| {
-                render_status_panel(f, f.area(), &info);
-            })
-            .unwrap();
+        });
         // Just verify it doesn't panic - detailed content checking is brittle
     }
 
@@ -152,7 +157,7 @@ mod tests {
 
     #[test]
     fn test_status_panel_without_worktree() {
-        let info = SessionStatusInfo {
+        draw_status(&SessionStatusInfo {
             cwd: "/tmp".to_string(),
             session_id: "s1".to_string(),
             connection: "relay".to_string(),
@@ -161,13 +166,6 @@ mod tests {
             pending_permissions: 1,
             worktree: None,
             uptime_secs: 120,
-        };
-        let backend = TestBackend::new(60, 20);
-        let mut terminal = Terminal::new(backend).unwrap();
-        terminal
-            .draw(|f| {
-                render_status_panel(f, f.area(), &info);
-            })
-            .unwrap();
+        });
     }
 }

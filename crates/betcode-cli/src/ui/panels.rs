@@ -10,6 +10,25 @@ use super::render::compute_wrapped_cursor;
 use crate::app::{App, AppMode};
 use crate::tui::fingerprint_panel::FingerprintPrompt;
 
+/// Render a bordered panel with the given title, border color, and lines of content.
+fn render_bordered_panel(
+    frame: &mut Frame<'_>,
+    area: Rect,
+    title: &str,
+    border_color: Color,
+    lines: Vec<Line<'_>>,
+) {
+    let panel = Paragraph::new(lines)
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title(title)
+                .style(Style::default().fg(border_color)),
+        )
+        .wrap(Wrap { trim: false });
+    frame.render_widget(panel, area);
+}
+
 /// Draw the permission action panel (Y/A/Tab/N/X) replacing the input area.
 #[allow(clippy::too_many_lines)]
 pub fn draw_permission_panel(frame: &mut Frame<'_>, app: &App, area: Rect) {
@@ -217,16 +236,7 @@ pub fn draw_question_panel(frame: &mut Frame<'_>, app: &App, area: Rect) {
         "Question"
     };
 
-    let panel = Paragraph::new(lines)
-        .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .title(title)
-                .style(Style::default().fg(Color::White)),
-        )
-        .wrap(Wrap { trim: false });
-
-    frame.render_widget(panel, area);
+    render_bordered_panel(frame, area, title, Color::White, lines);
 }
 
 /// Draw the fingerprint verification panel.
@@ -313,24 +323,11 @@ pub fn draw_fingerprint_panel(frame: &mut Frame<'_>, prompt: &FingerprintPrompt,
         )));
     }
 
-    let title = if prompt.needs_action() {
-        "FINGERPRINT MISMATCH"
+    let (title, border_color) = if prompt.needs_action() {
+        ("FINGERPRINT MISMATCH", Color::Red)
     } else {
-        "Daemon Fingerprint"
+        ("Daemon Fingerprint", Color::White)
     };
 
-    let panel = Paragraph::new(lines)
-        .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .title(title)
-                .style(Style::default().fg(if prompt.needs_action() {
-                    Color::Red
-                } else {
-                    Color::White
-                })),
-        )
-        .wrap(Wrap { trim: false });
-
-    frame.render_widget(panel, area);
+    render_bordered_panel(frame, area, title, border_color, lines);
 }

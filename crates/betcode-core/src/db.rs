@@ -1,9 +1,16 @@
 //! Shared database types and utilities.
 //!
-//! Provides `DatabaseError`, `unix_timestamp()`, and base64 encode/decode
-//! used by both betcode-daemon and betcode-relay storage layers.
+//! Provides `DatabaseError`, `unix_timestamp()`, pool creation helpers,
+//! and base64 encode/decode used by both betcode-daemon and betcode-relay
+//! storage layers.
 
+use std::path::Path;
+use std::str::FromStr;
 use std::time::{SystemTime, UNIX_EPOCH};
+
+use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
+use sqlx::{Pool, Sqlite};
+use tracing::info;
 
 /// Database errors shared across daemon and relay.
 #[derive(Debug, thiserror::Error)]
@@ -30,6 +37,48 @@ impl From<sqlx::Error> for DatabaseError {
     }
 }
 
+/// Open (or create) a `SQLite` connection pool at the given file path.
+///
+/// Creates the parent directory if it does not exist, enables WAL journal
+/// mode, foreign keys, and sets a 5-second busy timeout.
+pub async fn open_pool(path: &Path) -> Result<Pool<Sqlite>, DatabaseError> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| DatabaseError::Io(e.to_string()))?;
+    }
+
+    let options = SqliteConnectOptions::from_str(&format!("sqlite:{}?mode=rwc", path.display()))
+        .map_err(|e| DatabaseError::Connection(e.to_string()))?
+        .journal_mode(sqlx::sqlite::SqliteJournalMode::Wal)
+        .foreign_keys(true)
+        .busy_timeout(std::time::Duration::from_secs(5));
+
+    let pool = SqlitePoolOptions::new()
+        .max_connections(5)
+        .connect_with(options)
+        .await
+        .map_err(|e| DatabaseError::Connection(e.to_string()))?;
+
+    info!(path = %path.display(), "Database opened");
+
+    Ok(pool)
+}
+
+/// Open an in-memory `SQLite` connection pool (for testing).
+pub async fn open_pool_in_memory() -> Result<Pool<Sqlite>, DatabaseError> {
+    let options = SqliteConnectOptions::from_str("sqlite::memory:")
+        .map_err(|e| DatabaseError::Connection(e.to_string()))?
+        .journal_mode(sqlx::sqlite::SqliteJournalMode::Wal)
+        .foreign_keys(true);
+
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect_with(options)
+        .await
+        .map_err(|e| DatabaseError::Connection(e.to_string()))?;
+
+    Ok(pool)
+}
+
 /// Returns the current time as a Unix timestamp (seconds since epoch).
 #[allow(clippy::cast_possible_wrap)]
 pub fn unix_timestamp() -> i64 {
@@ -37,6 +86,67 @@ pub fn unix_timestamp() -> i64 {
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_secs() as i64
+}
+
+/// Macro to define a `Database`-like struct with `open`, `open_in_memory`,
+/// `run_migrations`, and `pool` methods.
+///
+/// Usage:
+/// ```ignore
+/// betcode_core::define_database!(Database, "Database migrations complete");
+/// betcode_core::define_database!(RelayDatabase, "Relay database migrations complete");
+/// ```
+///
+/// The generated struct has:
+/// - `pub async fn open(path: &Path) -> Result<Self, DatabaseError>`
+/// - `pub async fn open_in_memory() -> Result<Self, DatabaseError>`
+/// - `async fn run_migrations(&self) -> Result<(), DatabaseError>`
+/// - `pub const fn pool(&self) -> &Pool<Sqlite>`
+#[macro_export]
+macro_rules! define_database {
+    ($name:ident, $migration_msg:expr) => {
+        #[derive(Clone)]
+        pub struct $name {
+            pool: ::sqlx::Pool<::sqlx::Sqlite>,
+        }
+
+        impl $name {
+            /// Open or create a database at the given path.
+            pub async fn open(
+                path: &::std::path::Path,
+            ) -> ::std::result::Result<Self, $crate::db::DatabaseError> {
+                let pool = $crate::db::open_pool(path).await?;
+                let db = Self { pool };
+                db.run_migrations().await?;
+                Ok(db)
+            }
+
+            /// Open an in-memory database (for testing).
+            pub async fn open_in_memory() -> ::std::result::Result<Self, $crate::db::DatabaseError>
+            {
+                let pool = $crate::db::open_pool_in_memory().await?;
+                let db = Self { pool };
+                db.run_migrations().await?;
+                Ok(db)
+            }
+
+            /// Run database migrations.
+            async fn run_migrations(&self) -> ::std::result::Result<(), $crate::db::DatabaseError> {
+                ::sqlx::migrate!("./migrations")
+                    .run(&self.pool)
+                    .await
+                    .map_err(|e| $crate::db::DatabaseError::Migration(e.to_string()))?;
+
+                ::tracing::info!($migration_msg);
+                Ok(())
+            }
+
+            /// Get a reference to the connection pool.
+            pub const fn pool(&self) -> &::sqlx::Pool<::sqlx::Sqlite> {
+                &self.pool
+            }
+        }
+    };
 }
 
 /// Simple base64 encoding (no external dependency needed).

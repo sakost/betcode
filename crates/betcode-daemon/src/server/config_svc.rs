@@ -111,16 +111,28 @@ mod tests {
         ConfigServiceImpl::new(ServerConfig::default())
     }
 
+    /// Build a `GetSettingsRequest` for the given scope.
+    fn settings_request(scope: &str) -> Request<GetSettingsRequest> {
+        Request::new(GetSettingsRequest {
+            scope: scope.to_string(),
+        })
+    }
+
+    /// Fetch `DaemonSettings` from a `ConfigServiceImpl`.
+    async fn get_daemon_settings(svc: &ConfigServiceImpl) -> DaemonSettings {
+        svc.get_settings(settings_request(""))
+            .await
+            .unwrap()
+            .into_inner()
+            .daemon
+            .unwrap()
+    }
+
     #[tokio::test]
     async fn get_settings_returns_defaults() {
         let svc = test_service();
 
-        let resp = svc
-            .get_settings(Request::new(GetSettingsRequest {
-                scope: String::new(),
-            }))
-            .await
-            .unwrap();
+        let resp = svc.get_settings(settings_request("")).await.unwrap();
 
         let settings = resp.into_inner();
 
@@ -153,12 +165,7 @@ mod tests {
     async fn get_settings_scope_is_ignored() {
         let svc = test_service();
 
-        let resp = svc
-            .get_settings(Request::new(GetSettingsRequest {
-                scope: "user".into(),
-            }))
-            .await
-            .unwrap();
+        let resp = svc.get_settings(settings_request("user")).await.unwrap();
 
         // Should still return defaults regardless of scope
         let settings = resp.into_inner();
@@ -173,14 +180,7 @@ mod tests {
         let config = ServerConfig::tcp(addr);
         let svc = ConfigServiceImpl::new(config);
 
-        let resp = svc
-            .get_settings(Request::new(GetSettingsRequest {
-                scope: String::new(),
-            }))
-            .await
-            .unwrap();
-
-        let daemon = resp.into_inner().daemon.unwrap();
+        let daemon = get_daemon_settings(&svc).await;
         assert_eq!(daemon.port, 9999);
     }
 
@@ -192,14 +192,7 @@ mod tests {
         };
         let svc = ConfigServiceImpl::new(config);
 
-        let resp = svc
-            .get_settings(Request::new(GetSettingsRequest {
-                scope: String::new(),
-            }))
-            .await
-            .unwrap();
-
-        let daemon = resp.into_inner().daemon.unwrap();
+        let daemon = get_daemon_settings(&svc).await;
         assert_eq!(daemon.port, 0);
     }
 

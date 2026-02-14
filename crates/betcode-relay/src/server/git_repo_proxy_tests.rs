@@ -1,37 +1,19 @@
 //! Tests for `GitRepoProxyService`.
 
-use std::sync::Arc;
-
-use tonic::Request;
-
 use betcode_proto::v1::git_repo_service_server::GitRepoService;
 use betcode_proto::v1::{
     GetRepoRequest, GitRepoDetail, ListReposRequest, ListReposResponse, RegisterRepoRequest,
-    ScanReposRequest, TunnelFrame, UnregisterRepoRequest, UnregisterRepoResponse,
-    UpdateRepoRequest, WorktreeMode,
+    ScanReposRequest, UnregisterRepoRequest, UnregisterRepoResponse, UpdateRepoRequest,
+    WorktreeMode,
 };
 
 use super::GitRepoProxyService;
 use crate::server::test_helpers::{
-    make_request, setup_offline_router, setup_router_with_machine, spawn_error_responder,
-    spawn_responder, test_claims,
+    assert_daemon_error, assert_no_claims_error, assert_no_machine_error, assert_offline_error,
+    make_request, proxy_test_setup, spawn_responder,
 };
 
-async fn setup_with_machine(
-    mid: &str,
-) -> (
-    GitRepoProxyService,
-    Arc<crate::router::RequestRouter>,
-    tokio::sync::mpsc::Receiver<TunnelFrame>,
-) {
-    let (router, rx) = setup_router_with_machine(mid).await;
-    (GitRepoProxyService::new(Arc::clone(&router)), router, rx)
-}
-
-async fn setup_offline() -> GitRepoProxyService {
-    let router = setup_offline_router().await;
-    GitRepoProxyService::new(router)
-}
+proxy_test_setup!(GitRepoProxyService);
 
 // --- Unary RPC routing ---
 
@@ -197,54 +179,54 @@ async fn scan_repos_routes_to_machine() {
 #[tokio::test]
 async fn machine_offline_returns_unavailable() {
     let svc = setup_offline().await;
-    let req = make_request(
+    assert_offline_error!(
+        svc,
+        list_repos,
         ListReposRequest {
             limit: 0,
             offset: 0,
-        },
-        "m-off",
+        }
     );
-    let err = svc.list_repos(req).await.unwrap_err();
-    assert_eq!(err.code(), tonic::Code::Unavailable);
 }
 
 #[tokio::test]
 async fn missing_machine_id_returns_invalid_argument() {
     let (svc, _router, _rx) = setup_with_machine("m1").await;
-    let mut req = Request::new(ListReposRequest {
-        limit: 0,
-        offset: 0,
-    });
-    req.extensions_mut().insert(test_claims());
-    let err = svc.list_repos(req).await.unwrap_err();
-    assert_eq!(err.code(), tonic::Code::InvalidArgument);
+    assert_no_machine_error!(
+        svc,
+        list_repos,
+        ListReposRequest {
+            limit: 0,
+            offset: 0,
+        }
+    );
 }
 
 #[tokio::test]
 async fn missing_claims_returns_internal() {
     let (svc, _router, _rx) = setup_with_machine("m1").await;
-    let mut req = Request::new(ListReposRequest {
-        limit: 0,
-        offset: 0,
-    });
-    req.metadata_mut()
-        .insert("x-machine-id", "m1".parse().unwrap());
-    let err = svc.list_repos(req).await.unwrap_err();
-    assert_eq!(err.code(), tonic::Code::Internal);
+    assert_no_claims_error!(
+        svc,
+        list_repos,
+        ListReposRequest {
+            limit: 0,
+            offset: 0,
+        }
+    );
 }
 
 #[tokio::test]
 async fn daemon_error_propagated_to_client() {
     let (svc, router, rx) = setup_with_machine("m1").await;
-    spawn_error_responder(&router, "m1", rx, "repo registration failed");
-    let req = make_request(
+    assert_daemon_error!(
+        svc,
+        list_repos,
         ListReposRequest {
             limit: 0,
             offset: 0,
         },
-        "m1",
+        router,
+        rx,
+        "repo registration failed"
     );
-    let err = svc.list_repos(req).await.unwrap_err();
-    assert_eq!(err.code(), tonic::Code::Internal);
-    assert!(err.message().contains("repo registration failed"));
 }

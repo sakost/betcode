@@ -8,6 +8,26 @@ async fn test_db() -> RelayDatabase {
     RelayDatabase::open_in_memory().await.unwrap()
 }
 
+/// Create the default test user ("u1", "alice") in the database.
+async fn create_test_user(db: &RelayDatabase) {
+    db.create_user("u1", "alice", "alice@example.com", "hash123")
+        .await
+        .unwrap();
+}
+
+/// Create a test machine owned by user "u1".
+async fn create_test_machine(db: &RelayDatabase, machine_id: &str, name: &str) {
+    db.create_machine(machine_id, name, "u1", "{}")
+        .await
+        .unwrap();
+}
+
+/// Create the default test user and a single machine ("m1", "laptop").
+async fn setup_user_and_machine(db: &RelayDatabase) {
+    create_test_user(db).await;
+    create_test_machine(db, "m1", "laptop").await;
+}
+
 // === User tests ===
 
 #[tokio::test]
@@ -26,9 +46,7 @@ async fn create_and_get_user() {
 #[tokio::test]
 async fn get_user_by_username() {
     let db = test_db().await;
-    db.create_user("u1", "alice", "alice@example.com", "hash123")
-        .await
-        .unwrap();
+    create_test_user(&db).await;
 
     let user = db.get_user_by_username("alice").await.unwrap();
     assert_eq!(user.id, "u1");
@@ -41,9 +59,7 @@ async fn get_user_by_username() {
 #[tokio::test]
 async fn create_and_get_token() {
     let db = test_db().await;
-    db.create_user("u1", "alice", "alice@example.com", "hash123")
-        .await
-        .unwrap();
+    create_test_user(&db).await;
 
     let future = unix_timestamp() + 3600;
     let token = db
@@ -59,9 +75,7 @@ async fn create_and_get_token() {
 #[tokio::test]
 async fn find_token_by_hash() {
     let db = test_db().await;
-    db.create_user("u1", "alice", "alice@example.com", "hash123")
-        .await
-        .unwrap();
+    create_test_user(&db).await;
 
     let future = unix_timestamp() + 3600;
     db.create_token("t1", "u1", "tokenhash", future)
@@ -81,9 +95,7 @@ async fn find_token_by_hash() {
 #[tokio::test]
 async fn revoke_token() {
     let db = test_db().await;
-    db.create_user("u1", "alice", "alice@example.com", "hash123")
-        .await
-        .unwrap();
+    create_test_user(&db).await;
 
     let future = unix_timestamp() + 3600;
     db.create_token("t1", "u1", "tokenhash", future)
@@ -101,9 +113,7 @@ async fn revoke_token() {
 #[tokio::test]
 async fn create_and_get_machine() {
     let db = test_db().await;
-    db.create_user("u1", "alice", "alice@example.com", "hash123")
-        .await
-        .unwrap();
+    create_test_user(&db).await;
 
     let machine = db
         .create_machine("m1", "my-laptop", "u1", "{}")
@@ -119,13 +129,9 @@ async fn create_and_get_machine() {
 #[tokio::test]
 async fn list_machines_with_filter() {
     let db = test_db().await;
-    db.create_user("u1", "alice", "alice@example.com", "hash123")
-        .await
-        .unwrap();
-    db.create_machine("m1", "laptop", "u1", "{}").await.unwrap();
-    db.create_machine("m2", "desktop", "u1", "{}")
-        .await
-        .unwrap();
+    create_test_user(&db).await;
+    create_test_machine(&db, "m1", "laptop").await;
+    create_test_machine(&db, "m2", "desktop").await;
     db.update_machine_status("m1", "online").await.unwrap();
 
     let all = db.list_machines("u1", None, 100, 0).await.unwrap();
@@ -147,10 +153,7 @@ async fn list_machines_with_filter() {
 #[tokio::test]
 async fn remove_machine() {
     let db = test_db().await;
-    db.create_user("u1", "alice", "alice@example.com", "hash123")
-        .await
-        .unwrap();
-    db.create_machine("m1", "laptop", "u1", "{}").await.unwrap();
+    setup_user_and_machine(&db).await;
 
     assert!(db.remove_machine("m1").await.unwrap());
     assert!(!db.remove_machine("m1").await.unwrap());
@@ -162,10 +165,7 @@ async fn remove_machine() {
 #[tokio::test]
 async fn update_and_get_machine_identity_pubkey() {
     let db = test_db().await;
-    db.create_user("u1", "alice", "alice@example.com", "hash123")
-        .await
-        .unwrap();
-    db.create_machine("m1", "laptop", "u1", "{}").await.unwrap();
+    setup_user_and_machine(&db).await;
 
     // Initially no pubkey
     let pubkey = db.get_machine_identity_pubkey("m1").await.unwrap();
@@ -195,10 +195,7 @@ async fn update_and_get_machine_identity_pubkey() {
 #[tokio::test]
 async fn buffer_and_drain_messages() {
     let db = test_db().await;
-    db.create_user("u1", "alice", "alice@example.com", "hash123")
-        .await
-        .unwrap();
-    db.create_machine("m1", "laptop", "u1", "{}").await.unwrap();
+    setup_user_and_machine(&db).await;
 
     db.buffer_message(&BufferMessageParams {
         machine_id: "m1",
@@ -241,10 +238,7 @@ async fn buffer_and_drain_messages() {
 #[tokio::test]
 async fn cleanup_expired_buffer() {
     let db = test_db().await;
-    db.create_user("u1", "alice", "alice@example.com", "hash123")
-        .await
-        .unwrap();
-    db.create_machine("m1", "laptop", "u1", "{}").await.unwrap();
+    setup_user_and_machine(&db).await;
 
     db.buffer_message(&BufferMessageParams {
         machine_id: "m1",
@@ -279,10 +273,7 @@ async fn cleanup_expired_buffer() {
 #[tokio::test]
 async fn create_and_get_certificate() {
     let db = test_db().await;
-    db.create_user("u1", "alice", "alice@example.com", "hash123")
-        .await
-        .unwrap();
-    db.create_machine("m1", "laptop", "u1", "{}").await.unwrap();
+    setup_user_and_machine(&db).await;
 
     let now = unix_timestamp();
     let cert = db
@@ -306,10 +297,7 @@ async fn create_and_get_certificate() {
 #[tokio::test]
 async fn revoke_certificate_hides_from_machine_certs() {
     let db = test_db().await;
-    db.create_user("u1", "alice", "alice@example.com", "hash123")
-        .await
-        .unwrap();
-    db.create_machine("m1", "laptop", "u1", "{}").await.unwrap();
+    setup_user_and_machine(&db).await;
 
     let now = unix_timestamp();
     db.create_certificate(&CertificateParams {

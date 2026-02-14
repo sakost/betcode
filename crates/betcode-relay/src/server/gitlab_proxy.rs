@@ -19,8 +19,6 @@ use betcode_proto::methods::{
 };
 
 use crate::router::RequestRouter;
-use crate::server::agent_proxy::extract_machine_id;
-use crate::server::interceptor::extract_claims;
 
 /// Proxies `GitLabService` calls through the tunnel to a target daemon.
 pub struct GitLabProxyService {
@@ -40,16 +38,7 @@ impl GitLabService for GitLabProxyService {
         &self,
         request: Request<ListMergeRequestsRequest>,
     ) -> Result<Response<ListMergeRequestsResponse>, Status> {
-        let _claims = extract_claims(&request)?;
-        let machine_id = extract_machine_id(&request)?;
-        let resp = super::grpc_util::forward_unary(
-            &self.router,
-            &machine_id,
-            METHOD_LIST_MERGE_REQUESTS,
-            &request.into_inner(),
-        )
-        .await?;
-        Ok(Response::new(resp))
+        super::grpc_util::forward_unary_rpc(&self.router, request, METHOD_LIST_MERGE_REQUESTS).await
     }
 
     #[instrument(skip(self, request), fields(rpc = "GetMergeRequest"))]
@@ -57,16 +46,7 @@ impl GitLabService for GitLabProxyService {
         &self,
         request: Request<GetMergeRequestRequest>,
     ) -> Result<Response<GetMergeRequestResponse>, Status> {
-        let _claims = extract_claims(&request)?;
-        let machine_id = extract_machine_id(&request)?;
-        let resp = super::grpc_util::forward_unary(
-            &self.router,
-            &machine_id,
-            METHOD_GET_MERGE_REQUEST,
-            &request.into_inner(),
-        )
-        .await?;
-        Ok(Response::new(resp))
+        super::grpc_util::forward_unary_rpc(&self.router, request, METHOD_GET_MERGE_REQUEST).await
     }
 
     #[instrument(skip(self, request), fields(rpc = "ListPipelines"))]
@@ -74,16 +54,7 @@ impl GitLabService for GitLabProxyService {
         &self,
         request: Request<ListPipelinesRequest>,
     ) -> Result<Response<ListPipelinesResponse>, Status> {
-        let _claims = extract_claims(&request)?;
-        let machine_id = extract_machine_id(&request)?;
-        let resp = super::grpc_util::forward_unary(
-            &self.router,
-            &machine_id,
-            METHOD_LIST_PIPELINES,
-            &request.into_inner(),
-        )
-        .await?;
-        Ok(Response::new(resp))
+        super::grpc_util::forward_unary_rpc(&self.router, request, METHOD_LIST_PIPELINES).await
     }
 
     #[instrument(skip(self, request), fields(rpc = "GetPipeline"))]
@@ -91,16 +62,7 @@ impl GitLabService for GitLabProxyService {
         &self,
         request: Request<GetPipelineRequest>,
     ) -> Result<Response<GetPipelineResponse>, Status> {
-        let _claims = extract_claims(&request)?;
-        let machine_id = extract_machine_id(&request)?;
-        let resp = super::grpc_util::forward_unary(
-            &self.router,
-            &machine_id,
-            METHOD_GET_PIPELINE,
-            &request.into_inner(),
-        )
-        .await?;
-        Ok(Response::new(resp))
+        super::grpc_util::forward_unary_rpc(&self.router, request, METHOD_GET_PIPELINE).await
     }
 
     #[instrument(skip(self, request), fields(rpc = "ListIssues"))]
@@ -108,16 +70,7 @@ impl GitLabService for GitLabProxyService {
         &self,
         request: Request<ListIssuesRequest>,
     ) -> Result<Response<ListIssuesResponse>, Status> {
-        let _claims = extract_claims(&request)?;
-        let machine_id = extract_machine_id(&request)?;
-        let resp = super::grpc_util::forward_unary(
-            &self.router,
-            &machine_id,
-            METHOD_LIST_ISSUES,
-            &request.into_inner(),
-        )
-        .await?;
-        Ok(Response::new(resp))
+        super::grpc_util::forward_unary_rpc(&self.router, request, METHOD_LIST_ISSUES).await
     }
 
     #[instrument(skip(self, request), fields(rpc = "GetIssue"))]
@@ -125,16 +78,7 @@ impl GitLabService for GitLabProxyService {
         &self,
         request: Request<GetIssueRequest>,
     ) -> Result<Response<GetIssueResponse>, Status> {
-        let _claims = extract_claims(&request)?;
-        let machine_id = extract_machine_id(&request)?;
-        let resp = super::grpc_util::forward_unary(
-            &self.router,
-            &machine_id,
-            METHOD_GET_ISSUE,
-            &request.into_inner(),
-        )
-        .await?;
-        Ok(Response::new(resp))
+        super::grpc_util::forward_unary_rpc(&self.router, request, METHOD_GET_ISSUE).await
     }
 }
 

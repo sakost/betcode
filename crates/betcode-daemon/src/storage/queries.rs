@@ -562,6 +562,22 @@ impl Database {
 mod tests {
     use super::*;
 
+    /// Create a simple git repo with sensible defaults for testing.
+    async fn create_test_repo(db: &Database, id: &str, name: &str, path: &str) {
+        db.create_git_repo(id, name, path, "global", ".worktree", None, None, true)
+            .await
+            .unwrap();
+    }
+
+    /// Seed a DB with a default repo ("r1") and a worktree ("wt-1") on branch "feat".
+    /// Returns the DB for further assertions.
+    async fn seed_repo_and_worktree(db: &Database) {
+        create_test_repo(db, "r1", "repo", "/repo").await;
+        db.create_worktree("wt-1", "feat", "/repo/wt-1", "feat", "r1", None)
+            .await
+            .unwrap();
+    }
+
     #[tokio::test]
     async fn create_and_get_session() {
         let db = Database::open_in_memory().await.unwrap();
@@ -576,26 +592,28 @@ mod tests {
         assert_eq!(session.status, "idle");
     }
 
-    #[tokio::test]
-    async fn create_and_get_worktree() {
+    /// Create a DB with repo "r1" and a worktree "wt-1" on branch "feature-x",
+    /// with the given setup_script.
+    async fn create_worktree_fixture(setup_script: Option<&str>) -> (Database, Worktree) {
         let db = Database::open_in_memory().await.unwrap();
-        db.create_git_repo(
-            "r1",
-            "repo",
-            "/repo",
-            "global",
-            ".worktree",
-            None,
-            None,
-            true,
-        )
-        .await
-        .unwrap();
-
+        create_test_repo(&db, "r1", "repo", "/repo").await;
         let wt = db
-            .create_worktree("wt-1", "feature-x", "/repo/wt-1", "feature-x", "r1", None)
+            .create_worktree(
+                "wt-1",
+                "feature-x",
+                "/repo/wt-1",
+                "feature-x",
+                "r1",
+                setup_script,
+            )
             .await
             .unwrap();
+        (db, wt)
+    }
+
+    #[tokio::test]
+    async fn create_and_get_worktree() {
+        let (_db, wt) = create_worktree_fixture(None).await;
 
         assert_eq!(wt.id, "wt-1");
         assert_eq!(wt.name, "feature-x");
@@ -606,31 +624,7 @@ mod tests {
 
     #[tokio::test]
     async fn worktree_with_setup_script() {
-        let db = Database::open_in_memory().await.unwrap();
-        db.create_git_repo(
-            "r1",
-            "repo",
-            "/repo",
-            "global",
-            ".worktree",
-            None,
-            None,
-            true,
-        )
-        .await
-        .unwrap();
-
-        let wt = db
-            .create_worktree(
-                "wt-1",
-                "feature-x",
-                "/repo/wt-1",
-                "feature-x",
-                "r1",
-                Some("npm install"),
-            )
-            .await
-            .unwrap();
+        let (_db, wt) = create_worktree_fixture(Some("npm install")).await;
 
         assert_eq!(wt.setup_script.as_deref(), Some("npm install"));
     }
@@ -638,30 +632,8 @@ mod tests {
     #[tokio::test]
     async fn list_worktrees_by_repo() {
         let db = Database::open_in_memory().await.unwrap();
-        db.create_git_repo(
-            "ra",
-            "repo-a",
-            "/repo-a",
-            "global",
-            ".worktree",
-            None,
-            None,
-            true,
-        )
-        .await
-        .unwrap();
-        db.create_git_repo(
-            "rb",
-            "repo-b",
-            "/repo-b",
-            "global",
-            ".worktree",
-            None,
-            None,
-            true,
-        )
-        .await
-        .unwrap();
+        create_test_repo(&db, "ra", "repo-a", "/repo-a").await;
+        create_test_repo(&db, "rb", "repo-b", "/repo-b").await;
         db.create_worktree("wt-1", "a", "/repo-a/wt-1", "a", "ra", None)
             .await
             .unwrap();
@@ -680,21 +652,7 @@ mod tests {
     #[tokio::test]
     async fn remove_worktree_clears_session_binding() {
         let db = Database::open_in_memory().await.unwrap();
-        db.create_git_repo(
-            "r1",
-            "repo",
-            "/repo",
-            "global",
-            ".worktree",
-            None,
-            None,
-            true,
-        )
-        .await
-        .unwrap();
-        db.create_worktree("wt-1", "feat", "/repo/wt-1", "feat", "r1", None)
-            .await
-            .unwrap();
+        seed_repo_and_worktree(&db).await;
         db.create_session("s1", "claude-sonnet-4", "/repo/wt-1")
             .await
             .unwrap();
@@ -724,21 +682,7 @@ mod tests {
     #[tokio::test]
     async fn bind_session_to_worktree_and_query() {
         let db = Database::open_in_memory().await.unwrap();
-        db.create_git_repo(
-            "r1",
-            "repo",
-            "/repo",
-            "global",
-            ".worktree",
-            None,
-            None,
-            true,
-        )
-        .await
-        .unwrap();
-        db.create_worktree("wt-1", "feat", "/repo/wt-1", "feat", "r1", None)
-            .await
-            .unwrap();
+        seed_repo_and_worktree(&db).await;
         db.create_session("s1", "claude-sonnet-4", "/repo/wt-1")
             .await
             .unwrap();

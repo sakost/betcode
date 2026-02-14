@@ -22,6 +22,25 @@ async fn engine_with_db() -> DaemonPermissionEngine {
     DaemonPermissionEngine::with_database(PermissionEngine::new(), PendingConfig::default(), db)
 }
 
+/// Build a `PermissionEvalRequest` with common defaults.
+/// Only `request_id` and `tool_name` vary in most tests.
+fn eval_request<'a>(
+    request_id: &'a str,
+    tool_name: &'a str,
+    description: &'a str,
+) -> PermissionEvalRequest<'a> {
+    PermissionEvalRequest {
+        session_id: "session-1",
+        request_id,
+        tool_name,
+        description,
+        input_json: "{}",
+        path: None,
+        target_client: None,
+        client_connected: true,
+    }
+}
+
 #[tokio::test]
 async fn full_permission_flow_allow() {
     let engine = engine_with_db().await;
@@ -292,16 +311,7 @@ async fn session_grant_cleared_on_reset() {
 
     // Should be cached
     let eval = engine
-        .evaluate(&PermissionEvalRequest {
-            session_id: "session-1",
-            request_id: "req-1",
-            tool_name: "Bash",
-            description: "command",
-            input_json: "{}",
-            path: None,
-            target_client: None,
-            client_connected: true,
-        })
+        .evaluate(&eval_request("req-1", "Bash", "command"))
         .await;
     assert!(matches!(
         eval,
@@ -313,16 +323,7 @@ async fn session_grant_cleared_on_reset() {
 
     // Should go back to Ask (pending)
     let eval = engine
-        .evaluate(&PermissionEvalRequest {
-            session_id: "session-1",
-            request_id: "req-2",
-            tool_name: "Bash",
-            description: "command",
-            input_json: "{}",
-            path: None,
-            target_client: None,
-            client_connected: true,
-        })
+        .evaluate(&eval_request("req-2", "Bash", "command"))
         .await;
     assert!(matches!(eval, PermissionEvaluation::Pending { .. }));
 }
@@ -346,16 +347,7 @@ async fn custom_rules_override_defaults() {
 
     // Bash should be allowed by custom rule
     let eval = engine
-        .evaluate(&PermissionEvalRequest {
-            session_id: "session-1",
-            request_id: "req-1",
-            tool_name: "Bash",
-            description: "command",
-            input_json: "{}",
-            path: None,
-            target_client: None,
-            client_connected: true,
-        })
+        .evaluate(&eval_request("req-1", "Bash", "command"))
         .await;
 
     assert!(matches!(
@@ -375,16 +367,7 @@ async fn multiple_sessions_independent_grants() {
 
     // session-1: should be cached
     let eval = engine
-        .evaluate(&PermissionEvalRequest {
-            session_id: "session-1",
-            request_id: "req-1",
-            tool_name: "Bash",
-            description: "command",
-            input_json: "{}",
-            path: None,
-            target_client: None,
-            client_connected: true,
-        })
+        .evaluate(&eval_request("req-1", "Bash", "command"))
         .await;
     assert!(matches!(
         eval,
@@ -395,13 +378,7 @@ async fn multiple_sessions_independent_grants() {
     let eval = engine
         .evaluate(&PermissionEvalRequest {
             session_id: "session-2",
-            request_id: "req-2",
-            tool_name: "Bash",
-            description: "command",
-            input_json: "{}",
-            path: None,
-            target_client: None,
-            client_connected: true,
+            ..eval_request("req-2", "Bash", "command")
         })
         .await;
     assert!(matches!(eval, PermissionEvaluation::Pending { .. }));

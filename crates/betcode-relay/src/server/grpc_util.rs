@@ -1,9 +1,15 @@
 //! Shared gRPC utility helpers.
 
 use std::collections::HashMap;
+use std::pin::Pin;
 
 use prost::Message;
-use tonic::{Code, Status};
+use tokio::sync::mpsc;
+use tokio_stream::wrappers::ReceiverStream;
+use tonic::{Code, Request, Response, Status};
+use tracing::warn;
+
+use betcode_proto::v1::{tunnel_frame, FrameType, TunnelFrame};
 
 use crate::router::RequestRouter;
 use crate::server::agent_proxy::{decode_response, router_error_to_status};
@@ -37,6 +43,17 @@ pub fn is_peer_disconnect(status: &tonic::Status) -> bool {
         || msg.contains("close_notify")
 }
 
+/// Generate a new request ID and encode a protobuf message into a buffer.
+///
+/// This is the shared preamble for `forward_unary` and `forward_server_stream`.
+fn encode_request<Req: Message>(req: &Req) -> Result<(String, Vec<u8>), Status> {
+    let request_id = uuid::Uuid::new_v4().to_string();
+    let mut buf = Vec::with_capacity(req.encoded_len());
+    req.encode(&mut buf)
+        .map_err(|e| Status::internal(format!("Encode error: {e}")))?;
+    Ok((request_id, buf))
+}
+
 /// Forward a unary RPC request through the tunnel to a daemon and decode the response.
 ///
 /// This is the shared implementation used by all proxy services
@@ -47,15 +64,142 @@ pub async fn forward_unary<Req: Message, Resp: Message + Default>(
     method: &str,
     req: &Req,
 ) -> Result<Resp, Status> {
-    let request_id = uuid::Uuid::new_v4().to_string();
-    let mut buf = Vec::with_capacity(req.encoded_len());
-    req.encode(&mut buf)
-        .map_err(|e| Status::internal(format!("Encode error: {e}")))?;
+    let (request_id, buf) = encode_request(req)?;
     let frame = router
         .forward_request(machine_id, &request_id, method, buf, HashMap::new())
         .await
         .map_err(router_error_to_status)?;
     decode_response(&frame)
+}
+
+/// Forward a unary RPC request end-to-end: extract claims and machine-id from the
+/// gRPC `Request`, forward through the tunnel, decode the response, and wrap it in
+/// `Response`.
+///
+/// This is the one-liner that every unary proxy method delegates to.
+pub async fn forward_unary_rpc<Req: Message, Resp: Message + Default>(
+    router: &RequestRouter,
+    request: Request<Req>,
+    method: &str,
+) -> Result<Response<Resp>, Status> {
+    let _claims = crate::server::interceptor::extract_claims(&request)?;
+    let machine_id = crate::server::agent_proxy::extract_machine_id(&request)?;
+    let resp = forward_unary(router, &machine_id, method, &request.into_inner()).await?;
+    Ok(Response::new(resp))
+}
+
+/// Forward a server-streaming RPC end-to-end: extract claims and machine-id from the
+/// gRPC `Request`, forward through the tunnel, and wrap the result stream in `Response`.
+///
+/// This is the streaming counterpart of `forward_unary_rpc`.
+pub async fn forward_stream_rpc<Req, Resp>(
+    router: &RequestRouter,
+    request: Request<Req>,
+    method: &str,
+    channel_size: usize,
+) -> Result<Response<Pin<Box<dyn tokio_stream::Stream<Item = Result<Resp, Status>> + Send>>>, Status>
+where
+    Req: Message,
+    Resp: Message + Default + Send + 'static,
+{
+    let _claims = crate::server::interceptor::extract_claims(&request)?;
+    let machine_id = crate::server::agent_proxy::extract_machine_id(&request)?;
+    let req = request.into_inner();
+    let stream = forward_server_stream(router, &machine_id, method, &req, channel_size).await?;
+    Ok(Response::new(stream))
+}
+
+/// Forward a server-streaming RPC through the tunnel and return a boxed `Stream`.
+///
+/// Encodes `req`, opens a tunnel stream, then spawns a task that decodes each
+/// `TunnelFrame` into `Resp` and pushes it onto the returned stream.
+///
+/// Used by `CommandProxyService::execute_service_command` and
+/// `AgentProxyService::resume_session`.
+pub async fn forward_server_stream<Req, Resp>(
+    router: &RequestRouter,
+    machine_id: &str,
+    method: &str,
+    req: &Req,
+    channel_size: usize,
+) -> Result<Pin<Box<dyn tokio_stream::Stream<Item = Result<Resp, Status>> + Send>>, Status>
+where
+    Req: Message,
+    Resp: Message + Default + Send + 'static,
+{
+    let (request_id, buf) = encode_request(req)?;
+
+    let mut stream_rx = router
+        .forward_stream(machine_id, &request_id, method, buf, HashMap::new())
+        .await
+        .map_err(router_error_to_status)?;
+
+    let (tx, rx) = mpsc::channel::<Result<Resp, Status>>(channel_size);
+    let mid = machine_id.to_string();
+    tokio::spawn(async move {
+        while let Some(frame) = stream_rx.recv().await {
+            match decode_stream_frame::<Resp>(&frame, &mid) {
+                StreamFrameAction::Send(item) => {
+                    if tx.send(item).await.is_err() {
+                        break;
+                    }
+                }
+                StreamFrameAction::Break(item) => {
+                    if let Some(item) = item {
+                        let _ = tx.send(item).await;
+                    }
+                    break;
+                }
+                StreamFrameAction::Skip => {}
+            }
+        }
+    });
+
+    Ok(Box::pin(ReceiverStream::new(rx)))
+}
+
+/// Result of decoding a single `TunnelFrame` in a server-stream context.
+enum StreamFrameAction<Resp> {
+    /// Decoded successfully; send to client.
+    Send(Result<Resp, Status>),
+    /// Break out of the receive loop, optionally sending a final item first.
+    Break(Option<Result<Resp, Status>>),
+    /// Skip this frame (unrecognised type).
+    Skip,
+}
+
+/// Decode a single `TunnelFrame` into a typed response for server-streaming RPCs.
+fn decode_stream_frame<Resp: Message + Default>(
+    frame: &TunnelFrame,
+    machine_id: &str,
+) -> StreamFrameAction<Resp> {
+    match FrameType::try_from(frame.frame_type) {
+        Ok(FrameType::StreamData) => {
+            if let Some(tunnel_frame::Payload::StreamData(p)) = &frame.payload {
+                let data = p.encrypted.as_ref().map_or(&[][..], |e| &e.ciphertext[..]);
+                match Resp::decode(data) {
+                    Ok(msg) => StreamFrameAction::Send(Ok(msg)),
+                    Err(e) => {
+                        warn!(error = %e, machine_id = %machine_id, "Failed to decode stream frame");
+                        StreamFrameAction::Skip
+                    }
+                }
+            } else {
+                StreamFrameAction::Skip
+            }
+        }
+        Ok(FrameType::Error) => {
+            if let Some(tunnel_frame::Payload::Error(e)) = &frame.payload {
+                StreamFrameAction::Break(Some(Err(Status::internal(format!(
+                    "Daemon error: {}",
+                    e.message
+                )))))
+            } else {
+                StreamFrameAction::Break(None)
+            }
+        }
+        _ => StreamFrameAction::Skip,
+    }
 }
 
 #[cfg(test)]

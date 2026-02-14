@@ -4,35 +4,13 @@
 
 use std::io::{self, Write};
 
-use std::path::Path;
-
-use tonic::transport::{Certificate, Channel, ClientTlsConfig};
+use tonic::transport::Channel;
 
 use betcode_proto::v1::auth_service_client::AuthServiceClient;
 use betcode_proto::v1::{LoginRequest, RefreshTokenRequest, RegisterRequest, RevokeTokenRequest};
 
 use crate::config::{AuthConfig, CliConfig};
-
-/// Build a gRPC channel to the relay, with optional custom CA cert for TLS.
-async fn relay_channel(url: &str, ca_cert: Option<&Path>) -> anyhow::Result<Channel> {
-    let mut endpoint = Channel::from_shared(url.to_string())?;
-    if url.starts_with("https://") {
-        let mut tls_config = ClientTlsConfig::new().with_enabled_roots();
-        if let Some(ca_path) = ca_cert {
-            let ca_pem = std::fs::read_to_string(ca_path).map_err(|e| {
-                anyhow::anyhow!("Failed to read CA cert {}: {}", ca_path.display(), e)
-            })?;
-            tls_config = tls_config.ca_certificate(Certificate::from_pem(ca_pem));
-        }
-        endpoint = endpoint
-            .tls_config(tls_config)
-            .map_err(|e| anyhow::anyhow!("TLS config error: {e}"))?;
-    }
-    endpoint
-        .connect()
-        .await
-        .map_err(|e| anyhow::anyhow!("Failed to connect to relay: {e}"))
-}
+use crate::relay::relay_channel;
 
 /// Auth subcommand actions.
 #[derive(clap::Subcommand, Debug)]
@@ -123,20 +101,51 @@ pub async fn ensure_valid_token(config: &mut CliConfig) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Connect to the relay and return an auth service client.
+async fn auth_client(config: &CliConfig) -> anyhow::Result<AuthServiceClient<Channel>> {
+    let relay_url = config
+        .relay_url
+        .as_ref()
+        .ok_or_else(|| anyhow::anyhow!("No relay URL configured. Use --relay <url>"))?;
+
+    let channel = relay_channel(relay_url, config.relay_ca_cert.as_deref()).await?;
+    Ok(AuthServiceClient::new(channel))
+}
+
+/// Common response fields from register/login RPCs.
+struct AuthResponse {
+    user_id: String,
+    access_token: String,
+    refresh_token: String,
+}
+
+/// Save auth credentials from a register/login response and print a
+/// confirmation message to stdout.
+fn finish_auth(
+    config: &mut CliConfig,
+    username: &str,
+    resp: AuthResponse,
+    action_label: &str,
+) -> anyhow::Result<()> {
+    config.auth = Some(AuthConfig {
+        user_id: resp.user_id,
+        username: username.into(),
+        access_token: resp.access_token,
+        refresh_token: resp.refresh_token,
+    });
+    config.save()?;
+    let mut out = io::stdout();
+    writeln!(out, "{action_label} as {username}")?;
+    Ok(())
+}
+
 async fn register(
     config: &mut CliConfig,
     username: &str,
     password: &str,
     email: &str,
 ) -> anyhow::Result<()> {
-    let relay_url = config
-        .relay_url
-        .as_ref()
-        .ok_or_else(|| anyhow::anyhow!("No relay URL configured. Use --relay <url>"))?
-        .clone();
-
-    let channel = relay_channel(&relay_url, config.relay_ca_cert.as_deref()).await?;
-    let mut client = AuthServiceClient::new(channel);
+    let mut client = auth_client(config).await?;
     let resp = client
         .register(RegisterRequest {
             username: username.into(),
@@ -147,29 +156,20 @@ async fn register(
         .map_err(|e| anyhow::anyhow!("Registration failed: {}", e.message()))?
         .into_inner();
 
-    config.auth = Some(AuthConfig {
-        user_id: resp.user_id,
-        username: username.into(),
-        access_token: resp.access_token,
-        refresh_token: resp.refresh_token,
-    });
-    config.save()?;
-
-    let mut out = io::stdout();
-    writeln!(out, "Registered and logged in as {username}")?;
-    Ok(())
+    finish_auth(
+        config,
+        username,
+        AuthResponse {
+            user_id: resp.user_id,
+            access_token: resp.access_token,
+            refresh_token: resp.refresh_token,
+        },
+        "Registered and logged in",
+    )
 }
 
 async fn login(config: &mut CliConfig, username: &str, password: &str) -> anyhow::Result<()> {
-    let relay_url = config
-        .relay_url
-        .as_ref()
-        .ok_or_else(|| anyhow::anyhow!("No relay URL configured. Use --relay <url>"))?
-        .clone();
-
-    let channel = relay_channel(&relay_url, config.relay_ca_cert.as_deref()).await?;
-
-    let mut client = AuthServiceClient::new(channel);
+    let mut client = auth_client(config).await?;
     let resp = client
         .login(LoginRequest {
             username: username.into(),
@@ -179,17 +179,16 @@ async fn login(config: &mut CliConfig, username: &str, password: &str) -> anyhow
         .map_err(|e| anyhow::anyhow!("Login failed: {}", e.message()))?
         .into_inner();
 
-    config.auth = Some(AuthConfig {
-        user_id: resp.user_id,
-        username: username.into(),
-        access_token: resp.access_token,
-        refresh_token: resp.refresh_token,
-    });
-    config.save()?;
-
-    let mut out = io::stdout();
-    writeln!(out, "Logged in as {username}")?;
-    Ok(())
+    finish_auth(
+        config,
+        username,
+        AuthResponse {
+            user_id: resp.user_id,
+            access_token: resp.access_token,
+            refresh_token: resp.refresh_token,
+        },
+        "Logged in",
+    )
 }
 
 async fn logout(config: &mut CliConfig) -> anyhow::Result<()> {

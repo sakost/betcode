@@ -18,19 +18,28 @@ async fn setup() -> (AuthServiceImpl, Arc<JwtManager>) {
     (svc, jwt)
 }
 
+/// Standard "alice" registration request used by most tests.
+fn alice_register() -> RegisterRequest {
+    RegisterRequest {
+        username: "alice".into(),
+        password: "password123".into(),
+        email: "alice@example.com".into(),
+    }
+}
+
+/// Register alice and return the registration response.
+async fn register_alice(svc: &AuthServiceImpl) -> betcode_proto::v1::RegisterResponse {
+    svc.register(Request::new(alice_register()))
+        .await
+        .unwrap()
+        .into_inner()
+}
+
 #[tokio::test]
 async fn register_and_login() {
     let (svc, _jwt) = setup().await;
 
-    let resp = svc
-        .register(Request::new(RegisterRequest {
-            username: "alice".into(),
-            password: "password123".into(),
-            email: "alice@example.com".into(),
-        }))
-        .await
-        .unwrap()
-        .into_inner();
+    let resp = register_alice(&svc).await;
 
     assert!(!resp.user_id.is_empty());
     assert!(!resp.access_token.is_empty());
@@ -54,13 +63,7 @@ async fn register_and_login() {
 async fn login_wrong_password() {
     let (svc, _jwt) = setup().await;
 
-    svc.register(Request::new(RegisterRequest {
-        username: "alice".into(),
-        password: "password123".into(),
-        email: "alice@example.com".into(),
-    }))
-    .await
-    .unwrap();
+    register_alice(&svc).await;
 
     let err = svc
         .login(Request::new(LoginRequest {
@@ -77,15 +80,7 @@ async fn login_wrong_password() {
 async fn refresh_token_rotation() {
     let (svc, _jwt) = setup().await;
 
-    let reg = svc
-        .register(Request::new(RegisterRequest {
-            username: "alice".into(),
-            password: "password123".into(),
-            email: "alice@example.com".into(),
-        }))
-        .await
-        .unwrap()
-        .into_inner();
+    let reg = register_alice(&svc).await;
 
     let refresh_resp = svc
         .refresh_token(Request::new(RefreshTokenRequest {
@@ -113,15 +108,7 @@ async fn refresh_token_rotation() {
 async fn revoke_token_works() {
     let (svc, _jwt) = setup().await;
 
-    let reg = svc
-        .register(Request::new(RegisterRequest {
-            username: "alice".into(),
-            password: "password123".into(),
-            email: "alice@example.com".into(),
-        }))
-        .await
-        .unwrap()
-        .into_inner();
+    let reg = register_alice(&svc).await;
 
     let resp = svc
         .revoke_token(Request::new(RevokeTokenRequest {
@@ -138,13 +125,7 @@ async fn revoke_token_works() {
 async fn register_duplicate_username() {
     let (svc, _jwt) = setup().await;
 
-    svc.register(Request::new(RegisterRequest {
-        username: "alice".into(),
-        password: "password123".into(),
-        email: "alice@example.com".into(),
-    }))
-    .await
-    .unwrap();
+    register_alice(&svc).await;
 
     let err = svc
         .register(Request::new(RegisterRequest {

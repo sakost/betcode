@@ -7,11 +7,8 @@ use tracing::{error, info};
 
 use betcode_proto::v1::agent_event::Event;
 use betcode_proto::v1::{
-    AgentEvent, AgentRequest, PermissionDecision, PermissionResponse, StartConversation,
-    UserMessage,
+    AgentEvent, AgentRequest, PermissionDecision, PermissionResponse, UserMessage,
 };
-
-use betcode_crypto::FingerprintCheck;
 
 use crate::connection::{ConnectionError, DaemonConnection};
 
@@ -59,40 +56,20 @@ pub async fn run(conn: &mut DaemonConnection, config: HeadlessConfig) -> Result<
     }
 
     // Key exchange for relay connections
-    if conn.is_relay() {
-        let machine_id = conn.machine_id().unwrap_or("unknown").to_string();
-        let (_daemon_fp, fp_check) = conn
-            .exchange_keys(&machine_id)
-            .await
-            .map_err(HeadlessError::Connection)?;
-        match fp_check {
-            FingerprintCheck::TrustOnFirstUse | FingerprintCheck::Matched => {}
-            FingerprintCheck::Mismatch { expected, actual } => {
-                return Err(HeadlessError::FatalError(format!(
-                    "Daemon fingerprint mismatch! Expected: {expected}, Actual: {actual}. Possible MITM attack."
-                )));
-            }
-        }
-    }
+    conn.ensure_relay_key_exchange()
+        .await
+        .map_err(HeadlessError::Connection)?;
 
     let (request_tx, mut event_rx, stream_handle) =
         conn.converse().await.map_err(HeadlessError::Connection)?;
 
     // Send start conversation
     request_tx
-        .send(AgentRequest {
-            request: Some(betcode_proto::v1::agent_request::Request::Start(
-                StartConversation {
-                    session_id: session_id.clone(),
-                    working_directory: config.working_directory,
-                    model: config.model.unwrap_or_default(),
-                    allowed_tools: Vec::new(),
-                    plan_mode: false,
-                    worktree_id: String::new(),
-                    metadata: std::collections::HashMap::default(),
-                },
-            )),
-        })
+        .send(crate::connection::start_conversation_request(
+            session_id.clone(),
+            config.working_directory,
+            config.model.unwrap_or_default(),
+        ))
         .await
         .map_err(|_| HeadlessError::StreamClosed)?;
 

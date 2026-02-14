@@ -391,6 +391,13 @@ mod tests {
         (mgr, tmp)
     }
 
+    /// Register a standard test git repo in the database with common defaults.
+    async fn register_test_repo(db: &Database, id: &str, name: &str, repo_path: &str) {
+        db.create_git_repo(id, name, repo_path, "global", ".worktree", None, None, true)
+            .await
+            .unwrap();
+    }
+
     #[tokio::test]
     async fn manager_creation() {
         let (mgr, _tmp) = test_manager().await;
@@ -427,18 +434,7 @@ mod tests {
     async fn list_with_db_records() {
         let db = Database::open_in_memory().await.unwrap();
         let tmp = tempfile::tempdir().unwrap();
-        db.create_git_repo(
-            "r1",
-            "repo",
-            "/repo",
-            "global",
-            ".worktree",
-            None,
-            None,
-            true,
-        )
-        .await
-        .unwrap();
+        register_test_repo(&db, "r1", "repo", "/repo").await;
         // Insert directly into DB to test list without git
         db.create_worktree("wt-1", "feat-a", "/tmp/wt-1", "feat-a", "r1", None)
             .await
@@ -462,18 +458,7 @@ mod tests {
     async fn list_with_session_counts() {
         let db = Database::open_in_memory().await.unwrap();
         let tmp = tempfile::tempdir().unwrap();
-        db.create_git_repo(
-            "r1",
-            "repo",
-            "/repo",
-            "global",
-            ".worktree",
-            None,
-            None,
-            true,
-        )
-        .await
-        .unwrap();
+        register_test_repo(&db, "r1", "repo", "/repo").await;
         db.create_worktree("wt-1", "feat", "/tmp/wt-1", "feat", "r1", None)
             .await
             .unwrap();
@@ -496,18 +481,7 @@ mod tests {
     async fn remove_cleans_db() {
         let db = Database::open_in_memory().await.unwrap();
         let tmp = tempfile::tempdir().unwrap();
-        db.create_git_repo(
-            "r1",
-            "repo",
-            "/repo",
-            "global",
-            ".worktree",
-            None,
-            None,
-            true,
-        )
-        .await
-        .unwrap();
+        register_test_repo(&db, "r1", "repo", "/repo").await;
         db.create_worktree("wt-1", "feat", "/tmp/nonexistent-wt", "feat", "r1", None)
             .await
             .unwrap();

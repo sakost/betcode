@@ -291,21 +291,33 @@ impl DaemonPermissionEngine {
 mod tests {
     use super::*;
 
+    fn test_engine() -> DaemonPermissionEngine {
+        DaemonPermissionEngine::new(PermissionEngine::new(), PendingConfig::default())
+    }
+
+    fn eval_req<'a>(
+        session_id: &'a str,
+        request_id: &'a str,
+        tool_name: &'a str,
+    ) -> PermissionEvalRequest<'a> {
+        PermissionEvalRequest {
+            session_id,
+            request_id,
+            tool_name,
+            description: "",
+            input_json: "{}",
+            path: None,
+            target_client: None,
+            client_connected: true,
+        }
+    }
+
     #[tokio::test]
     async fn allows_read_by_default() {
-        let engine = DaemonPermissionEngine::new(PermissionEngine::new(), PendingConfig::default());
+        let engine = test_engine();
 
         let result = engine
-            .evaluate(&PermissionEvalRequest {
-                session_id: "session-1",
-                request_id: "req-1",
-                tool_name: "Read",
-                description: "Read file",
-                input_json: "{}",
-                path: None,
-                target_client: None,
-                client_connected: true,
-            })
+            .evaluate(&eval_req("session-1", "req-1", "Read"))
             .await;
 
         assert!(matches!(
@@ -316,19 +328,10 @@ mod tests {
 
     #[tokio::test]
     async fn asks_for_bash_by_default() {
-        let engine = DaemonPermissionEngine::new(PermissionEngine::new(), PendingConfig::default());
+        let engine = test_engine();
 
         let result = engine
-            .evaluate(&PermissionEvalRequest {
-                session_id: "session-1",
-                request_id: "req-1",
-                tool_name: "Bash",
-                description: "Run command",
-                input_json: "{}",
-                path: None,
-                target_client: None,
-                client_connected: true,
-            })
+            .evaluate(&eval_req("session-1", "req-1", "Bash"))
             .await;
 
         assert!(matches!(result, PermissionEvaluation::Pending { .. }));
@@ -336,23 +339,14 @@ mod tests {
 
     #[tokio::test]
     async fn session_grant_cached() {
-        let engine = DaemonPermissionEngine::new(PermissionEngine::new(), PendingConfig::default());
+        let engine = test_engine();
 
         engine
             .add_session_grant("session-1", "Bash", None, true)
             .await;
 
         let result = engine
-            .evaluate(&PermissionEvalRequest {
-                session_id: "session-1",
-                request_id: "req-1",
-                tool_name: "Bash",
-                description: "Run command",
-                input_json: "{}",
-                path: None,
-                target_client: None,
-                client_connected: true,
-            })
+            .evaluate(&eval_req("session-1", "req-1", "Bash"))
             .await;
 
         assert!(matches!(
@@ -363,19 +357,10 @@ mod tests {
 
     #[tokio::test]
     async fn process_permission_response() {
-        let engine = DaemonPermissionEngine::new(PermissionEngine::new(), PendingConfig::default());
+        let engine = test_engine();
 
         engine
-            .evaluate(&PermissionEvalRequest {
-                session_id: "session-1",
-                request_id: "req-1",
-                tool_name: "Bash",
-                description: "Run command",
-                input_json: "{}",
-                path: None,
-                target_client: None,
-                client_connected: true,
-            })
+            .evaluate(&eval_req("session-1", "req-1", "Bash"))
             .await;
 
         let response = PermissionResponse {
@@ -389,16 +374,7 @@ mod tests {
         assert!(result.granted);
 
         let result = engine
-            .evaluate(&PermissionEvalRequest {
-                session_id: "session-1",
-                request_id: "req-2",
-                tool_name: "Bash",
-                description: "Another",
-                input_json: "{}",
-                path: None,
-                target_client: None,
-                client_connected: true,
-            })
+            .evaluate(&eval_req("session-1", "req-2", "Bash"))
             .await;
 
         assert!(matches!(

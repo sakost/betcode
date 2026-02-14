@@ -86,6 +86,54 @@ impl GitLabClient {
     }
 
     // =========================================================================
+    // Generic helpers
+    // =========================================================================
+
+    /// Paginated list request with an optional filter query parameter.
+    ///
+    /// Builds a URL of the form
+    /// `<base>/api/v4/projects/<encoded>/…?per_page=N&page=M[&<filter_key>=<filter_value>]`,
+    /// sends a GET request, checks the status, and deserialises the JSON body.
+    #[allow(clippy::too_many_arguments)]
+    async fn list_paginated<T: serde::de::DeserializeOwned>(
+        &self,
+        project: &str,
+        resource: &str,
+        filter_key: &str,
+        filter_value: Option<&str>,
+        per_page: u32,
+        page: u32,
+    ) -> Result<Vec<T>, GitLabError> {
+        let encoded = Self::encode_project(project);
+        let mut url = format!(
+            "{}?per_page={}&page={}",
+            self.api_url(&format!("/projects/{encoded}/{resource}")),
+            per_page,
+            page
+        );
+        if let Some(v) = filter_value {
+            use std::fmt::Write;
+            let _ = write!(url, "&{filter_key}={v}");
+        }
+        let resp = self.http.get(&url).send().await?;
+        Self::check_status(&resp)?;
+        Ok(resp.json().await?)
+    }
+
+    /// GET a single resource and deserialise.
+    async fn get_one<T: serde::de::DeserializeOwned>(
+        &self,
+        project: &str,
+        resource_path: &str,
+    ) -> Result<T, GitLabError> {
+        let encoded = Self::encode_project(project);
+        let url = self.api_url(&format!("/projects/{encoded}/{resource_path}"));
+        let resp = self.http.get(&url).send().await?;
+        Self::check_status(&resp)?;
+        Ok(resp.json().await?)
+    }
+
+    // =========================================================================
     // Merge Requests
     // =========================================================================
 
@@ -97,20 +145,8 @@ impl GitLabClient {
         per_page: u32,
         page: u32,
     ) -> Result<Vec<MergeRequest>, GitLabError> {
-        let encoded = Self::encode_project(project);
-        let mut url = format!(
-            "{}?per_page={}&page={}",
-            self.api_url(&format!("/projects/{encoded}/merge_requests")),
-            per_page,
-            page
-        );
-        if let Some(s) = state {
-            use std::fmt::Write;
-            let _ = write!(url, "&state={s}");
-        }
-        let resp = self.http.get(&url).send().await?;
-        Self::check_status(&resp)?;
-        Ok(resp.json().await?)
+        self.list_paginated(project, "merge_requests", "state", state, per_page, page)
+            .await
     }
 
     /// Get a single merge request by IID.
@@ -119,11 +155,8 @@ impl GitLabClient {
         project: &str,
         iid: u64,
     ) -> Result<MergeRequest, GitLabError> {
-        let encoded = Self::encode_project(project);
-        let url = self.api_url(&format!("/projects/{encoded}/merge_requests/{iid}"));
-        let resp = self.http.get(&url).send().await?;
-        Self::check_status(&resp)?;
-        Ok(resp.json().await?)
+        self.get_one(project, &format!("merge_requests/{iid}"))
+            .await
     }
 
     // =========================================================================
@@ -138,20 +171,8 @@ impl GitLabClient {
         per_page: u32,
         page: u32,
     ) -> Result<Vec<Pipeline>, GitLabError> {
-        let encoded = Self::encode_project(project);
-        let mut url = format!(
-            "{}?per_page={}&page={}",
-            self.api_url(&format!("/projects/{encoded}/pipelines")),
-            per_page,
-            page
-        );
-        if let Some(s) = status {
-            use std::fmt::Write;
-            let _ = write!(url, "&status={s}");
-        }
-        let resp = self.http.get(&url).send().await?;
-        Self::check_status(&resp)?;
-        Ok(resp.json().await?)
+        self.list_paginated(project, "pipelines", "status", status, per_page, page)
+            .await
     }
 
     /// Get a single pipeline by ID.
@@ -160,11 +181,8 @@ impl GitLabClient {
         project: &str,
         pipeline_id: u64,
     ) -> Result<Pipeline, GitLabError> {
-        let encoded = Self::encode_project(project);
-        let url = self.api_url(&format!("/projects/{encoded}/pipelines/{pipeline_id}"));
-        let resp = self.http.get(&url).send().await?;
-        Self::check_status(&resp)?;
-        Ok(resp.json().await?)
+        self.get_one(project, &format!("pipelines/{pipeline_id}"))
+            .await
     }
 
     // =========================================================================
@@ -179,28 +197,12 @@ impl GitLabClient {
         per_page: u32,
         page: u32,
     ) -> Result<Vec<Issue>, GitLabError> {
-        let encoded = Self::encode_project(project);
-        let mut url = format!(
-            "{}?per_page={}&page={}",
-            self.api_url(&format!("/projects/{encoded}/issues")),
-            per_page,
-            page
-        );
-        if let Some(s) = state {
-            use std::fmt::Write;
-            let _ = write!(url, "&state={s}");
-        }
-        let resp = self.http.get(&url).send().await?;
-        Self::check_status(&resp)?;
-        Ok(resp.json().await?)
+        self.list_paginated(project, "issues", "state", state, per_page, page)
+            .await
     }
 
     /// Get a single issue by IID.
     pub async fn get_issue(&self, project: &str, iid: u64) -> Result<Issue, GitLabError> {
-        let encoded = Self::encode_project(project);
-        let url = self.api_url(&format!("/projects/{encoded}/issues/{iid}"));
-        let resp = self.http.get(&url).send().await?;
-        Self::check_status(&resp)?;
-        Ok(resp.json().await?)
+        self.get_one(project, &format!("issues/{iid}")).await
     }
 }

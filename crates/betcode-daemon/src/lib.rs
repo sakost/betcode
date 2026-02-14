@@ -19,3 +19,46 @@ pub mod storage;
 pub mod subprocess;
 pub mod tunnel;
 pub mod worktree;
+
+/// Test infrastructure shared between unit and integration tests.
+///
+/// Not part of the public API -- hidden from docs and only useful for testing.
+#[doc(hidden)]
+#[allow(clippy::unwrap_used)]
+pub mod testutil {
+    use std::sync::Arc;
+
+    use crate::relay::SessionRelay;
+    use crate::session::SessionMultiplexer;
+    use crate::storage::Database;
+    use crate::subprocess::SubprocessManager;
+
+    /// Core test components backed by an in-memory database.
+    pub struct TestComponents {
+        pub db: Database,
+        pub relay: Arc<SessionRelay>,
+        pub multiplexer: Arc<SessionMultiplexer>,
+    }
+
+    /// Build a `TestComponents` with an in-memory DB, capped subprocess manager,
+    /// and default multiplexer.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the in-memory database cannot be opened.
+    pub async fn test_components() -> TestComponents {
+        let db = Database::open_in_memory().await.unwrap();
+        let subprocess_mgr = Arc::new(SubprocessManager::new(5));
+        let multiplexer = Arc::new(SessionMultiplexer::with_defaults());
+        let relay = Arc::new(SessionRelay::new(
+            subprocess_mgr,
+            Arc::clone(&multiplexer),
+            db.clone(),
+        ));
+        TestComponents {
+            db,
+            relay,
+            multiplexer,
+        }
+    }
+}

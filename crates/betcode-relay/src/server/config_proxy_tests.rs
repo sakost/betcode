@@ -1,9 +1,5 @@
 //! Tests for `ConfigProxyService`.
 
-use std::sync::Arc;
-
-use tonic::Request;
-
 use betcode_proto::v1::config_service_server::ConfigService;
 use betcode_proto::v1::{
     GetPermissionsRequest, GetSettingsRequest, ListMcpServersRequest, ListMcpServersResponse,
@@ -12,25 +8,11 @@ use betcode_proto::v1::{
 
 use super::ConfigProxyService;
 use crate::server::test_helpers::{
-    make_request, setup_offline_router, setup_router_with_machine, spawn_error_responder,
-    spawn_responder, test_claims,
+    assert_daemon_error, assert_no_claims_error, assert_no_machine_error, assert_offline_error,
+    make_request, proxy_test_setup, spawn_responder,
 };
 
-async fn setup_with_machine(
-    mid: &str,
-) -> (
-    ConfigProxyService,
-    Arc<crate::router::RequestRouter>,
-    tokio::sync::mpsc::Receiver<betcode_proto::v1::TunnelFrame>,
-) {
-    let (router, rx) = setup_router_with_machine(mid).await;
-    (ConfigProxyService::new(Arc::clone(&router)), router, rx)
-}
-
-async fn setup_offline() -> ConfigProxyService {
-    let router = setup_offline_router().await;
-    ConfigProxyService::new(router)
-}
+proxy_test_setup!(ConfigProxyService);
 
 // --- Unary RPC routing ---
 
@@ -110,50 +92,50 @@ async fn get_permissions_routes_to_machine() {
 #[tokio::test]
 async fn machine_offline_returns_unavailable() {
     let svc = setup_offline().await;
-    let req = make_request(
+    assert_offline_error!(
+        svc,
+        get_settings,
         GetSettingsRequest {
             scope: String::new(),
-        },
-        "m-off",
+        }
     );
-    let err = svc.get_settings(req).await.unwrap_err();
-    assert_eq!(err.code(), tonic::Code::Unavailable);
 }
 
 #[tokio::test]
 async fn missing_machine_id_returns_invalid_argument() {
     let (svc, _router, _rx) = setup_with_machine("m1").await;
-    let mut req = Request::new(GetSettingsRequest {
-        scope: String::new(),
-    });
-    req.extensions_mut().insert(test_claims());
-    let err = svc.get_settings(req).await.unwrap_err();
-    assert_eq!(err.code(), tonic::Code::InvalidArgument);
+    assert_no_machine_error!(
+        svc,
+        get_settings,
+        GetSettingsRequest {
+            scope: String::new(),
+        }
+    );
 }
 
 #[tokio::test]
 async fn missing_claims_returns_internal() {
     let (svc, _router, _rx) = setup_with_machine("m1").await;
-    let mut req = Request::new(GetSettingsRequest {
-        scope: String::new(),
-    });
-    req.metadata_mut()
-        .insert("x-machine-id", "m1".parse().unwrap());
-    let err = svc.get_settings(req).await.unwrap_err();
-    assert_eq!(err.code(), tonic::Code::Internal);
+    assert_no_claims_error!(
+        svc,
+        get_settings,
+        GetSettingsRequest {
+            scope: String::new(),
+        }
+    );
 }
 
 #[tokio::test]
 async fn daemon_error_propagated_to_client() {
     let (svc, router, rx) = setup_with_machine("m1").await;
-    spawn_error_responder(&router, "m1", rx, "daemon error");
-    let req = make_request(
+    assert_daemon_error!(
+        svc,
+        get_settings,
         GetSettingsRequest {
             scope: String::new(),
         },
-        "m1",
+        router,
+        rx,
+        "daemon error"
     );
-    let err = svc.get_settings(req).await.unwrap_err();
-    assert_eq!(err.code(), tonic::Code::Internal);
-    assert!(err.message().contains("daemon error"));
 }

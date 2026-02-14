@@ -50,16 +50,22 @@ mod tests {
         Arc::new(JwtManager::new(b"test-secret", 3600, 86400))
     }
 
-    #[test]
-    fn valid_access_token_passes() {
-        let jwt = test_jwt();
-        let (token, _) = jwt.issue_access_token("u1", "alice").unwrap();
-
+    /// Create a `Request<()>` with the given token in the `authorization` header.
+    fn request_with_bearer(token: &str) -> Request<()> {
         let mut req = Request::new(());
         req.metadata_mut().insert(
             "authorization",
             MetadataValue::try_from(format!("Bearer {token}")).unwrap(),
         );
+        req
+    }
+
+    #[test]
+    fn valid_access_token_passes() {
+        let jwt = test_jwt();
+        let (token, _) = jwt.issue_access_token("u1", "alice").unwrap();
+
+        let req = request_with_bearer(&token);
 
         let interceptor = jwt_interceptor(jwt);
         let result = interceptor(req);
@@ -85,11 +91,7 @@ mod tests {
         let jwt = test_jwt();
         let (token, _) = jwt.issue_refresh_token("u1", "alice").unwrap();
 
-        let mut req = Request::new(());
-        req.metadata_mut().insert(
-            "authorization",
-            MetadataValue::try_from(format!("Bearer {token}")).unwrap(),
-        );
+        let req = request_with_bearer(&token);
 
         let interceptor = jwt_interceptor(jwt);
         let err = interceptor(req).unwrap_err();

@@ -133,19 +133,25 @@ pub fn load_config(project_dir: Option<&Path>) -> Result<Config> {
     Ok(config)
 }
 
-/// Get the global config directory path.
-pub fn global_config_path() -> Option<PathBuf> {
+/// Resolve a platform-specific path under the betcode config/data directory.
+///
+/// On Linux, uses `$XDG_CONFIG_HOME` (falling back to `$HOME/.config`).
+/// On macOS, uses `$HOME/Library/Application Support`.
+/// On Windows, uses `$USERPROFILE/.betcode`.
+fn betcode_user_path(filename: &str) -> Option<PathBuf> {
     #[cfg(target_os = "windows")]
     {
         std::env::var("USERPROFILE")
             .ok()
-            .map(|h| PathBuf::from(h).join(".betcode").join("settings.json"))
+            .map(|h| PathBuf::from(h).join(".betcode").join(filename))
     }
     #[cfg(target_os = "macos")]
     {
-        std::env::var("HOME")
-            .ok()
-            .map(|h| PathBuf::from(h).join("Library/Application Support/betcode/settings.json"))
+        std::env::var("HOME").ok().map(|h| {
+            PathBuf::from(h)
+                .join("Library/Application Support/betcode")
+                .join(filename)
+        })
     }
     #[cfg(target_os = "linux")]
     {
@@ -157,44 +163,23 @@ pub fn global_config_path() -> Option<PathBuf> {
                     .ok()
                     .map(|h| PathBuf::from(h).join(".config"))
             })
-            .map(|p| p.join("betcode").join("settings.json"))
+            .map(|p| p.join("betcode").join(filename))
     }
     #[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
     {
+        let _ = filename;
         None
     }
 }
 
+/// Get the global config directory path.
+pub fn global_config_path() -> Option<PathBuf> {
+    betcode_user_path("settings.json")
+}
+
 /// Get the database path for the daemon.
 pub fn database_path() -> Option<PathBuf> {
-    #[cfg(target_os = "windows")]
-    {
-        std::env::var("USERPROFILE")
-            .ok()
-            .map(|h| PathBuf::from(h).join(".betcode").join("daemon.db"))
-    }
-    #[cfg(target_os = "macos")]
-    {
-        std::env::var("HOME")
-            .ok()
-            .map(|h| PathBuf::from(h).join("Library/Application Support/betcode/daemon.db"))
-    }
-    #[cfg(target_os = "linux")]
-    {
-        std::env::var("XDG_CONFIG_HOME")
-            .ok()
-            .map(PathBuf::from)
-            .or_else(|| {
-                std::env::var("HOME")
-                    .ok()
-                    .map(|h| PathBuf::from(h).join(".config"))
-            })
-            .map(|p| p.join("betcode").join("daemon.db"))
-    }
-    #[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
-    {
-        None
-    }
+    betcode_user_path("daemon.db")
 }
 
 fn load_config_file(path: &Path) -> Result<Config> {

@@ -10,7 +10,6 @@ use std::time::Duration;
 use clap::Parser;
 use tonic::transport::Server;
 use tracing::{info, warn};
-use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 use betcode_proto::v1::agent_service_server::AgentServiceServer;
 use betcode_proto::v1::auth_service_server::AuthServiceServer;
@@ -91,20 +90,7 @@ struct Args {
 async fn main() -> anyhow::Result<()> {
     let args = Args::parse();
 
-    let env_filter = tracing_subscriber::EnvFilter::new(
-        std::env::var("RUST_LOG").unwrap_or_else(|_| "betcode_relay=info".into()),
-    );
-    if args.log_json {
-        tracing_subscriber::registry()
-            .with(env_filter)
-            .with(tracing_subscriber::fmt::layer().json())
-            .init();
-    } else {
-        tracing_subscriber::registry()
-            .with(env_filter)
-            .with(tracing_subscriber::fmt::layer())
-            .init();
-    }
+    betcode_core::tracing_init::init_tracing("betcode_relay=info", args.log_json);
 
     info!(
         version = env!("CARGO_PKG_VERSION"),

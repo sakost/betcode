@@ -1,6 +1,5 @@
 //! Tests for `AgentProxyService`.
 
-use std::collections::HashMap;
 use std::sync::Arc;
 
 use tokio_stream::StreamExt;
@@ -9,31 +8,39 @@ use tonic::Request;
 use betcode_proto::v1::agent_service_server::AgentService;
 use betcode_proto::v1::{
     AgentEvent, CancelTurnRequest, CancelTurnResponse, CompactSessionRequest,
-    CompactSessionResponse, EncryptedPayload, FrameType, InputLockRequest, InputLockResponse,
-    KeyExchangeRequest, KeyExchangeResponse, ListSessionsRequest, ListSessionsResponse,
-    ResumeSessionRequest, SessionSummary, StreamPayload, TunnelFrame,
+    CompactSessionResponse, InputLockRequest, InputLockResponse, KeyExchangeRequest,
+    KeyExchangeResponse, ListSessionsRequest, ListSessionsResponse, ResumeSessionRequest,
+    SessionSummary,
 };
 
 use super::{extract_machine_id, AgentProxyService};
 use crate::server::test_helpers::{
-    encode_msg, make_request, setup_offline_router, setup_router_with_machine,
-    spawn_error_responder, spawn_responder, test_claims,
+    assert_daemon_error, assert_no_claims_error, assert_no_machine_error, assert_offline_error,
+    make_request, proxy_test_setup, spawn_responder, spawn_stream_responder, stream_data_frame,
 };
 
-async fn setup_with_machine(
-    mid: &str,
-) -> (
-    AgentProxyService,
-    Arc<crate::router::RequestRouter>,
-    tokio::sync::mpsc::Receiver<TunnelFrame>,
-) {
-    let (router, rx) = setup_router_with_machine(mid).await;
-    (AgentProxyService::new(Arc::clone(&router)), router, rx)
-}
+proxy_test_setup!(AgentProxyService);
 
-async fn setup_offline() -> AgentProxyService {
-    let router = setup_offline_router().await;
-    AgentProxyService::new(router)
+/// Send a `ResumeSessionRequest` and collect all streamed `AgentEvent`s.
+async fn collect_resume_events(
+    svc: &AgentProxyService,
+    session_id: &str,
+    machine_id: &str,
+) -> Vec<AgentEvent> {
+    let req = make_request(
+        ResumeSessionRequest {
+            session_id: session_id.into(),
+            from_sequence: 0,
+        },
+        machine_id,
+    );
+    let resp = svc.resume_session(req).await.unwrap();
+    let mut stream = resp.into_inner();
+    let mut events = vec![];
+    while let Some(result) = stream.next().await {
+        events.push(result.unwrap());
+    }
+    events
 }
 
 // --- extract_machine_id ---
@@ -152,116 +159,79 @@ async fn request_input_lock_routes_to_machine() {
 #[tokio::test]
 async fn machine_offline_returns_unavailable() {
     let svc = setup_offline().await;
-    let req = make_request(
+    assert_offline_error!(
+        svc,
+        list_sessions,
         ListSessionsRequest {
             working_directory: String::new(),
             worktree_id: String::new(),
             limit: 10,
             offset: 0,
-        },
-        "m-off",
+        }
     );
-    let err = svc.list_sessions(req).await.unwrap_err();
-    assert_eq!(err.code(), tonic::Code::Unavailable);
 }
 
 #[tokio::test]
 async fn missing_machine_id_returns_invalid_argument() {
     let (svc, _router, _rx) = setup_with_machine("m1").await;
-    let mut req = Request::new(ListSessionsRequest {
-        working_directory: String::new(),
-        worktree_id: String::new(),
-        limit: 10,
-        offset: 0,
-    });
-    req.extensions_mut().insert(test_claims());
-    let err = svc.list_sessions(req).await.unwrap_err();
-    assert_eq!(err.code(), tonic::Code::InvalidArgument);
+    assert_no_machine_error!(
+        svc,
+        list_sessions,
+        ListSessionsRequest {
+            working_directory: String::new(),
+            worktree_id: String::new(),
+            limit: 10,
+            offset: 0,
+        }
+    );
 }
 
 #[tokio::test]
 async fn missing_claims_returns_internal() {
     let (svc, _router, _rx) = setup_with_machine("m1").await;
-    let mut req = Request::new(ListSessionsRequest {
-        working_directory: String::new(),
-        worktree_id: String::new(),
-        limit: 10,
-        offset: 0,
-    });
-    req.metadata_mut()
-        .insert("x-machine-id", "m1".parse().unwrap());
-    let err = svc.list_sessions(req).await.unwrap_err();
-    assert_eq!(err.code(), tonic::Code::Internal);
+    assert_no_claims_error!(
+        svc,
+        list_sessions,
+        ListSessionsRequest {
+            working_directory: String::new(),
+            worktree_id: String::new(),
+            limit: 10,
+            offset: 0,
+        }
+    );
 }
 
 #[tokio::test]
 async fn daemon_error_propagated_to_client() {
     let (svc, router, rx) = setup_with_machine("m1").await;
-    spawn_error_responder(&router, "m1", rx, "daemon crashed");
-    let req = make_request(
+    assert_daemon_error!(
+        svc,
+        list_sessions,
         ListSessionsRequest {
             working_directory: String::new(),
             worktree_id: String::new(),
             limit: 10,
             offset: 0,
         },
-        "m1",
+        router,
+        rx,
+        "daemon crashed"
     );
-    let err = svc.list_sessions(req).await.unwrap_err();
-    assert_eq!(err.code(), tonic::Code::Internal);
-    assert!(err.message().contains("daemon crashed"));
 }
 
 // --- Streaming ---
 
 #[tokio::test]
 async fn resume_session_streams_events() {
-    let (svc, router, mut tunnel_rx) = setup_with_machine("m1").await;
-    let rc = Arc::clone(&router);
-    tokio::spawn(async move {
-        if let Some(frame) = tunnel_rx.recv().await {
-            let rid = frame.request_id.clone();
-            let conn = rc.registry().get("m1").await.unwrap();
-            for seq in 0u64..2 {
-                let event = AgentEvent {
-                    sequence: seq,
-                    ..Default::default()
-                };
-                let f = TunnelFrame {
-                    request_id: rid.clone(),
-                    frame_type: FrameType::StreamData as i32,
-                    timestamp: None,
-                    payload: Some(betcode_proto::v1::tunnel_frame::Payload::StreamData(
-                        StreamPayload {
-                            method: String::new(),
-                            encrypted: Some(EncryptedPayload {
-                                ciphertext: encode_msg(&event),
-                                nonce: Vec::new(),
-                                ephemeral_pubkey: Vec::new(),
-                            }),
-                            sequence: seq,
-                            metadata: HashMap::new(),
-                        },
-                    )),
-                };
-                conn.send_stream_frame(&rid, f).await;
-            }
-            conn.complete_stream(&rid).await;
-        }
-    });
-    let req = make_request(
-        ResumeSessionRequest {
-            session_id: "s1".into(),
-            from_sequence: 0,
-        },
-        "m1",
-    );
-    let resp = svc.resume_session(req).await.unwrap();
-    let mut stream = resp.into_inner();
-    let mut events = vec![];
-    while let Some(result) = stream.next().await {
-        events.push(result.unwrap());
-    }
+    let (svc, router, rx) = setup_with_machine("m1").await;
+    let events: Vec<AgentEvent> = (0u64..2)
+        .map(|seq| AgentEvent {
+            sequence: seq,
+            ..Default::default()
+        })
+        .collect();
+    spawn_stream_responder(&router, "m1", rx, events);
+    let events = collect_resume_events(&svc, "s1", "m1").await;
     assert_eq!(events.len(), 2);
     assert_eq!(events[0].sequence, 0);
     assert_eq!(events[1].sequence, 1);
@@ -270,17 +240,14 @@ async fn resume_session_streams_events() {
 #[tokio::test]
 async fn resume_session_offline_returns_unavailable() {
     let svc = setup_offline().await;
-    let req = make_request(
+    assert_offline_error!(
+        svc,
+        resume_session,
         ResumeSessionRequest {
             session_id: "s1".into(),
             from_sequence: 0,
-        },
-        "m-off",
+        }
     );
-    match svc.resume_session(req).await {
-        Err(err) => assert_eq!(err.code(), tonic::Code::Unavailable),
-        Ok(_) => panic!("Expected unavailable error"),
-    }
 }
 
 // --- Key exchange ---
@@ -315,17 +282,16 @@ async fn exchange_keys_routes_to_machine() {
 #[tokio::test]
 async fn exchange_keys_offline_returns_unavailable() {
     let svc = setup_offline().await;
-    let req = make_request(
+    assert_offline_error!(
+        svc,
+        exchange_keys,
         KeyExchangeRequest {
             machine_id: "m-off".into(),
             identity_pubkey: Vec::new(),
             fingerprint: String::new(),
             ephemeral_pubkey: vec![0u8; 32],
-        },
-        "m-off",
+        }
     );
-    let err = svc.exchange_keys(req).await.unwrap_err();
-    assert_eq!(err.code(), tonic::Code::Unavailable);
 }
 
 // --- Encrypted event passthrough ---
@@ -356,41 +322,13 @@ async fn encrypted_agent_event_forwards_through_proxy() {
         if let Some(frame) = tunnel_rx.recv().await {
             let rid = frame.request_id.clone();
             let conn = rc.registry().get("m1").await.unwrap();
-            let f = TunnelFrame {
-                request_id: rid.clone(),
-                frame_type: FrameType::StreamData as i32,
-                timestamp: None,
-                payload: Some(betcode_proto::v1::tunnel_frame::Payload::StreamData(
-                    StreamPayload {
-                        method: String::new(),
-                        encrypted: Some(EncryptedPayload {
-                            ciphertext: encode_msg(&encrypted_event),
-                            nonce: Vec::new(),
-                            ephemeral_pubkey: Vec::new(),
-                        }),
-                        sequence: 0,
-                        metadata: HashMap::new(),
-                    },
-                )),
-            };
+            let f = stream_data_frame(&rid, &encrypted_event, 0);
             conn.send_stream_frame(&rid, f).await;
             conn.complete_stream(&rid).await;
         }
     });
 
-    let req = make_request(
-        ResumeSessionRequest {
-            session_id: "s1".into(),
-            from_sequence: 0,
-        },
-        "m1",
-    );
-    let resp = svc.resume_session(req).await.unwrap();
-    let mut stream = resp.into_inner();
-    let mut events = vec![];
-    while let Some(result) = stream.next().await {
-        events.push(result.unwrap());
-    }
+    let events = collect_resume_events(&svc, "s1", "m1").await;
     assert_eq!(events.len(), 1);
     assert_eq!(events[0].sequence, 42);
 

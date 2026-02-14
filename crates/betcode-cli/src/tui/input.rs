@@ -203,19 +203,11 @@ async fn clear_session(app: &mut App, tx: &mpsc::Sender<AgentRequest>) {
     let model = app.model.clone();
 
     let send_result = tx
-        .send(AgentRequest {
-            request: Some(betcode_proto::v1::agent_request::Request::Start(
-                betcode_proto::v1::StartConversation {
-                    session_id: new_sid.clone(),
-                    working_directory: wd,
-                    model,
-                    allowed_tools: Vec::new(),
-                    plan_mode: false,
-                    worktree_id: String::new(),
-                    metadata: std::collections::HashMap::default(),
-                },
-            )),
-        })
+        .send(crate::connection::start_conversation_request(
+            new_sid.clone(),
+            wd,
+            model,
+        ))
         .await;
 
     if send_result.is_err() {

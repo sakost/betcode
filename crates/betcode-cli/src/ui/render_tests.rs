@@ -15,48 +15,50 @@ mod tests {
     use ratatui::widgets::{Paragraph, Wrap};
     use ratatui::Terminal;
 
+    /// Create a `TestBackend` + `Terminal` of the given size and draw the app once.
+    fn draw_app(width: u16, height: u16, app: &mut App) -> Terminal<TestBackend> {
+        let backend = TestBackend::new(width, height);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal.draw(|frame| draw(frame, app)).unwrap();
+        terminal
+    }
+
+    /// Create an App pre-loaded with `n` numbered user messages, draw it at
+    /// the given terminal size, and return `(terminal, app)`.
+    fn draw_app_with_messages(width: u16, height: u16, n: usize) -> (Terminal<TestBackend>, App) {
+        let mut app = App::new();
+        for i in 0..n {
+            app.add_user_message(format!("Message {i}"));
+        }
+        let terminal = draw_app(width, height, &mut app);
+        (terminal, app)
+    }
+
     #[test]
     fn render_empty_app() {
-        let backend = TestBackend::new(80, 24);
-        let mut terminal = Terminal::new(backend).unwrap();
-        let mut app = App::new();
-        terminal.draw(|frame| draw(frame, &mut app)).unwrap();
+        draw_app(80, 24, &mut App::new());
     }
 
     #[test]
     fn render_with_messages() {
-        let backend = TestBackend::new(80, 24);
-        let mut terminal = Terminal::new(backend).unwrap();
         let mut app = App::new();
         app.add_user_message("Hello".to_string());
         app.start_assistant_message();
         app.append_text("Hi there!");
         app.finish_streaming();
-        terminal.draw(|frame| draw(frame, &mut app)).unwrap();
+        draw_app(80, 24, &mut app);
     }
 
     #[test]
     fn scroll_pinned_to_bottom_by_default() {
-        let backend = TestBackend::new(80, 24);
-        let mut terminal = Terminal::new(backend).unwrap();
-        let mut app = App::new();
-        for i in 0..30 {
-            app.add_user_message(format!("Message {i}"));
-        }
-        terminal.draw(|frame| draw(frame, &mut app)).unwrap();
+        let (_terminal, app) = draw_app_with_messages(80, 24, 30);
         assert!(app.scroll_pinned);
         assert!(app.total_lines >= 30);
     }
 
     #[test]
     fn scroll_indicator_values_are_valid() {
-        let backend = TestBackend::new(80, 24);
-        let mut terminal = Terminal::new(backend).unwrap();
-        let mut app = App::new();
-        for i in 0..30 {
-            app.add_user_message(format!("Message {i}"));
-        }
-        terminal.draw(|frame| draw(frame, &mut app)).unwrap();
+        let (_terminal, mut app) = draw_app_with_messages(80, 24, 30);
         app.scroll_up(5);
         assert!(!app.scroll_pinned);
         let max_scroll = app.total_lines.saturating_sub(app.viewport_height);
@@ -65,11 +67,9 @@ mod tests {
 
     #[test]
     fn wrapped_lines_counted_correctly() {
-        let backend = TestBackend::new(40, 24);
-        let mut terminal = Terminal::new(backend).unwrap();
         let mut app = App::new();
         app.add_user_message("A".repeat(100));
-        terminal.draw(|frame| draw(frame, &mut app)).unwrap();
+        draw_app(40, 24, &mut app);
         assert!(app.total_lines >= 3);
     }
 
@@ -88,12 +88,10 @@ mod tests {
 
     #[test]
     fn input_wraps_long_text() {
-        let backend = TestBackend::new(40, 24);
-        let mut terminal = Terminal::new(backend).unwrap();
         let mut app = App::new();
         app.input = "A".repeat(80);
         app.cursor_pos = 80;
-        terminal.draw(|frame| draw(frame, &mut app)).unwrap();
+        let mut terminal = draw_app(40, 24, &mut app);
         let pos = terminal.get_cursor_position().unwrap();
         assert!(pos.x < 40);
         assert!(pos.y < 24);
@@ -101,12 +99,10 @@ mod tests {
 
     #[test]
     fn input_short_text_stays_single_line() {
-        let backend = TestBackend::new(80, 24);
-        let mut terminal = Terminal::new(backend).unwrap();
         let mut app = App::new();
         app.input = "hello".to_string();
         app.cursor_pos = 5;
-        terminal.draw(|frame| draw(frame, &mut app)).unwrap();
+        let mut terminal = draw_app(80, 24, &mut app);
         let pos = terminal.get_cursor_position().unwrap();
         // x = 2 (border + padding) + 5 (cursor col) = 7
         assert_eq!(pos.x, 7);
@@ -114,14 +110,12 @@ mod tests {
 
     #[test]
     fn input_cursor_at_wrap_boundary() {
-        let backend = TestBackend::new(40, 24);
-        let mut terminal = Terminal::new(backend).unwrap();
         let mut app = App::new();
         // inner_width = 40 - 4 (borders + padding) = 36
         // Text exactly fills inner width: cursor clamped to right edge of content
         app.input = "B".repeat(36);
         app.cursor_pos = 36;
-        terminal.draw(|frame| draw(frame, &mut app)).unwrap();
+        let mut terminal = draw_app(40, 24, &mut app);
         let pos = terminal.get_cursor_position().unwrap();
         // x = min(2 + 36, 40 - 3) = min(38, 37) = 37
         assert_eq!(pos.x, 37);
@@ -129,7 +123,7 @@ mod tests {
         // One char past inner width wraps to next line
         app.input = "B".repeat(37);
         app.cursor_pos = 37;
-        terminal.draw(|frame| draw(frame, &mut app)).unwrap();
+        let mut terminal = draw_app(40, 24, &mut app);
         let pos = terminal.get_cursor_position().unwrap();
         // row 1, col 1 → x = 2 + 1 = 3
         assert_eq!(pos.x, 3);
@@ -137,14 +131,12 @@ mod tests {
 
     #[test]
     fn input_cursor_mid_position() {
-        let backend = TestBackend::new(40, 24);
-        let mut terminal = Terminal::new(backend).unwrap();
         let mut app = App::new();
         // inner_width = 36. 80 chars: line1=0-35, line2=36-71, line3=72-79
         // cursor at 40: line 2, offset 40-36=4 → col 4
         app.input = "C".repeat(80);
         app.cursor_pos = 40;
-        terminal.draw(|frame| draw(frame, &mut app)).unwrap();
+        let mut terminal = draw_app(40, 24, &mut app);
         let pos = terminal.get_cursor_position().unwrap();
         // x = 2 + 4 = 6
         assert_eq!(pos.x, 6);
@@ -152,10 +144,7 @@ mod tests {
 
     #[test]
     fn input_empty_renders_without_panic() {
-        let backend = TestBackend::new(80, 24);
-        let mut terminal = Terminal::new(backend).unwrap();
-        let mut app = App::new();
-        terminal.draw(|frame| draw(frame, &mut app)).unwrap();
+        let mut terminal = draw_app(80, 24, &mut App::new());
         let pos = terminal.get_cursor_position().unwrap();
         // x = 2 (border + padding) + 0 = 2
         assert_eq!(pos.x, 2);
@@ -163,12 +152,10 @@ mod tests {
 
     #[test]
     fn input_height_capped_at_third_of_screen() {
-        let backend = TestBackend::new(40, 24);
-        let mut terminal = Terminal::new(backend).unwrap();
         let mut app = App::new();
         app.input = "D".repeat(500);
         app.cursor_pos = 500;
-        terminal.draw(|frame| draw(frame, &mut app)).unwrap();
+        let mut terminal = draw_app(40, 24, &mut app);
         let pos = terminal.get_cursor_position().unwrap();
         assert!(pos.x < 40);
         assert!(pos.y < 24);
@@ -178,8 +165,6 @@ mod tests {
 
     #[test]
     fn empty_line_between_messages() {
-        let backend = TestBackend::new(80, 40);
-        let mut terminal = Terminal::new(backend).unwrap();
         let mut app = App::new();
 
         // Add: User → Assistant → User
@@ -189,7 +174,7 @@ mod tests {
         app.finish_streaming();
         app.add_user_message("Thanks".to_string());
 
-        terminal.draw(|frame| draw(frame, &mut app)).unwrap();
+        draw_app(80, 40, &mut app);
 
         // 3 messages + 2 empty separator lines between them = 5 total lines
         assert_eq!(
@@ -201,8 +186,6 @@ mod tests {
 
     #[test]
     fn no_empty_line_after_streaming_message() {
-        let backend = TestBackend::new(80, 40);
-        let mut terminal = Terminal::new(backend).unwrap();
         let mut app = App::new();
 
         // User → Assistant (still streaming)
@@ -211,7 +194,7 @@ mod tests {
         app.append_text("thinking...");
         // NOT calling finish_streaming() — message still streaming
 
-        terminal.draw(|frame| draw(frame, &mut app)).unwrap();
+        draw_app(80, 40, &mut app);
 
         // 2 messages + 1 separator (after User, before streaming Assistant) = 3 lines
         // No trailing separator after the streaming message
@@ -224,13 +207,11 @@ mod tests {
 
     #[test]
     fn single_message_no_separator() {
-        let backend = TestBackend::new(80, 40);
-        let mut terminal = Terminal::new(backend).unwrap();
         let mut app = App::new();
 
         app.add_user_message("Hello".to_string());
 
-        terminal.draw(|frame| draw(frame, &mut app)).unwrap();
+        draw_app(80, 40, &mut app);
 
         // Single message, no separator
         assert_eq!(
@@ -259,74 +240,79 @@ mod tests {
 
     #[test]
     fn render_permission_prompt_panel() {
-        let backend = TestBackend::new(80, 24);
-        let mut terminal = Terminal::new(backend).unwrap();
-        let mut app = make_permission_app(AppMode::PermissionPrompt);
-        terminal.draw(|frame| draw(frame, &mut app)).unwrap();
+        draw_app(80, 24, &mut make_permission_app(AppMode::PermissionPrompt));
     }
 
     #[test]
     fn render_permission_prompt_with_input_preview() {
-        let backend = TestBackend::new(80, 24);
-        let mut terminal = Terminal::new(backend).unwrap();
         let mut app = make_permission_app(AppMode::PermissionPrompt);
         app.pending_permission.as_mut().unwrap().original_input =
             Some(serde_json::json!({"command": "ls -la", "timeout": 30}));
-        terminal.draw(|frame| draw(frame, &mut app)).unwrap();
+        draw_app(80, 24, &mut app);
     }
 
     #[test]
     fn render_permission_edit_input() {
-        let backend = TestBackend::new(80, 24);
-        let mut terminal = Terminal::new(backend).unwrap();
         let mut app = make_permission_app(AppMode::PermissionEditInput);
         app.pending_permission.as_mut().unwrap().edit_buffer = r#"{"command": "ls"}"#.to_string();
         app.pending_permission.as_mut().unwrap().edit_cursor = 17;
-        terminal.draw(|frame| draw(frame, &mut app)).unwrap();
+        draw_app(80, 24, &mut app);
     }
 
     #[test]
     fn render_permission_comment_mode() {
-        let backend = TestBackend::new(80, 24);
-        let mut terminal = Terminal::new(backend).unwrap();
         let mut app = make_permission_app(AppMode::PermissionComment);
         app.pending_permission.as_mut().unwrap().edit_buffer = "be careful with this".to_string();
         app.pending_permission.as_mut().unwrap().edit_cursor = 20;
-        terminal.draw(|frame| draw(frame, &mut app)).unwrap();
+        draw_app(80, 24, &mut app);
     }
 
     #[test]
     fn render_permission_deny_message_interrupt() {
-        let backend = TestBackend::new(80, 24);
-        let mut terminal = Terminal::new(backend).unwrap();
         let mut app = make_permission_app(AppMode::PermissionDenyMessage);
         app.pending_permission.as_mut().unwrap().deny_interrupt = true;
         app.pending_permission.as_mut().unwrap().edit_buffer = "stop this".to_string();
         app.pending_permission.as_mut().unwrap().edit_cursor = 9;
-        terminal.draw(|frame| draw(frame, &mut app)).unwrap();
+        draw_app(80, 24, &mut app);
     }
 
     #[test]
     fn render_permission_deny_message_continue() {
-        let backend = TestBackend::new(80, 24);
-        let mut terminal = Terminal::new(backend).unwrap();
         let mut app = make_permission_app(AppMode::PermissionDenyMessage);
         app.pending_permission.as_mut().unwrap().deny_interrupt = false;
-        terminal.draw(|frame| draw(frame, &mut app)).unwrap();
+        draw_app(80, 24, &mut app);
     }
 
     // -- Question panel rendering tests --
 
-    #[test]
-    fn render_question_single_select() {
-        let backend = TestBackend::new(80, 24);
-        let mut terminal = Terminal::new(backend).unwrap();
+    /// Create an App with a pending user question and the given parameters.
+    fn make_question_app(
+        question_id: &str,
+        question: &str,
+        options: Vec<QuestionOptionDisplay>,
+        multi_select: bool,
+        highlight: usize,
+        selected: Vec<usize>,
+    ) -> App {
         let mut app = App::new();
         app.mode = AppMode::UserQuestion;
         app.pending_question = Some(PendingUserQuestion {
-            question_id: "q1".to_string(),
-            question: "Which approach?".to_string(),
-            options: vec![
+            question_id: question_id.to_string(),
+            question: question.to_string(),
+            options,
+            multi_select,
+            highlight,
+            selected,
+        });
+        app
+    }
+
+    #[test]
+    fn render_question_single_select() {
+        let mut app = make_question_app(
+            "q1",
+            "Which approach?",
+            vec![
                 QuestionOptionDisplay {
                     label: "Option A".to_string(),
                     description: "Fast but risky".to_string(),
@@ -336,23 +322,19 @@ mod tests {
                     description: "Slow but safe".to_string(),
                 },
             ],
-            multi_select: false,
-            highlight: 0,
-            selected: Vec::new(),
-        });
-        terminal.draw(|frame| draw(frame, &mut app)).unwrap();
+            false,
+            0,
+            Vec::new(),
+        );
+        draw_app(80, 24, &mut app);
     }
 
     #[test]
     fn render_question_multi_select_with_selections() {
-        let backend = TestBackend::new(80, 24);
-        let mut terminal = Terminal::new(backend).unwrap();
-        let mut app = App::new();
-        app.mode = AppMode::UserQuestion;
-        app.pending_question = Some(PendingUserQuestion {
-            question_id: "q2".to_string(),
-            question: "Which features?".to_string(),
-            options: vec![
+        let mut app = make_question_app(
+            "q2",
+            "Which features?",
+            vec![
                 QuestionOptionDisplay {
                     label: "Auth".to_string(),
                     description: "User auth".to_string(),
@@ -366,11 +348,11 @@ mod tests {
                     description: "Logging".to_string(),
                 },
             ],
-            multi_select: true,
-            highlight: 1,
-            selected: vec![0, 2],
-        });
-        terminal.draw(|frame| draw(frame, &mut app)).unwrap();
+            true,
+            1,
+            vec![0, 2],
+        );
+        draw_app(80, 24, &mut app);
     }
 
     /// Word-wrapped messages must report the same `total_lines` that ratatui
@@ -380,8 +362,6 @@ mod tests {
     fn total_lines_matches_ratatui_word_wrap() {
         // Narrow terminal forces aggressive word wrapping
         let width = 30u16;
-        let backend = TestBackend::new(width, 40);
-        let mut terminal = Terminal::new(backend).unwrap();
         let mut app = App::new();
 
         // Build a message with many short words — word wrapping will produce
@@ -393,7 +373,7 @@ mod tests {
         app.append_text(&long_text);
         app.finish_streaming();
 
-        terminal.draw(|frame| draw(frame, &mut app)).unwrap();
+        draw_app(width, 40, &mut app);
 
         // Build the same Paragraph that draw_messages builds and ask ratatui
         // for its authoritative line count.
@@ -421,14 +401,10 @@ mod tests {
 
     #[test]
     fn render_question_narrow_terminal() {
-        let backend = TestBackend::new(40, 15);
-        let mut terminal = Terminal::new(backend).unwrap();
-        let mut app = App::new();
-        app.mode = AppMode::UserQuestion;
-        app.pending_question = Some(PendingUserQuestion {
-            question_id: "q3".to_string(),
-            question: "Pick one".to_string(),
-            options: vec![
+        let mut app = make_question_app(
+            "q3",
+            "Pick one",
+            vec![
                 QuestionOptionDisplay {
                     label: "A".to_string(),
                     description: String::new(),
@@ -438,10 +414,10 @@ mod tests {
                     description: String::new(),
                 },
             ],
-            multi_select: false,
-            highlight: 0,
-            selected: vec![0],
-        });
-        terminal.draw(|frame| draw(frame, &mut app)).unwrap();
+            false,
+            0,
+            vec![0],
+        );
+        draw_app(40, 15, &mut app);
     }
 }

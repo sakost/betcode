@@ -23,6 +23,32 @@ impl MachineServiceImpl {
     }
 }
 
+/// Extract the authenticated user ID from gRPC request claims.
+#[allow(clippy::result_large_err)]
+fn extract_user_id<T>(request: &Request<T>) -> Result<String, Status> {
+    let claims = extract_claims(request)?;
+    Ok(claims.sub.clone())
+}
+
+/// Verify the caller owns the given machine, returning `NOT_FOUND` or
+/// `PERMISSION_DENIED` on failure.
+#[allow(clippy::result_large_err)]
+async fn verify_machine_ownership(
+    db: &RelayDatabase,
+    machine_id: &str,
+    user_id: &str,
+) -> Result<crate::storage::Machine, Status> {
+    let machine = db
+        .get_machine(machine_id)
+        .await
+        .map_err(|_| Status::not_found("Machine not found"))?;
+
+    if machine.owner_id != user_id {
+        return Err(Status::permission_denied("Not your machine"));
+    }
+    Ok(machine)
+}
+
 fn machine_to_proto(m: &crate::storage::Machine) -> MachineInfo {
     let status = match m.status.as_str() {
         "online" => MachineStatus::Online,
@@ -52,10 +78,7 @@ impl MachineService for MachineServiceImpl {
         &self,
         request: Request<RegisterMachineRequest>,
     ) -> Result<Response<RegisterMachineResponse>, Status> {
-        let user_id = {
-            let claims = extract_claims(&request)?;
-            claims.sub.clone()
-        };
+        let user_id = extract_user_id(&request)?;
         let req = request.into_inner();
 
         let metadata_json =
@@ -79,10 +102,7 @@ impl MachineService for MachineServiceImpl {
         &self,
         request: Request<ListMachinesRequest>,
     ) -> Result<Response<ListMachinesResponse>, Status> {
-        let user_id = {
-            let claims = extract_claims(&request)?;
-            claims.sub.clone()
-        };
+        let user_id = extract_user_id(&request)?;
         let req = request.into_inner();
 
         let status_filter = match MachineStatus::try_from(req.status_filter) {
@@ -116,22 +136,10 @@ impl MachineService for MachineServiceImpl {
         &self,
         request: Request<RemoveMachineRequest>,
     ) -> Result<Response<RemoveMachineResponse>, Status> {
-        let user_id = {
-            let claims = extract_claims(&request)?;
-            claims.sub.clone()
-        };
+        let user_id = extract_user_id(&request)?;
         let req = request.into_inner();
 
-        // Verify ownership
-        let machine = self
-            .db
-            .get_machine(&req.machine_id)
-            .await
-            .map_err(|_| Status::not_found("Machine not found"))?;
-
-        if machine.owner_id != user_id {
-            return Err(Status::permission_denied("Not your machine"));
-        }
+        verify_machine_ownership(&self.db, &req.machine_id, &user_id).await?;
 
         let removed = self
             .db
@@ -149,21 +157,10 @@ impl MachineService for MachineServiceImpl {
         &self,
         request: Request<GetMachineRequest>,
     ) -> Result<Response<GetMachineResponse>, Status> {
-        let user_id = {
-            let claims = extract_claims(&request)?;
-            claims.sub.clone()
-        };
+        let user_id = extract_user_id(&request)?;
         let req = request.into_inner();
 
-        let machine = self
-            .db
-            .get_machine(&req.machine_id)
-            .await
-            .map_err(|_| Status::not_found("Machine not found"))?;
-
-        if machine.owner_id != user_id {
-            return Err(Status::permission_denied("Not your machine"));
-        }
+        let machine = verify_machine_ownership(&self.db, &req.machine_id, &user_id).await?;
 
         Ok(Response::new(GetMachineResponse {
             machine: Some(machine_to_proto(&machine)),

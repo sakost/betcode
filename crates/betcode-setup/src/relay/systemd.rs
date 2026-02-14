@@ -4,7 +4,7 @@ use std::path::Path;
 
 use anyhow::{Context, Result};
 
-use crate::cmd::{command_exists, run_cmd};
+use crate::cmd::{command_exists, ensure_system_user, run_cmd};
 use crate::config::RelaySetupConfig;
 
 use super::templates;
@@ -18,7 +18,7 @@ const ENV_FILE_PATH: &str = "/etc/betcode/relay.env";
 /// Deploy the relay using systemd.
 /// Assumes we are running as root (enforced by escalate).
 pub fn deploy(config: &RelaySetupConfig, is_update: bool) -> Result<()> {
-    create_system_user()?;
+    ensure_system_user()?;
     create_directories(config)?;
     write_env_file(config, is_update)?;
     write_systemd_unit(config)?;
@@ -38,25 +38,6 @@ pub fn deploy(config: &RelaySetupConfig, is_update: bool) -> Result<()> {
     setup_certbot(config, is_update)?;
     enable_and_start(is_update)?;
     Ok(())
-}
-
-fn create_system_user() -> Result<()> {
-    // Check if user already exists before attempting to create
-    if crate::cmd::command_exists("id")
-        && std::process::Command::new("id")
-            .arg("betcode")
-            .output()
-            .is_ok_and(|o| o.status.success())
-    {
-        tracing::debug!("system user 'betcode' already exists");
-        return Ok(());
-    }
-
-    run_cmd(
-        "creating system user 'betcode'",
-        "useradd",
-        &["--system", "--shell", "/usr/sbin/nologin", "betcode"],
-    )
 }
 
 fn create_directories(config: &RelaySetupConfig) -> Result<()> {
@@ -298,17 +279,26 @@ mod tests {
 
     // --- write_env_file_inner ---
 
-    #[test]
-    fn write_env_file_skips_existing_on_update() {
+    /// Write an env file via `write_env_file_inner` into a temp directory and
+    /// return its final contents. Optionally seeds the file with `initial`
+    /// content before calling the function under test.
+    fn run_write_env_file(is_update: bool, initial: Option<&str>) -> String {
         let dir = tempfile::tempdir().expect("tempdir");
         let env_path = dir.path().join("relay.env");
-        std::fs::write(&env_path, "BETCODE_JWT_SECRET=original-secret\n").expect("write");
+        if let Some(data) = initial {
+            std::fs::write(&env_path, data).expect("write");
+        }
 
         let config = test_config();
-        let result = write_env_file_inner(&config, true, env_path.to_str().expect("path"));
+        let result = write_env_file_inner(&config, is_update, env_path.to_str().expect("path"));
         assert!(result.is_ok());
 
-        let content = std::fs::read_to_string(&env_path).expect("read");
+        std::fs::read_to_string(&env_path).expect("read")
+    }
+
+    #[test]
+    fn write_env_file_skips_existing_on_update() {
+        let content = run_write_env_file(true, Some("BETCODE_JWT_SECRET=original-secret\n"));
         assert!(
             content.contains("original-secret"),
             "env file must be preserved on update"
@@ -317,28 +307,14 @@ mod tests {
 
     #[test]
     fn write_env_file_creates_on_fresh_install() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let env_path = dir.path().join("relay.env");
-
-        let config = test_config();
-        let result = write_env_file_inner(&config, false, env_path.to_str().expect("path"));
-        assert!(result.is_ok());
-
-        let content = std::fs::read_to_string(&env_path).expect("read");
+        let content = run_write_env_file(false, None);
         assert!(content.contains("BETCODE_JWT_SECRET="));
         assert!(content.contains("BETCODE_DB_PATH="));
     }
 
     #[test]
     fn write_env_file_creates_on_update_when_missing() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let env_path = dir.path().join("relay.env");
-
-        let config = test_config();
-        let result = write_env_file_inner(&config, true, env_path.to_str().expect("path"));
-        assert!(result.is_ok());
-
-        let content = std::fs::read_to_string(&env_path).expect("read");
+        let content = run_write_env_file(true, None);
         assert!(
             content.contains("BETCODE_JWT_SECRET="),
             "env file should be created even on update if it doesn't exist"

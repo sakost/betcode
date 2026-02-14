@@ -23,6 +23,35 @@ pub struct RequestRouter {
     request_timeout: Duration,
 }
 
+/// Build a `TunnelFrame` request envelope.
+///
+/// This is the common frame structure used by `forward_request`,
+/// `forward_stream`, and `forward_bidi_stream`.
+fn build_request_frame(
+    request_id: &str,
+    method: &str,
+    data: Vec<u8>,
+    metadata: HashMap<String, String>,
+) -> TunnelFrame {
+    TunnelFrame {
+        request_id: request_id.to_string(),
+        frame_type: FrameType::Request as i32,
+        timestamp: Some(prost_types::Timestamp::from(std::time::SystemTime::now())),
+        payload: Some(betcode_proto::v1::tunnel_frame::Payload::StreamData(
+            StreamPayload {
+                method: method.to_string(),
+                encrypted: Some(EncryptedPayload {
+                    ciphertext: data,
+                    nonce: Vec::new(),
+                    ephemeral_pubkey: Vec::new(),
+                }),
+                sequence: 0,
+                metadata,
+            },
+        )),
+    }
+}
+
 impl RequestRouter {
     pub const fn new(
         registry: Arc<ConnectionRegistry>,
@@ -77,24 +106,7 @@ impl RequestRouter {
             }
         };
 
-        // Build request frame — relay forwards encrypted payload opaquely
-        let frame = TunnelFrame {
-            request_id: request_id.to_string(),
-            frame_type: FrameType::Request as i32,
-            timestamp: Some(prost_types::Timestamp::from(std::time::SystemTime::now())),
-            payload: Some(betcode_proto::v1::tunnel_frame::Payload::StreamData(
-                StreamPayload {
-                    method: method.to_string(),
-                    encrypted: Some(EncryptedPayload {
-                        ciphertext: data,
-                        nonce: Vec::new(),
-                        ephemeral_pubkey: Vec::new(),
-                    }),
-                    sequence: 0,
-                    metadata,
-                },
-            )),
-        };
+        let frame = build_request_frame(request_id, method, data, metadata);
 
         // Register pending response before sending
         let response_rx = conn.register_pending(request_id.to_string()).await;
@@ -123,6 +135,40 @@ impl RequestRouter {
         }
     }
 
+    /// Common preamble for stream-based forwarding: look up the connection,
+    /// build the request frame, register a stream channel, and send the frame.
+    ///
+    /// Returns `(connection, stream_rx)`.
+    async fn setup_stream_forward(
+        &self,
+        machine_id: &str,
+        request_id: &str,
+        method: &str,
+        data: Vec<u8>,
+        metadata: std::collections::HashMap<String, String>,
+    ) -> Result<
+        (
+            std::sync::Arc<crate::registry::TunnelConnection>,
+            mpsc::Receiver<TunnelFrame>,
+        ),
+        RouterError,
+    > {
+        let conn = self
+            .registry
+            .get(machine_id)
+            .await
+            .ok_or_else(|| RouterError::MachineOffline(machine_id.to_string()))?;
+
+        let frame = build_request_frame(request_id, method, data, metadata);
+        let stream_rx = conn.register_stream_pending(request_id.to_string()).await;
+
+        conn.send_frame(frame)
+            .await
+            .map_err(|_| RouterError::SendFailed(machine_id.to_string()))?;
+
+        Ok((conn, stream_rx))
+    }
+
     /// Forward a streaming request to a machine and return a receiver for multiple response frames.
     ///
     /// Unlike `forward_request` which waits for a single response, this registers a stream
@@ -136,37 +182,9 @@ impl RequestRouter {
         data: Vec<u8>,
         metadata: std::collections::HashMap<String, String>,
     ) -> Result<mpsc::Receiver<TunnelFrame>, RouterError> {
-        let conn = self
-            .registry
-            .get(machine_id)
-            .await
-            .ok_or_else(|| RouterError::MachineOffline(machine_id.to_string()))?;
-
-        let frame = TunnelFrame {
-            request_id: request_id.to_string(),
-            frame_type: FrameType::Request as i32,
-            timestamp: Some(prost_types::Timestamp::from(std::time::SystemTime::now())),
-            payload: Some(betcode_proto::v1::tunnel_frame::Payload::StreamData(
-                StreamPayload {
-                    method: method.to_string(),
-                    encrypted: Some(EncryptedPayload {
-                        ciphertext: data,
-                        nonce: Vec::new(),
-                        ephemeral_pubkey: Vec::new(),
-                    }),
-                    sequence: 0,
-                    metadata,
-                },
-            )),
-        };
-
-        // Register stream pending before sending
-        let stream_rx = conn.register_stream_pending(request_id.to_string()).await;
-
-        conn.send_frame(frame)
-            .await
-            .map_err(|_| RouterError::SendFailed(machine_id.to_string()))?;
-
+        let (_conn, stream_rx) = self
+            .setup_stream_forward(machine_id, request_id, method, data, metadata)
+            .await?;
         Ok(stream_rx)
     }
 
@@ -182,38 +200,9 @@ impl RequestRouter {
         data: Vec<u8>,
         metadata: std::collections::HashMap<String, String>,
     ) -> Result<(mpsc::Sender<TunnelFrame>, mpsc::Receiver<TunnelFrame>), RouterError> {
-        let conn = self
-            .registry
-            .get(machine_id)
-            .await
-            .ok_or_else(|| RouterError::MachineOffline(machine_id.to_string()))?;
-
-        let frame = TunnelFrame {
-            request_id: request_id.to_string(),
-            frame_type: FrameType::Request as i32,
-            timestamp: Some(prost_types::Timestamp::from(std::time::SystemTime::now())),
-            payload: Some(betcode_proto::v1::tunnel_frame::Payload::StreamData(
-                StreamPayload {
-                    method: method.to_string(),
-                    encrypted: Some(EncryptedPayload {
-                        ciphertext: data,
-                        nonce: Vec::new(),
-                        ephemeral_pubkey: Vec::new(),
-                    }),
-                    sequence: 0,
-                    metadata,
-                },
-            )),
-        };
-
-        // Register stream pending before sending
-        let stream_rx = conn.register_stream_pending(request_id.to_string()).await;
-
-        conn.send_frame(frame)
-            .await
-            .map_err(|_| RouterError::SendFailed(machine_id.to_string()))?;
-
-        // Return the connection's frame_tx clone for sending additional client frames
+        let (conn, stream_rx) = self
+            .setup_stream_forward(machine_id, request_id, method, data, metadata)
+            .await?;
         let client_tx = conn.frame_tx.clone();
         Ok((client_tx, stream_rx))
     }
@@ -289,15 +278,26 @@ mod tests {
         Arc::new(BufferManager::new(db, Arc::clone(registry)))
     }
 
+    /// Create a registry with a connected machine, a buffer, and a router.
+    async fn setup_online(
+        mid: &str,
+        timeout: Duration,
+    ) -> (
+        Arc<ConnectionRegistry>,
+        RequestRouter,
+        mpsc::Receiver<TunnelFrame>,
+    ) {
+        let registry = Arc::new(ConnectionRegistry::new());
+        let (tx, rx) = mpsc::channel(16);
+        registry.register(mid.into(), "u1".into(), tx).await;
+        let buffer = test_buffer(&registry, &[mid]).await;
+        let router = RequestRouter::new(Arc::clone(&registry), buffer, timeout);
+        (registry, router, rx)
+    }
+
     #[tokio::test]
     async fn forward_request_to_online_machine() {
-        let registry = Arc::new(ConnectionRegistry::new());
-        let (tx, mut rx) = mpsc::channel(16);
-
-        registry.register("m1".into(), "u1".into(), tx).await;
-
-        let buffer = test_buffer(&registry, &["m1"]).await;
-        let router = RequestRouter::new(Arc::clone(&registry), buffer, Duration::from_secs(5));
+        let (registry, router, mut rx) = setup_online("m1", Duration::from_secs(5)).await;
 
         // Spawn responder that echoes back
         let reg_clone = Arc::clone(&registry);
@@ -340,14 +340,8 @@ mod tests {
 
     #[tokio::test]
     async fn forward_request_timeout() {
-        let registry = Arc::new(ConnectionRegistry::new());
-        let (tx, _rx) = mpsc::channel(16);
-
-        registry.register("m1".into(), "u1".into(), tx).await;
-
-        let buffer = test_buffer(&registry, &["m1"]).await;
         // Very short timeout, no responder
-        let router = RequestRouter::new(Arc::clone(&registry), buffer, Duration::from_millis(50));
+        let (registry, router, _rx) = setup_online("m1", Duration::from_millis(50)).await;
 
         let result = router
             .forward_request("m1", "req-1", "Test", vec![], HashMap::default())
@@ -362,12 +356,7 @@ mod tests {
 
     #[tokio::test]
     async fn forward_stream_to_online_machine() {
-        let registry = Arc::new(ConnectionRegistry::new());
-        let (tx, mut tunnel_rx) = mpsc::channel(16);
-        registry.register("m1".into(), "u1".into(), tx).await;
-
-        let buffer = test_buffer(&registry, &["m1"]).await;
-        let router = RequestRouter::new(Arc::clone(&registry), buffer, Duration::from_secs(5));
+        let (registry, router, mut tunnel_rx) = setup_online("m1", Duration::from_secs(5)).await;
 
         // Spawn mock responder: 3 StreamData + StreamEnd
         let reg = Arc::clone(&registry);
@@ -432,12 +421,7 @@ mod tests {
 
     #[tokio::test]
     async fn forward_bidi_stream_sends_and_receives() {
-        let registry = Arc::new(ConnectionRegistry::new());
-        let (tx, mut tunnel_rx) = mpsc::channel(16);
-        registry.register("m1".into(), "u1".into(), tx).await;
-
-        let buffer = test_buffer(&registry, &["m1"]).await;
-        let router = RequestRouter::new(Arc::clone(&registry), buffer, Duration::from_secs(5));
+        let (registry, router, mut tunnel_rx) = setup_online("m1", Duration::from_secs(5)).await;
 
         let reg = Arc::clone(&registry);
         tokio::spawn(async move {

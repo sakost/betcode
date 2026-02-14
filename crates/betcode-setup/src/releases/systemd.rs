@@ -4,7 +4,7 @@ use std::path::Path;
 
 use anyhow::{Context, Result};
 
-use crate::cmd::run_cmd;
+use crate::cmd::{ensure_system_user, run_cmd};
 
 use super::templates;
 
@@ -58,25 +58,6 @@ pub fn deploy(
 
     tracing::info!("betcode-releases is deployed and running on port 8090");
     Ok(())
-}
-
-/// Create the `betcode` system user if it does not already exist.
-fn ensure_system_user() -> Result<()> {
-    if crate::cmd::command_exists("id")
-        && std::process::Command::new("id")
-            .arg("betcode")
-            .output()
-            .is_ok_and(|o| o.status.success())
-    {
-        tracing::debug!("system user 'betcode' already exists");
-        return Ok(());
-    }
-
-    run_cmd(
-        "creating system user 'betcode'",
-        "useradd",
-        &["--system", "--shell", "/usr/sbin/nologin", "betcode"],
-    )
 }
 
 /// Install the betcode-releases binary to `/usr/local/bin/`.
