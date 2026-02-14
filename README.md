@@ -21,7 +21,7 @@ Claude Code is a powerful coding agent, but it runs as a single-user CLI on one 
 | Capability | Claude Code | BetCode |
 |---|---|---|
 | Agent intelligence | Native | Inherited (wrapper) |
-| Mobile client | No | Flutter app ([separate repo](https://github.com/sakost/betcode_app)) |
+| Mobile client | No | Flutter app ([separate repo](https://github.com/sakost/betcode-app)) |
 | Multi-machine access | No | Self-hosted relay + mTLS tunnel |
 | Git worktree management | No | First-class |
 | GitLab integration | GitHub only | GitLab-native |
@@ -45,7 +45,7 @@ BetCode treats Claude Code as an opaque subprocess. The daemon spawns `claude` p
 - **betcode-crypto** -- mTLS certificate generation and management
 - **betcode-setup** -- First-run setup wizard
 - **betcode-releases** -- Release artifact packaging
-- **[betcode_app](https://github.com/sakost/betcode_app)** -- Flutter mobile client (separate repo)
+- **[betcode_app](https://github.com/sakost/betcode-app)** -- Flutter mobile client (separate repo)
 
 ---
 

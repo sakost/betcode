@@ -144,7 +144,7 @@ Tools not in `--allowed-tools` are auto-denied in headless mode.
 ## Flutter App (betcode_app) -- Separate Repository
 
 The Flutter mobile app lives in its own repository. See the
-[betcode_app repo](https://github.com/sakost/betcode_app) for build instructions
+[betcode_app repo](https://github.com/sakost/betcode-app) for build instructions
 and its own `CLAUDE.md`.
 
 ### Directory Structure
