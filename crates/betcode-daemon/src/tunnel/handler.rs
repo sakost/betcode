@@ -35,7 +35,7 @@ use betcode_proto::v1::{
 
 use betcode_crypto::{CryptoSession, IdentityKeyPair, KeyExchangeState};
 
-use crate::relay::SessionRelay;
+use crate::relay::{is_granted, SessionRelay};
 use crate::server::{
     CommandServiceImpl, ConfigServiceImpl, GitLabServiceImpl, GitRepoServiceImpl,
     WorktreeServiceImpl,
@@ -999,15 +999,9 @@ impl TunnelRequestHandler {
                             .process_permission_response(&perm.request_id, decision, "tunnel")
                             .await
                     } else {
-                        let fallback_granted = matches!(
-                            decision,
-                            betcode_proto::v1::PermissionDecision::AllowOnce
-                                | betcode_proto::v1::PermissionDecision::AllowSession
-                                | betcode_proto::v1::PermissionDecision::AllowWithEdit
-                        );
                         (
-                            fallback_granted,
-                            serde_json::Value::Object(serde_json::Map::default()),
+                            is_granted(decision),
+                            serde_json::json!({}),
                         )
                     };
 
@@ -1033,9 +1027,9 @@ impl TunnelRequestHandler {
                         .write()
                         .await
                         .remove(&qr.question_id)
-                        .unwrap_or_else(|| serde_json::Value::Object(serde_json::Map::default()))
+                        .unwrap_or_else(|| serde_json::json!({}))
                 } else {
-                    serde_json::Value::Object(serde_json::Map::default())
+                    serde_json::json!({})
                 };
 
                 if let Err(e) = self

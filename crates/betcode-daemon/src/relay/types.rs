@@ -44,8 +44,16 @@ pub struct RelayHandle {
     /// build the correct `control_response` with `updatedInput`.
     pub pending_permission_inputs: Arc<RwLock<HashMap<String, serde_json::Value>>>,
     /// Session-scoped permission grants keyed by `tool_name` → granted.
-    /// Written by the handler on `AllowSession`, read by the stdout pipeline
-    /// to auto-respond to subsequent matching permission requests.
+    ///
+    /// Three-state semantics (keyed by tool name):
+    /// - `Some(true)`  — auto-allow: skip the permission prompt, grant immediately.
+    /// - `Some(false)` — auto-deny: skip the permission prompt, deny immediately.
+    /// - `None` (absent) — no cached decision; prompt the user as normal.
+    ///
+    /// Written by the handler on `AllowSession` (sets `true`) or
+    /// `SetSessionGrant` API (can set `true` **or** `false`).
+    /// Read by the stdout pipeline to auto-respond to subsequent matching
+    /// permission requests without forwarding them to the client.
     pub session_grants: Arc<RwLock<HashMap<String, bool>>>,
     /// Maps `request_id` → `tool_name` for pending permission requests.
     /// Used by the handler to look up which tool was granted when
@@ -62,19 +70,14 @@ impl RelayHandle {
         decision: betcode_proto::v1::PermissionDecision,
         source: &str,
     ) -> (bool, serde_json::Value) {
-        let granted = matches!(
-            decision,
-            betcode_proto::v1::PermissionDecision::AllowOnce
-                | betcode_proto::v1::PermissionDecision::AllowSession
-                | betcode_proto::v1::PermissionDecision::AllowWithEdit
-        );
+        let granted = is_granted(decision);
 
         let input = self
             .pending_permission_inputs
             .write()
             .await
             .remove(request_id)
-            .unwrap_or_else(|| serde_json::Value::Object(serde_json::Map::default()));
+            .unwrap_or_else(|| serde_json::json!({}));
 
         let tool = self
             .pending_permission_tool_names
@@ -100,6 +103,16 @@ impl RelayHandle {
 
         (granted, input)
     }
+}
+
+/// Returns `true` if the given [`PermissionDecision`] grants the requested permission.
+pub const fn is_granted(decision: betcode_proto::v1::PermissionDecision) -> bool {
+    matches!(
+        decision,
+        betcode_proto::v1::PermissionDecision::AllowOnce
+            | betcode_proto::v1::PermissionDecision::AllowSession
+            | betcode_proto::v1::PermissionDecision::AllowWithEdit
+    )
 }
 
 /// Errors from relay operations.

@@ -8,7 +8,7 @@ use tracing::{info, warn};
 
 use betcode_proto::v1::{AgentEvent, AgentRequest, PermissionDecision};
 
-use crate::relay::{RelaySessionConfig, SessionRelay};
+use crate::relay::{is_granted, RelaySessionConfig, SessionRelay};
 use crate::session::SessionMultiplexer;
 use crate::storage::Database;
 
@@ -66,9 +66,9 @@ pub async fn handle_agent_request(
                         .write()
                         .await
                         .remove(&qr.question_id)
-                        .unwrap_or_else(|| serde_json::Value::Object(serde_json::Map::default()))
+                        .unwrap_or_else(|| serde_json::json!({}))
                 } else {
-                    serde_json::Value::Object(serde_json::Map::default())
+                    serde_json::json!({})
                 };
 
                 ctx.relay
@@ -117,15 +117,9 @@ async fn handle_permission(
             .process_permission_response(&perm.request_id, decision, "grpc")
             .await
     } else {
-        let fallback_granted = matches!(
-            decision,
-            PermissionDecision::AllowOnce
-                | PermissionDecision::AllowSession
-                | PermissionDecision::AllowWithEdit
-        );
         (
-            fallback_granted,
-            serde_json::Value::Object(serde_json::Map::default()),
+            is_granted(decision),
+            serde_json::json!({}),
         )
     };
 
