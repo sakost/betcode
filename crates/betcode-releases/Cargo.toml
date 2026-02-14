@@ -1,0 +1,26 @@
+[package]
+name = "betcode-releases"
+description = "Download redirect server for BetCode binaries"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "betcode-releases"
+path = "src/main.rs"
+
+[dependencies]
+tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+clap = { workspace = true, features = ["derive", "env"] }
+anyhow.workspace = true
+axum = "0.8"
+tower-http = { version = "0.6", features = ["cors"] }
+
+[dev-dependencies]
+tower = { version = "0.5", features = ["util"] }
+
+[lints]
+workspace = true

@@ -8,6 +8,7 @@ members = [
   "crates/betcode-cli",
   "crates/betcode-relay",
   "crates/betcode-setup",
+  "crates/betcode-releases",
 ]
 
 [workspace.package]
