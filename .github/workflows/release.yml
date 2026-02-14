@@ -1,0 +1,136 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Linux AMD64
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-latest
+            suffix: linux-amd64
+            bins: "betcode betcode-daemon betcode-relay betcode-setup betcode-releases"
+          # Linux ARM64
+          - target: aarch64-unknown-linux-gnu
+            os: ubuntu-latest
+            suffix: linux-arm64
+            bins: "betcode betcode-daemon betcode-relay betcode-setup betcode-releases"
+            cross: true
+          # macOS AMD64
+          - target: x86_64-apple-darwin
+            os: macos-13
+            suffix: darwin-amd64
+            bins: "betcode betcode-daemon"
+          # macOS ARM64
+          - target: aarch64-apple-darwin
+            os: macos-latest
+            suffix: darwin-arm64
+            bins: "betcode betcode-daemon"
+          # Windows AMD64
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
+            suffix: windows-amd64
+            bins: "betcode betcode-daemon"
+
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+
+      # Install cross for Linux ARM64
+      - name: Install cross
+        if: matrix.cross
+        run: cargo install cross
+
+      # Install protoc
+      - name: Install protoc (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+
+      - name: Install protoc (macOS)
+        if: runner.os == 'macOS'
+        run: brew install protobuf
+
+      - name: Install protoc (Windows)
+        if: runner.os == 'Windows'
+        run: choco install protoc
+
+      # Build
+      - name: Build (cross)
+        if: matrix.cross
+        run: cross build --release --target ${{ matrix.target }}
+
+      - name: Build (native)
+        if: "!matrix.cross"
+        run: cargo build --release --target ${{ matrix.target }}
+
+      # Package
+      - name: Package (Unix)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          cd target/${{ matrix.target }}/release
+          for bin in ${{ matrix.bins }}; do
+            if [ -f "$bin" ]; then
+              tar czf "${bin}-${{ matrix.suffix }}.tar.gz" "$bin"
+              echo "Packaged: ${bin}-${{ matrix.suffix }}.tar.gz"
+            fi
+          done
+
+      - name: Package (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          cd target/${{ matrix.target }}/release
+          foreach ($bin in "${{ matrix.bins }}".Split(" ")) {
+            if (Test-Path "$bin.exe") {
+              Compress-Archive -Path "$bin.exe" -DestinationPath "$bin-${{ matrix.suffix }}.zip"
+              Write-Host "Packaged: $bin-${{ matrix.suffix }}.zip"
+            }
+          }
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-${{ matrix.suffix }}
+          path: |
+            target/${{ matrix.target }}/release/*.tar.gz
+            target/${{ matrix.target }}/release/*.zip
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: release-*
+          merge-multiple: true
+
+      - name: List assets
+        run: ls -la *.tar.gz *.zip 2>/dev/null || true
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            *.tar.gz
+            *.zip
+          generate_release_notes: true
