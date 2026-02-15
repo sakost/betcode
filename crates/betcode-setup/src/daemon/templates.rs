@@ -1,3 +1,5 @@
+use std::path::Path;
+
 use crate::config::DaemonSetupConfig;
 
 /// Generate the systemd unit file for system-level deployment.
@@ -33,22 +35,24 @@ WantedBy=multi-user.target
 }
 
 /// Generate the systemd unit file for user-level deployment.
-pub fn systemd_unit_user() -> String {
-    r"[Unit]
+pub fn systemd_unit_user(binary_path: &Path) -> String {
+    format!(
+        r"[Unit]
 Description=BetCode Daemon
 After=default.target
 
 [Service]
 Type=notify
 EnvironmentFile=%h/.config/betcode/daemon.env
-ExecStart=betcode-daemon
+ExecStart={binary}
 Restart=on-failure
 RestartSec=5
 
 [Install]
 WantedBy=default.target
-"
-    .to_string()
+",
+        binary = binary_path.display(),
+    )
 }
 
 /// Generate the environment file content with all daemon configuration.
@@ -120,21 +124,27 @@ mod tests {
 
     #[test]
     fn user_unit_is_type_notify() {
-        let unit = systemd_unit_user();
+        let unit = systemd_unit_user(Path::new("/usr/local/bin/betcode-daemon"));
         assert!(unit.contains("Type=notify"));
     }
 
     #[test]
     fn user_unit_uses_home_specifier() {
-        let unit = systemd_unit_user();
+        let unit = systemd_unit_user(Path::new("/usr/local/bin/betcode-daemon"));
         assert!(unit.contains("%h/.config/betcode/daemon.env"));
     }
 
     #[test]
     fn user_unit_has_no_user_directive() {
-        let unit = systemd_unit_user();
+        let unit = systemd_unit_user(Path::new("/usr/local/bin/betcode-daemon"));
         assert!(!unit.contains("User="));
         assert!(!unit.contains("Group="));
+    }
+
+    #[test]
+    fn user_unit_uses_absolute_binary_path() {
+        let unit = systemd_unit_user(Path::new("/home/user/.cargo/bin/betcode-daemon"));
+        assert!(unit.contains("ExecStart=/home/user/.cargo/bin/betcode-daemon"));
     }
 
     #[test]

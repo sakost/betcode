@@ -60,13 +60,14 @@ pub fn deploy_system(config: &DaemonSetupConfig, is_update: bool) -> Result<()> 
 
 /// Deploy the daemon as a user-level systemd service.
 pub fn deploy_user(config: &DaemonSetupConfig, is_update: bool) -> Result<()> {
+    let binary_path = resolve_user_binary(config)?;
     create_user_directories()?;
 
     let env_path = user_env_path()?;
     let env_path_str = env_path.to_string_lossy().to_string();
     write_env_file(config, is_update, &env_path_str, false)?;
 
-    write_user_unit()?;
+    write_user_unit(&binary_path)?;
 
     // Stop the running service before updating
     if is_update && is_daemon_active_user() {
@@ -106,6 +107,34 @@ pub(super) fn is_daemon_active_user() -> bool {
 // ---------------------------------------------------------------------------
 // Private helpers
 // ---------------------------------------------------------------------------
+
+/// Resolve the absolute path to the daemon binary for user-mode deployment.
+///
+/// Uses `--daemon-binary` if provided, otherwise looks up `betcode-daemon` on `PATH`.
+fn resolve_user_binary(config: &DaemonSetupConfig) -> Result<PathBuf> {
+    if let Some(ref path) = config.daemon_binary_path {
+        tracing::info!("using provided daemon binary: {}", path.display());
+        return Ok(path.clone());
+    }
+
+    // Try to find betcode-daemon on PATH via `which`
+    let output = std::process::Command::new("which")
+        .arg("betcode-daemon")
+        .output()
+        .context("failed to run `which betcode-daemon`")?;
+
+    if output.status.success() {
+        let path_str = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        let path = PathBuf::from(&path_str);
+        tracing::info!("found daemon binary on PATH: {}", path.display());
+        return Ok(path);
+    }
+
+    anyhow::bail!(
+        "betcode-daemon not found on PATH. Provide --daemon-binary with the absolute path \
+         to the binary, or install betcode-daemon to a directory on your PATH."
+    )
+}
 
 /// Ensure the service user exists.
 ///
@@ -189,11 +218,11 @@ fn write_system_unit(config: &DaemonSetupConfig) -> Result<()> {
 }
 
 /// Write the user-level systemd unit and reload the user daemon.
-fn write_user_unit() -> Result<()> {
+fn write_user_unit(binary_path: &Path) -> Result<()> {
     let path = user_unit_path()?;
 
     tracing::info!("writing user systemd unit: {}", path.display());
-    let content = templates::systemd_unit_user();
+    let content = templates::systemd_unit_user(binary_path);
     fs::write(&path, content).context("failed to write user systemd unit")?;
 
     run_cmd(

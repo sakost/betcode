@@ -31,7 +31,7 @@ struct Args {
     #[arg(long, default_value_t = 5, env = "BETCODE_MAX_PROCESSES")]
     max_processes: usize,
 
-    /// Maximum concurrent sessions
+    /// Maximum concurrent client sessions (gRPC connections); multiple sessions can share a subprocess
     #[arg(long, default_value_t = 10, env = "BETCODE_MAX_SESSIONS")]
     max_sessions: usize,
 

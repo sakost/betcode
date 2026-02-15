@@ -65,7 +65,7 @@ pub struct DaemonArgs {
     #[arg(long)]
     pub worktree_dir: Option<PathBuf>,
 
-    /// Path to daemon binary (system mode; uses PATH lookup if omitted)
+    /// Path to daemon binary (uses PATH lookup if omitted)
     #[arg(long)]
     pub daemon_binary: Option<PathBuf>,
 }
