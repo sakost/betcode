@@ -20,19 +20,19 @@ use betcode_daemon::tunnel::{TunnelClient, TunnelConfig};
 #[command(version, about = "BetCode daemon - Claude Code multiplexer")]
 struct Args {
     /// TCP bind address
-    #[arg(long, default_value = "127.0.0.1:50051")]
+    #[arg(long, default_value = "127.0.0.1:50051", env = "BETCODE_ADDR")]
     addr: SocketAddr,
 
     /// Database file path
-    #[arg(long)]
+    #[arg(long, env = "BETCODE_DB_PATH")]
     db_path: Option<PathBuf>,
 
     /// Maximum concurrent Claude subprocesses
-    #[arg(long, default_value_t = 5)]
+    #[arg(long, default_value_t = 5, env = "BETCODE_MAX_PROCESSES")]
     max_processes: usize,
 
     /// Maximum concurrent sessions
-    #[arg(long, default_value_t = 10)]
+    #[arg(long, default_value_t = 10, env = "BETCODE_MAX_SESSIONS")]
     max_sessions: usize,
 
     /// Relay server URL (enables tunnel mode, e.g. "<https://relay.betcode.io:443>")
@@ -65,7 +65,7 @@ struct Args {
     worktree_dir: Option<PathBuf>,
 
     /// Output logs as JSON (for structured log aggregation).
-    #[arg(long)]
+    #[arg(long, env = "BETCODE_LOG_JSON")]
     log_json: bool,
 }
 
