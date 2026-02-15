@@ -16,15 +16,17 @@ use betcode_proto::methods::{
 };
 
 use crate::router::RequestRouter;
+use crate::storage::RelayDatabase;
 
 /// Proxies `WorktreeService` calls through the tunnel to a target daemon.
 pub struct WorktreeProxyService {
     router: Arc<RequestRouter>,
+    db: RelayDatabase,
 }
 
 impl WorktreeProxyService {
-    pub const fn new(router: Arc<RequestRouter>) -> Self {
-        Self { router }
+    pub const fn new(router: Arc<RequestRouter>, db: RelayDatabase) -> Self {
+        Self { router, db }
     }
 }
 
@@ -35,7 +37,8 @@ impl WorktreeService for WorktreeProxyService {
         &self,
         request: Request<CreateWorktreeRequest>,
     ) -> Result<Response<WorktreeDetail>, Status> {
-        super::grpc_util::forward_unary_rpc(&self.router, request, METHOD_CREATE_WORKTREE).await
+        super::grpc_util::forward_unary_rpc(&self.router, &self.db, request, METHOD_CREATE_WORKTREE)
+            .await
     }
 
     #[instrument(skip(self, request), fields(rpc = "RemoveWorktree"))]
@@ -43,7 +46,8 @@ impl WorktreeService for WorktreeProxyService {
         &self,
         request: Request<RemoveWorktreeRequest>,
     ) -> Result<Response<RemoveWorktreeResponse>, Status> {
-        super::grpc_util::forward_unary_rpc(&self.router, request, METHOD_REMOVE_WORKTREE).await
+        super::grpc_util::forward_unary_rpc(&self.router, &self.db, request, METHOD_REMOVE_WORKTREE)
+            .await
     }
 
     #[instrument(skip(self, request), fields(rpc = "ListWorktrees"))]
@@ -51,7 +55,8 @@ impl WorktreeService for WorktreeProxyService {
         &self,
         request: Request<ListWorktreesRequest>,
     ) -> Result<Response<ListWorktreesResponse>, Status> {
-        super::grpc_util::forward_unary_rpc(&self.router, request, METHOD_LIST_WORKTREES).await
+        super::grpc_util::forward_unary_rpc(&self.router, &self.db, request, METHOD_LIST_WORKTREES)
+            .await
     }
 
     #[instrument(skip(self, request), fields(rpc = "GetWorktree"))]
@@ -59,7 +64,8 @@ impl WorktreeService for WorktreeProxyService {
         &self,
         request: Request<GetWorktreeRequest>,
     ) -> Result<Response<WorktreeDetail>, Status> {
-        super::grpc_util::forward_unary_rpc(&self.router, request, METHOD_GET_WORKTREE).await
+        super::grpc_util::forward_unary_rpc(&self.router, &self.db, request, METHOD_GET_WORKTREE)
+            .await
     }
 }
 

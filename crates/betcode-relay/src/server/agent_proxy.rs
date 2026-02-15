@@ -33,6 +33,7 @@ use betcode_proto::methods::{
 
 use crate::router::{RequestRouter, RouterError};
 use crate::server::interceptor::extract_claims;
+use crate::storage::RelayDatabase;
 
 type EventStream = Pin<Box<dyn tokio_stream::Stream<Item = Result<AgentEvent, Status>> + Send>>;
 
@@ -221,11 +222,12 @@ async fn converse_proxy_task(
 /// Proxies `AgentService` calls through the tunnel to a target daemon.
 pub struct AgentProxyService {
     router: Arc<RequestRouter>,
+    db: RelayDatabase,
 }
 
 impl AgentProxyService {
-    pub const fn new(router: Arc<RequestRouter>) -> Self {
-        Self { router }
+    pub const fn new(router: Arc<RequestRouter>, db: RelayDatabase) -> Self {
+        Self { router, db }
     }
 }
 
@@ -239,8 +241,9 @@ impl AgentService for AgentProxyService {
         &self,
         request: Request<Streaming<AgentRequest>>,
     ) -> Result<Response<Self::ConverseStream>, Status> {
-        let _claims = extract_claims(&request)?;
+        let claims = extract_claims(&request)?;
         let machine_id = extract_machine_id(&request)?;
+        super::grpc_util::verify_machine_ownership(&self.db, &machine_id, &claims.sub).await?;
         let in_stream = request.into_inner();
 
         // Return the response stream immediately to avoid deadlock.
@@ -264,7 +267,8 @@ impl AgentService for AgentProxyService {
         &self,
         request: Request<ListSessionsRequest>,
     ) -> Result<Response<ListSessionsResponse>, Status> {
-        super::grpc_util::forward_unary_rpc(&self.router, request, METHOD_LIST_SESSIONS).await
+        super::grpc_util::forward_unary_rpc(&self.router, &self.db, request, METHOD_LIST_SESSIONS)
+            .await
     }
 
     #[instrument(skip(self, request), fields(rpc = "ResumeSession"))]
@@ -272,8 +276,14 @@ impl AgentService for AgentProxyService {
         &self,
         request: Request<ResumeSessionRequest>,
     ) -> Result<Response<Self::ResumeSessionStream>, Status> {
-        super::grpc_util::forward_stream_rpc(&self.router, request, METHOD_RESUME_SESSION, 128)
-            .await
+        super::grpc_util::forward_stream_rpc(
+            &self.router,
+            &self.db,
+            request,
+            METHOD_RESUME_SESSION,
+            128,
+        )
+        .await
     }
 
     #[instrument(skip(self, request), fields(rpc = "CompactSession"))]
@@ -281,7 +291,8 @@ impl AgentService for AgentProxyService {
         &self,
         request: Request<CompactSessionRequest>,
     ) -> Result<Response<CompactSessionResponse>, Status> {
-        super::grpc_util::forward_unary_rpc(&self.router, request, METHOD_COMPACT_SESSION).await
+        super::grpc_util::forward_unary_rpc(&self.router, &self.db, request, METHOD_COMPACT_SESSION)
+            .await
     }
 
     #[instrument(skip(self, request), fields(rpc = "CancelTurn"))]
@@ -289,7 +300,8 @@ impl AgentService for AgentProxyService {
         &self,
         request: Request<CancelTurnRequest>,
     ) -> Result<Response<CancelTurnResponse>, Status> {
-        super::grpc_util::forward_unary_rpc(&self.router, request, METHOD_CANCEL_TURN).await
+        super::grpc_util::forward_unary_rpc(&self.router, &self.db, request, METHOD_CANCEL_TURN)
+            .await
     }
 
     #[instrument(skip(self, request), fields(rpc = "RequestInputLock"))]
@@ -297,7 +309,13 @@ impl AgentService for AgentProxyService {
         &self,
         request: Request<InputLockRequest>,
     ) -> Result<Response<InputLockResponse>, Status> {
-        super::grpc_util::forward_unary_rpc(&self.router, request, METHOD_REQUEST_INPUT_LOCK).await
+        super::grpc_util::forward_unary_rpc(
+            &self.router,
+            &self.db,
+            request,
+            METHOD_REQUEST_INPUT_LOCK,
+        )
+        .await
     }
 
     #[instrument(skip(self, request), fields(rpc = "ExchangeKeys"))]
@@ -305,7 +323,8 @@ impl AgentService for AgentProxyService {
         &self,
         request: Request<KeyExchangeRequest>,
     ) -> Result<Response<KeyExchangeResponse>, Status> {
-        super::grpc_util::forward_unary_rpc(&self.router, request, METHOD_EXCHANGE_KEYS).await
+        super::grpc_util::forward_unary_rpc(&self.router, &self.db, request, METHOD_EXCHANGE_KEYS)
+            .await
     }
 
     #[instrument(skip(self, request), fields(rpc = "ListSessionGrants"))]
@@ -313,7 +332,13 @@ impl AgentService for AgentProxyService {
         &self,
         request: Request<ListSessionGrantsRequest>,
     ) -> Result<Response<ListSessionGrantsResponse>, Status> {
-        super::grpc_util::forward_unary_rpc(&self.router, request, METHOD_LIST_SESSION_GRANTS).await
+        super::grpc_util::forward_unary_rpc(
+            &self.router,
+            &self.db,
+            request,
+            METHOD_LIST_SESSION_GRANTS,
+        )
+        .await
     }
 
     #[instrument(skip(self, request), fields(rpc = "ClearSessionGrants"))]
@@ -321,8 +346,13 @@ impl AgentService for AgentProxyService {
         &self,
         request: Request<ClearSessionGrantsRequest>,
     ) -> Result<Response<ClearSessionGrantsResponse>, Status> {
-        super::grpc_util::forward_unary_rpc(&self.router, request, METHOD_CLEAR_SESSION_GRANTS)
-            .await
+        super::grpc_util::forward_unary_rpc(
+            &self.router,
+            &self.db,
+            request,
+            METHOD_CLEAR_SESSION_GRANTS,
+        )
+        .await
     }
 
     #[instrument(skip(self, request), fields(rpc = "SetSessionGrant"))]
@@ -330,7 +360,13 @@ impl AgentService for AgentProxyService {
         &self,
         request: Request<SetSessionGrantRequest>,
     ) -> Result<Response<SetSessionGrantResponse>, Status> {
-        super::grpc_util::forward_unary_rpc(&self.router, request, METHOD_SET_SESSION_GRANT).await
+        super::grpc_util::forward_unary_rpc(
+            &self.router,
+            &self.db,
+            request,
+            METHOD_SET_SESSION_GRANT,
+        )
+        .await
     }
 
     #[instrument(skip(self, request), fields(rpc = "RenameSession"))]
@@ -338,7 +374,8 @@ impl AgentService for AgentProxyService {
         &self,
         request: Request<RenameSessionRequest>,
     ) -> Result<Response<RenameSessionResponse>, Status> {
-        super::grpc_util::forward_unary_rpc(&self.router, request, METHOD_RENAME_SESSION).await
+        super::grpc_util::forward_unary_rpc(&self.router, &self.db, request, METHOD_RENAME_SESSION)
+            .await
     }
 }
 

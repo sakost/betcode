@@ -19,15 +19,17 @@ use betcode_proto::methods::{
 };
 
 use crate::router::RequestRouter;
+use crate::storage::RelayDatabase;
 
 /// Proxies `GitLabService` calls through the tunnel to a target daemon.
 pub struct GitLabProxyService {
     router: Arc<RequestRouter>,
+    db: RelayDatabase,
 }
 
 impl GitLabProxyService {
-    pub const fn new(router: Arc<RequestRouter>) -> Self {
-        Self { router }
+    pub const fn new(router: Arc<RequestRouter>, db: RelayDatabase) -> Self {
+        Self { router, db }
     }
 }
 
@@ -38,7 +40,13 @@ impl GitLabService for GitLabProxyService {
         &self,
         request: Request<ListMergeRequestsRequest>,
     ) -> Result<Response<ListMergeRequestsResponse>, Status> {
-        super::grpc_util::forward_unary_rpc(&self.router, request, METHOD_LIST_MERGE_REQUESTS).await
+        super::grpc_util::forward_unary_rpc(
+            &self.router,
+            &self.db,
+            request,
+            METHOD_LIST_MERGE_REQUESTS,
+        )
+        .await
     }
 
     #[instrument(skip(self, request), fields(rpc = "GetMergeRequest"))]
@@ -46,7 +54,13 @@ impl GitLabService for GitLabProxyService {
         &self,
         request: Request<GetMergeRequestRequest>,
     ) -> Result<Response<GetMergeRequestResponse>, Status> {
-        super::grpc_util::forward_unary_rpc(&self.router, request, METHOD_GET_MERGE_REQUEST).await
+        super::grpc_util::forward_unary_rpc(
+            &self.router,
+            &self.db,
+            request,
+            METHOD_GET_MERGE_REQUEST,
+        )
+        .await
     }
 
     #[instrument(skip(self, request), fields(rpc = "ListPipelines"))]
@@ -54,7 +68,8 @@ impl GitLabService for GitLabProxyService {
         &self,
         request: Request<ListPipelinesRequest>,
     ) -> Result<Response<ListPipelinesResponse>, Status> {
-        super::grpc_util::forward_unary_rpc(&self.router, request, METHOD_LIST_PIPELINES).await
+        super::grpc_util::forward_unary_rpc(&self.router, &self.db, request, METHOD_LIST_PIPELINES)
+            .await
     }
 
     #[instrument(skip(self, request), fields(rpc = "GetPipeline"))]
@@ -62,7 +77,8 @@ impl GitLabService for GitLabProxyService {
         &self,
         request: Request<GetPipelineRequest>,
     ) -> Result<Response<GetPipelineResponse>, Status> {
-        super::grpc_util::forward_unary_rpc(&self.router, request, METHOD_GET_PIPELINE).await
+        super::grpc_util::forward_unary_rpc(&self.router, &self.db, request, METHOD_GET_PIPELINE)
+            .await
     }
 
     #[instrument(skip(self, request), fields(rpc = "ListIssues"))]
@@ -70,7 +86,8 @@ impl GitLabService for GitLabProxyService {
         &self,
         request: Request<ListIssuesRequest>,
     ) -> Result<Response<ListIssuesResponse>, Status> {
-        super::grpc_util::forward_unary_rpc(&self.router, request, METHOD_LIST_ISSUES).await
+        super::grpc_util::forward_unary_rpc(&self.router, &self.db, request, METHOD_LIST_ISSUES)
+            .await
     }
 
     #[instrument(skip(self, request), fields(rpc = "GetIssue"))]
@@ -78,7 +95,7 @@ impl GitLabService for GitLabProxyService {
         &self,
         request: Request<GetIssueRequest>,
     ) -> Result<Response<GetIssueResponse>, Status> {
-        super::grpc_util::forward_unary_rpc(&self.router, request, METHOD_GET_ISSUE).await
+        super::grpc_util::forward_unary_rpc(&self.router, &self.db, request, METHOD_GET_ISSUE).await
     }
 }
 

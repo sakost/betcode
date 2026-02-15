@@ -10,7 +10,7 @@ use betcode_proto::v1::{
 use super::GitRepoProxyService;
 use crate::server::test_helpers::{
     assert_daemon_error, assert_no_claims_error, assert_no_machine_error, assert_offline_error,
-    make_request, proxy_test_setup, spawn_responder,
+    assert_wrong_owner_error, make_request, proxy_test_setup, spawn_responder,
 };
 
 proxy_test_setup!(GitRepoProxyService);
@@ -206,6 +206,19 @@ async fn missing_machine_id_returns_invalid_argument() {
 async fn missing_claims_returns_internal() {
     let (svc, _router, _rx) = setup_with_machine("m1").await;
     assert_no_claims_error!(
+        svc,
+        list_repos,
+        ListReposRequest {
+            limit: 0,
+            offset: 0,
+        }
+    );
+}
+
+#[tokio::test]
+async fn wrong_owner_returns_permission_denied() {
+    let (svc, _router, _rx) = setup_with_machine("m1").await;
+    assert_wrong_owner_error!(
         svc,
         list_repos,
         ListReposRequest {

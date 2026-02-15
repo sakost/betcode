@@ -17,15 +17,17 @@ use betcode_proto::methods::{
 };
 
 use crate::router::RequestRouter;
+use crate::storage::RelayDatabase;
 
 /// Proxies `GitRepoService` calls through the tunnel to a target daemon.
 pub struct GitRepoProxyService {
     router: Arc<RequestRouter>,
+    db: RelayDatabase,
 }
 
 impl GitRepoProxyService {
-    pub const fn new(router: Arc<RequestRouter>) -> Self {
-        Self { router }
+    pub const fn new(router: Arc<RequestRouter>, db: RelayDatabase) -> Self {
+        Self { router, db }
     }
 }
 
@@ -36,7 +38,8 @@ impl GitRepoService for GitRepoProxyService {
         &self,
         request: Request<RegisterRepoRequest>,
     ) -> Result<Response<GitRepoDetail>, Status> {
-        super::grpc_util::forward_unary_rpc(&self.router, request, METHOD_REGISTER_REPO).await
+        super::grpc_util::forward_unary_rpc(&self.router, &self.db, request, METHOD_REGISTER_REPO)
+            .await
     }
 
     #[instrument(skip(self, request), fields(rpc = "UnregisterRepo"))]
@@ -44,7 +47,8 @@ impl GitRepoService for GitRepoProxyService {
         &self,
         request: Request<UnregisterRepoRequest>,
     ) -> Result<Response<UnregisterRepoResponse>, Status> {
-        super::grpc_util::forward_unary_rpc(&self.router, request, METHOD_UNREGISTER_REPO).await
+        super::grpc_util::forward_unary_rpc(&self.router, &self.db, request, METHOD_UNREGISTER_REPO)
+            .await
     }
 
     #[instrument(skip(self, request), fields(rpc = "ListRepos"))]
@@ -52,7 +56,8 @@ impl GitRepoService for GitRepoProxyService {
         &self,
         request: Request<ListReposRequest>,
     ) -> Result<Response<ListReposResponse>, Status> {
-        super::grpc_util::forward_unary_rpc(&self.router, request, METHOD_LIST_REPOS).await
+        super::grpc_util::forward_unary_rpc(&self.router, &self.db, request, METHOD_LIST_REPOS)
+            .await
     }
 
     #[instrument(skip(self, request), fields(rpc = "GetRepo"))]
@@ -60,7 +65,7 @@ impl GitRepoService for GitRepoProxyService {
         &self,
         request: Request<GetRepoRequest>,
     ) -> Result<Response<GitRepoDetail>, Status> {
-        super::grpc_util::forward_unary_rpc(&self.router, request, METHOD_GET_REPO).await
+        super::grpc_util::forward_unary_rpc(&self.router, &self.db, request, METHOD_GET_REPO).await
     }
 
     #[instrument(skip(self, request), fields(rpc = "UpdateRepo"))]
@@ -68,7 +73,8 @@ impl GitRepoService for GitRepoProxyService {
         &self,
         request: Request<UpdateRepoRequest>,
     ) -> Result<Response<GitRepoDetail>, Status> {
-        super::grpc_util::forward_unary_rpc(&self.router, request, METHOD_UPDATE_REPO).await
+        super::grpc_util::forward_unary_rpc(&self.router, &self.db, request, METHOD_UPDATE_REPO)
+            .await
     }
 
     #[instrument(skip(self, request), fields(rpc = "ScanRepos"))]
@@ -76,7 +82,8 @@ impl GitRepoService for GitRepoProxyService {
         &self,
         request: Request<ScanReposRequest>,
     ) -> Result<Response<ListReposResponse>, Status> {
-        super::grpc_util::forward_unary_rpc(&self.router, request, METHOD_SCAN_REPOS).await
+        super::grpc_util::forward_unary_rpc(&self.router, &self.db, request, METHOD_SCAN_REPOS)
+            .await
     }
 }
 

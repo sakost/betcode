@@ -123,12 +123,12 @@ async fn main() -> anyhow::Result<()> {
     let auth = AuthServiceImpl::new(db.clone(), Arc::clone(&jwt));
     let tunnel = TunnelServiceImpl::new(Arc::clone(&registry), db.clone(), Arc::clone(&buffer));
     let machine = MachineServiceImpl::new(db.clone());
-    let agent_proxy = AgentProxyService::new(Arc::clone(&router));
-    let command_proxy = CommandProxyService::new(Arc::clone(&router));
-    let worktree_proxy = WorktreeProxyService::new(Arc::clone(&router));
-    let git_repo_proxy = GitRepoProxyService::new(Arc::clone(&router));
-    let config_proxy = ConfigProxyService::new(Arc::clone(&router));
-    let gitlab_proxy = GitLabProxyService::new(Arc::clone(&router));
+    let agent_proxy = AgentProxyService::new(Arc::clone(&router), db.clone());
+    let command_proxy = CommandProxyService::new(Arc::clone(&router), db.clone());
+    let worktree_proxy = WorktreeProxyService::new(Arc::clone(&router), db.clone());
+    let git_repo_proxy = GitRepoProxyService::new(Arc::clone(&router), db.clone());
+    let config_proxy = ConfigProxyService::new(Arc::clone(&router), db.clone());
+    let gitlab_proxy = GitLabProxyService::new(Arc::clone(&router), db.clone());
 
     let jwt_check = betcode_relay::server::jwt_interceptor(Arc::clone(&jwt));
 

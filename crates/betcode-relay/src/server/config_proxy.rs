@@ -16,15 +16,17 @@ use betcode_proto::methods::{
 };
 
 use crate::router::RequestRouter;
+use crate::storage::RelayDatabase;
 
 /// Proxies `ConfigService` calls through the tunnel to a target daemon.
 pub struct ConfigProxyService {
     router: Arc<RequestRouter>,
+    db: RelayDatabase,
 }
 
 impl ConfigProxyService {
-    pub const fn new(router: Arc<RequestRouter>) -> Self {
-        Self { router }
+    pub const fn new(router: Arc<RequestRouter>, db: RelayDatabase) -> Self {
+        Self { router, db }
     }
 }
 
@@ -35,7 +37,8 @@ impl ConfigService for ConfigProxyService {
         &self,
         request: Request<GetSettingsRequest>,
     ) -> Result<Response<Settings>, Status> {
-        super::grpc_util::forward_unary_rpc(&self.router, request, METHOD_GET_SETTINGS).await
+        super::grpc_util::forward_unary_rpc(&self.router, &self.db, request, METHOD_GET_SETTINGS)
+            .await
     }
 
     #[instrument(skip(self, request), fields(rpc = "UpdateSettings"))]
@@ -43,7 +46,8 @@ impl ConfigService for ConfigProxyService {
         &self,
         request: Request<UpdateSettingsRequest>,
     ) -> Result<Response<Settings>, Status> {
-        super::grpc_util::forward_unary_rpc(&self.router, request, METHOD_UPDATE_SETTINGS).await
+        super::grpc_util::forward_unary_rpc(&self.router, &self.db, request, METHOD_UPDATE_SETTINGS)
+            .await
     }
 
     #[instrument(skip(self, request), fields(rpc = "ListMcpServers"))]
@@ -51,7 +55,13 @@ impl ConfigService for ConfigProxyService {
         &self,
         request: Request<ListMcpServersRequest>,
     ) -> Result<Response<ListMcpServersResponse>, Status> {
-        super::grpc_util::forward_unary_rpc(&self.router, request, METHOD_LIST_MCP_SERVERS).await
+        super::grpc_util::forward_unary_rpc(
+            &self.router,
+            &self.db,
+            request,
+            METHOD_LIST_MCP_SERVERS,
+        )
+        .await
     }
 
     #[instrument(skip(self, request), fields(rpc = "GetPermissions"))]
@@ -59,7 +69,8 @@ impl ConfigService for ConfigProxyService {
         &self,
         request: Request<GetPermissionsRequest>,
     ) -> Result<Response<PermissionRules>, Status> {
-        super::grpc_util::forward_unary_rpc(&self.router, request, METHOD_GET_PERMISSIONS).await
+        super::grpc_util::forward_unary_rpc(&self.router, &self.db, request, METHOD_GET_PERMISSIONS)
+            .await
     }
 }
 

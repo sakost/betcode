@@ -16,7 +16,8 @@ use betcode_proto::v1::{
 use super::{AgentProxyService, extract_machine_id};
 use crate::server::test_helpers::{
     assert_daemon_error, assert_no_claims_error, assert_no_machine_error, assert_offline_error,
-    make_request, proxy_test_setup, spawn_responder, spawn_stream_responder, stream_data_frame,
+    assert_wrong_owner_error, make_request, proxy_test_setup, spawn_responder,
+    spawn_stream_responder, stream_data_frame,
 };
 
 proxy_test_setup!(AgentProxyService);
@@ -190,6 +191,21 @@ async fn missing_machine_id_returns_invalid_argument() {
 async fn missing_claims_returns_internal() {
     let (svc, _router, _rx) = setup_with_machine("m1").await;
     assert_no_claims_error!(
+        svc,
+        list_sessions,
+        ListSessionsRequest {
+            working_directory: String::new(),
+            worktree_id: String::new(),
+            limit: 10,
+            offset: 0,
+        }
+    );
+}
+
+#[tokio::test]
+async fn wrong_owner_returns_permission_denied() {
+    let (svc, _router, _rx) = setup_with_machine("m1").await;
+    assert_wrong_owner_error!(
         svc,
         list_sessions,
         ListSessionsRequest {

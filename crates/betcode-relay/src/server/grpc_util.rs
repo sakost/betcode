@@ -13,6 +13,7 @@ use betcode_proto::v1::{FrameType, TunnelFrame, tunnel_frame};
 
 use crate::router::RequestRouter;
 use crate::server::agent_proxy::{decode_response, router_error_to_status};
+use crate::storage::{DatabaseError, RelayDatabase};
 
 /// Check if a gRPC Status represents a normal peer disconnect
 /// (client exit, daemon shutdown, TLS close without notify, etc.).
@@ -41,6 +42,28 @@ pub fn is_peer_disconnect(status: &tonic::Status) -> bool {
         || msg.contains("broken pipe")
         || msg.contains("connection reset")
         || msg.contains("close_notify")
+}
+
+/// Verify the caller owns the given machine, returning `NOT_FOUND` or
+/// `PERMISSION_DENIED` on failure.
+#[allow(clippy::result_large_err)]
+pub async fn verify_machine_ownership(
+    db: &RelayDatabase,
+    machine_id: &str,
+    user_id: &str,
+) -> Result<(), Status> {
+    let machine = db.get_machine(machine_id).await.map_err(|e| match e {
+        DatabaseError::NotFound(_) => Status::not_found("Machine not found"),
+        other => {
+            warn!(error = %other, machine_id, "DB error during ownership check");
+            Status::internal("Internal error")
+        }
+    })?;
+
+    if machine.owner_id != user_id {
+        return Err(Status::permission_denied("Not your machine"));
+    }
+    Ok(())
 }
 
 /// Generate a new request ID and encode a protobuf message into a buffer.
@@ -79,11 +102,13 @@ pub async fn forward_unary<Req: Message, Resp: Message + Default>(
 /// This is the one-liner that every unary proxy method delegates to.
 pub async fn forward_unary_rpc<Req: Message, Resp: Message + Default>(
     router: &RequestRouter,
+    db: &RelayDatabase,
     request: Request<Req>,
     method: &str,
 ) -> Result<Response<Resp>, Status> {
-    let _claims = crate::server::interceptor::extract_claims(&request)?;
+    let claims = crate::server::interceptor::extract_claims(&request)?;
     let machine_id = crate::server::agent_proxy::extract_machine_id(&request)?;
+    verify_machine_ownership(db, &machine_id, &claims.sub).await?;
     let resp = forward_unary(router, &machine_id, method, &request.into_inner()).await?;
     Ok(Response::new(resp))
 }
@@ -94,6 +119,7 @@ pub async fn forward_unary_rpc<Req: Message, Resp: Message + Default>(
 /// This is the streaming counterpart of `forward_unary_rpc`.
 pub async fn forward_stream_rpc<Req, Resp>(
     router: &RequestRouter,
+    db: &RelayDatabase,
     request: Request<Req>,
     method: &str,
     channel_size: usize,
@@ -102,8 +128,9 @@ where
     Req: Message,
     Resp: Message + Default + Send + 'static,
 {
-    let _claims = crate::server::interceptor::extract_claims(&request)?;
+    let claims = crate::server::interceptor::extract_claims(&request)?;
     let machine_id = crate::server::agent_proxy::extract_machine_id(&request)?;
+    verify_machine_ownership(db, &machine_id, &claims.sub).await?;
     let req = request.into_inner();
     let stream = forward_server_stream(router, &machine_id, method, &req, channel_size).await?;
     Ok(Response::new(stream))
@@ -207,7 +234,8 @@ fn decode_stream_frame<Resp: Message + Default>(
 mod tests {
     use tonic::{Code, Status};
 
-    use super::is_peer_disconnect;
+    use super::{is_peer_disconnect, verify_machine_ownership};
+    use crate::storage::RelayDatabase;
 
     // ── Primary signal: gRPC status code ────────────────────────────
 
@@ -267,5 +295,43 @@ mod tests {
     fn not_found_is_not_peer_disconnect() {
         let status = Status::not_found("resource missing");
         assert!(!is_peer_disconnect(&status));
+    }
+
+    // ── verify_machine_ownership ──────────────────────────────────────
+
+    #[tokio::test]
+    async fn owner_can_access_their_machine() {
+        let db = RelayDatabase::open_in_memory().await.unwrap();
+        db.create_user("u1", "alice", "a@t.com", "hash")
+            .await
+            .unwrap();
+        db.create_machine("m1", "m1", "u1", "{}").await.unwrap();
+        let result = verify_machine_ownership(&db, "m1", "u1").await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn non_owner_gets_permission_denied() {
+        let db = RelayDatabase::open_in_memory().await.unwrap();
+        db.create_user("u1", "alice", "a@t.com", "hash")
+            .await
+            .unwrap();
+        db.create_user("u2", "eve", "e@t.com", "hash")
+            .await
+            .unwrap();
+        db.create_machine("m1", "m1", "u1", "{}").await.unwrap();
+        let err = verify_machine_ownership(&db, "m1", "u2").await.unwrap_err();
+        assert_eq!(err.code(), Code::PermissionDenied);
+        assert!(err.message().contains("Not your machine"));
+    }
+
+    #[tokio::test]
+    async fn nonexistent_machine_gets_not_found() {
+        let db = RelayDatabase::open_in_memory().await.unwrap();
+        let err = verify_machine_ownership(&db, "no-such-machine", "u1")
+            .await
+            .unwrap_err();
+        assert_eq!(err.code(), Code::NotFound);
+        assert!(err.message().contains("Machine not found"));
     }
 }

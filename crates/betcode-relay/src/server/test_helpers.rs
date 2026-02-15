@@ -49,13 +49,18 @@ pub fn encode_msg<M: Message>(msg: &M) -> Vec<u8> {
 }
 
 /// Set up a [`RequestRouter`] with a machine registered and connected,
-/// returning the router and the receiving end of the tunnel channel.
+/// returning the router, the receiving end of the tunnel channel, and the
+/// database (needed by proxy service constructors for ownership checks).
 ///
 /// Each proxy test file wraps this to construct its own concrete proxy type
-/// from the returned router.
+/// from the returned router and database.
 pub async fn setup_router_with_machine(
     mid: &str,
-) -> (Arc<RequestRouter>, mpsc::Receiver<TunnelFrame>) {
+) -> (
+    Arc<RequestRouter>,
+    mpsc::Receiver<TunnelFrame>,
+    RelayDatabase,
+) {
     let registry = Arc::new(ConnectionRegistry::new());
     let (tx, rx) = mpsc::channel(128);
     registry.register(mid.into(), "u1".into(), tx).await;
@@ -64,17 +69,17 @@ pub async fn setup_router_with_machine(
         .await
         .unwrap();
     db.create_machine(mid, mid, "u1", "{}").await.unwrap();
-    let buffer = Arc::new(BufferManager::new(db, Arc::clone(&registry)));
+    let buffer = Arc::new(BufferManager::new(db.clone(), Arc::clone(&registry)));
     let router = Arc::new(RequestRouter::new(registry, buffer, Duration::from_secs(5)));
-    (router, rx)
+    (router, rx, db)
 }
 
 /// Set up a [`RequestRouter`] *without* any connected machine (the machine
 /// record exists in the DB but no tunnel sender is registered).
 ///
 /// Each proxy test file wraps this to construct its own concrete proxy type
-/// from the returned router.
-pub async fn setup_offline_router() -> Arc<RequestRouter> {
+/// from the returned router and database.
+pub async fn setup_offline_router() -> (Arc<RequestRouter>, RelayDatabase) {
     let registry = Arc::new(ConnectionRegistry::new());
     let db = RelayDatabase::open_in_memory().await.unwrap();
     db.create_user("u1", "alice", "a@t.com", "hash")
@@ -83,8 +88,9 @@ pub async fn setup_offline_router() -> Arc<RequestRouter> {
     db.create_machine("m-off", "m-off", "u1", "{}")
         .await
         .unwrap();
-    let buffer = Arc::new(BufferManager::new(db, Arc::clone(&registry)));
-    Arc::new(RequestRouter::new(registry, buffer, Duration::from_secs(5)))
+    let buffer = Arc::new(BufferManager::new(db.clone(), Arc::clone(&registry)));
+    let router = Arc::new(RequestRouter::new(registry, buffer, Duration::from_secs(5)));
+    (router, db)
 }
 
 /// Generate `setup_with_machine` and `setup_offline` helper functions for a
@@ -106,13 +112,18 @@ macro_rules! proxy_test_setup {
             std::sync::Arc<$crate::router::RequestRouter>,
             tokio::sync::mpsc::Receiver<betcode_proto::v1::TunnelFrame>,
         ) {
-            let (router, rx) = $crate::server::test_helpers::setup_router_with_machine(mid).await;
-            (<$svc_ty>::new(std::sync::Arc::clone(&router)), router, rx)
+            let (router, rx, db) =
+                $crate::server::test_helpers::setup_router_with_machine(mid).await;
+            (
+                <$svc_ty>::new(std::sync::Arc::clone(&router), db),
+                router,
+                rx,
+            )
         }
 
         async fn setup_offline() -> $svc_ty {
-            let router = $crate::server::test_helpers::setup_offline_router().await;
-            <$svc_ty>::new(router)
+            let (router, db) = $crate::server::test_helpers::setup_offline_router().await;
+            <$svc_ty>::new(router, db)
         }
     };
 }
@@ -186,6 +197,45 @@ macro_rules! assert_offline_error {
 }
 
 pub(crate) use assert_offline_error;
+
+/// Create a `Request<T>` with the `x-machine-id` header and claims for a
+/// *different* user ("u2") who does **not** own the machine.  Used to test
+/// the ownership-check error path.
+pub fn make_request_wrong_owner<T>(inner: T, machine_id: &str) -> Request<T> {
+    let mut req = Request::new(inner);
+    req.metadata_mut()
+        .insert("x-machine-id", machine_id.parse().unwrap());
+    req.extensions_mut().insert(Claims {
+        jti: "test-jti-u2".into(),
+        sub: "u2".into(),
+        username: "eve".into(),
+        iat: 0,
+        exp: i64::MAX,
+        token_type: "access".into(),
+    });
+    req
+}
+
+/// Assert that calling `$method` with a user who does not own the machine
+/// produces a `tonic::Code::PermissionDenied` error containing "Not your machine".
+macro_rules! assert_wrong_owner_error {
+    ($svc:expr, $method:ident, $req:expr) => {{
+        let req = $crate::server::test_helpers::make_request_wrong_owner($req, "m1");
+        match $svc.$method(req).await {
+            Err(err) => {
+                assert_eq!(err.code(), tonic::Code::PermissionDenied);
+                assert!(
+                    err.message().contains("Not your machine"),
+                    "expected 'Not your machine', got: {}",
+                    err.message()
+                );
+            }
+            Ok(_) => panic!("expected PermissionDenied error, got Ok"),
+        }
+    }};
+}
+
+pub(crate) use assert_wrong_owner_error;
 
 /// Assert that a daemon error is propagated to the client as a `tonic::Code::Internal` error.
 macro_rules! assert_daemon_error {
