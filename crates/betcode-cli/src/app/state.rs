@@ -323,6 +323,21 @@ impl App {
         self.scroll_pinned = true;
     }
 
+    /// Scroll the detail panel content by `delta` lines (positive = down, negative = up).
+    pub const fn scroll_detail_panel(&mut self, delta: i16) {
+        if delta > 0 {
+            self.detail_panel.scroll_offset = self
+                .detail_panel
+                .scroll_offset
+                .saturating_add(delta.cast_unsigned());
+        } else {
+            self.detail_panel.scroll_offset = self
+                .detail_panel
+                .scroll_offset
+                .saturating_sub(delta.unsigned_abs());
+        }
+    }
+
     /// Toggle the detail panel visibility.
     pub const fn toggle_detail_panel(&mut self) {
         self.detail_panel.visible = !self.detail_panel.visible;
@@ -1543,6 +1558,23 @@ mod tests {
 
         app.toggle_detail_panel();
         assert!(!app.detail_panel.visible);
+    }
+
+    #[test]
+    fn detail_panel_scroll() {
+        let mut app = App::new();
+        app.detail_panel.visible = true;
+        app.detail_panel.selected_tool_index = Some(0);
+
+        app.scroll_detail_panel(5);
+        assert_eq!(app.detail_panel.scroll_offset, 5);
+
+        app.scroll_detail_panel(-3);
+        assert_eq!(app.detail_panel.scroll_offset, 2);
+
+        // Can't scroll below 0
+        app.scroll_detail_panel(-10);
+        assert_eq!(app.detail_panel.scroll_offset, 0);
     }
 
     #[test]

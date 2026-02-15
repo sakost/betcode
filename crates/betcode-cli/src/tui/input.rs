@@ -283,8 +283,10 @@ fn show_help(app: &mut App) {
     lines.push("  Ctrl+D               Toggle detail panel".to_string());
     lines.push("  Ctrl+Up/Down         Navigate tool calls (detail panel)".to_string());
     lines.push("  Tab                  Toggle completion popup".to_string());
-    lines.push("  Shift+Up/Down        Scroll messages".to_string());
-    lines.push("  PageUp/PageDown      Scroll messages (page)".to_string());
+    lines.push("  Shift+Up/Down        Scroll detail panel / messages".to_string());
+    lines.push(
+        "  PageUp/PageDown      Scroll detail panel (10 lines) / messages (page)".to_string(),
+    );
 
     app.add_system_message(MessageRole::System, lines.join("\n"));
     app.scroll_to_bottom();
@@ -444,6 +446,10 @@ async fn handle_input_key(
         }
         KeyCode::Up if ctrl && app.detail_panel.visible => app.select_prev_tool(),
         KeyCode::Down if ctrl && app.detail_panel.visible => app.select_next_tool(),
+        KeyCode::Up if shift && app.detail_panel.visible => app.scroll_detail_panel(-1),
+        KeyCode::Down if shift && app.detail_panel.visible => app.scroll_detail_panel(1),
+        KeyCode::PageUp if app.detail_panel.visible => app.scroll_detail_panel(-10),
+        KeyCode::PageDown if app.detail_panel.visible => app.scroll_detail_panel(10),
         KeyCode::Up if shift => app.scroll_up(1),
         KeyCode::Down if shift => app.scroll_down(1),
         KeyCode::Up => app.history_up(),
