@@ -18,6 +18,9 @@ mod auth_svc_tests;
 #[cfg(test)]
 #[allow(clippy::panic, clippy::expect_used, clippy::unwrap_used)]
 pub(crate) mod test_helpers;
+#[cfg(test)]
+#[allow(clippy::panic, clippy::expect_used, clippy::unwrap_used)]
+mod tunnel_svc_tests;
 
 pub use agent_proxy::AgentProxyService;
 pub use auth_svc::AuthServiceImpl;

@@ -87,6 +87,15 @@ impl TunnelService for TunnelServiceImpl {
                 return;
             }
 
+            // Verify the caller owns this machine before allowing tunnel registration
+            if let Err(status) =
+                crate::server::grpc_util::verify_machine_ownership(&db, &machine_id, &owner_id)
+                    .await
+            {
+                let _ = out_tx.send(Err(status)).await;
+                return;
+            }
+
             info!(machine_id = %machine_id, owner_id = %owner_id, "Tunnel opened");
 
             // Register the connection
@@ -272,11 +281,12 @@ impl TunnelService for TunnelServiceImpl {
         &self,
         request: Request<TunnelHeartbeat>,
     ) -> Result<Response<TunnelHeartbeat>, Status> {
-        // Validate JWT
-        {
-            extract_claims(&request)?;
-        }
+        let caller_id = extract_claims(&request)?.sub.clone();
         let req = request.into_inner();
+
+        // Verify the caller owns this machine
+        crate::server::grpc_util::verify_machine_ownership(&self.db, &req.machine_id, &caller_id)
+            .await?;
 
         // Update last_seen
         if let Err(e) = self.db.touch_machine(&req.machine_id).await {
