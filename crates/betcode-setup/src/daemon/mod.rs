@@ -1,0 +1,237 @@
+mod systemd;
+pub(crate) mod templates;
+
+use std::net::SocketAddr;
+use std::path::PathBuf;
+
+use anyhow::{Context, Result};
+use clap::Args;
+use dialoguer::Confirm;
+
+use crate::config::{DaemonMode, DaemonSetupConfig};
+
+/// Arguments for the `daemon` subcommand.
+#[derive(Debug, Args)]
+pub struct DaemonArgs {
+    /// Deployment mode: "system" or "user"
+    #[arg(long, default_value = "user", value_parser = parse_mode)]
+    pub mode: DaemonMode,
+
+    /// System user to run daemon as (system mode only)
+    #[arg(long, default_value = "betcode")]
+    pub user: String,
+
+    /// gRPC listen address
+    #[arg(long, default_value = "127.0.0.1:50051")]
+    pub addr: SocketAddr,
+
+    /// Database path
+    #[arg(long)]
+    pub db_path: Option<PathBuf>,
+
+    /// Max concurrent Claude processes
+    #[arg(long, default_value_t = 5)]
+    pub max_processes: usize,
+
+    /// Max concurrent sessions
+    #[arg(long, default_value_t = 10)]
+    pub max_sessions: usize,
+
+    /// Relay URL for tunnel mode
+    #[arg(long)]
+    pub relay_url: Option<String>,
+
+    /// Machine ID for relay
+    #[arg(long)]
+    pub machine_id: Option<String>,
+
+    /// Machine name
+    #[arg(long, default_value = "betcode-daemon")]
+    pub machine_name: String,
+
+    /// Relay username
+    #[arg(long)]
+    pub relay_username: Option<String>,
+
+    /// Relay password
+    #[arg(long)]
+    pub relay_password: Option<String>,
+
+    /// Custom CA cert for relay TLS verification
+    #[arg(long)]
+    pub relay_custom_ca_cert: Option<PathBuf>,
+
+    /// Worktree base directory
+    #[arg(long)]
+    pub worktree_dir: Option<PathBuf>,
+
+    /// Path to daemon binary (system mode; uses PATH lookup if omitted)
+    #[arg(long)]
+    pub daemon_binary: Option<PathBuf>,
+}
+
+fn parse_mode(s: &str) -> Result<DaemonMode, String> {
+    match s {
+        "system" => Ok(DaemonMode::System),
+        "user" => Ok(DaemonMode::User),
+        other => Err(format!(
+            "unknown mode: {other} (expected 'system' or 'user')"
+        )),
+    }
+}
+
+fn default_db_path(mode: DaemonMode) -> Result<PathBuf> {
+    match mode {
+        DaemonMode::System => Ok(PathBuf::from("/var/lib/betcode/daemon.db")),
+        DaemonMode::User => {
+            let home = dirs::home_dir()
+                .ok_or_else(|| anyhow::anyhow!("cannot determine home directory"))?;
+            Ok(home.join(".local/share/betcode/daemon.db"))
+        }
+    }
+}
+
+/// Run the daemon setup flow.
+pub fn run(args: DaemonArgs, non_interactive: bool) -> Result<()> {
+    let is_update = match args.mode {
+        DaemonMode::System => std::path::Path::new(systemd::SYSTEM_UNIT_PATH).exists(),
+        DaemonMode::User => systemd::user_unit_path()
+            .map(|p| p.exists())
+            .unwrap_or(false),
+    };
+
+    if is_update {
+        tracing::info!("existing daemon installation detected — running in update mode");
+    }
+
+    let db_path = match args.db_path {
+        Some(p) => p,
+        None => default_db_path(args.mode)?,
+    };
+
+    let daemon_binary_path = args
+        .daemon_binary
+        .map(|p| {
+            std::fs::canonicalize(&p)
+                .with_context(|| format!("daemon binary not found: {}", p.display()))
+        })
+        .transpose()?;
+
+    let enable_linger = if args.mode == DaemonMode::User {
+        prompt_linger(non_interactive)?
+    } else {
+        false
+    };
+
+    let config = DaemonSetupConfig {
+        mode: args.mode,
+        user: args.user,
+        addr: args.addr,
+        db_path,
+        max_processes: args.max_processes,
+        max_sessions: args.max_sessions,
+        relay_url: args.relay_url,
+        machine_id: args.machine_id,
+        machine_name: args.machine_name,
+        relay_username: args.relay_username,
+        relay_password: args.relay_password,
+        relay_custom_ca_cert: args.relay_custom_ca_cert,
+        worktree_dir: args.worktree_dir,
+        daemon_binary_path,
+        enable_linger,
+    };
+
+    tracing::info!("daemon setup: mode={}, addr={}", config.mode, config.addr);
+
+    match config.mode {
+        DaemonMode::System => {
+            crate::escalate::escalate_if_needed(non_interactive)?;
+            validate_systemd_prereqs(config.addr, is_update, DaemonMode::System)?;
+            systemd::deploy_system(&config, is_update)?;
+        }
+        DaemonMode::User => {
+            validate_systemd_prereqs(config.addr, is_update, DaemonMode::User)?;
+            systemd::deploy_user(&config, is_update)?;
+        }
+    }
+
+    Ok(())
+}
+
+fn validate_systemd_prereqs(addr: SocketAddr, is_update: bool, mode: DaemonMode) -> Result<()> {
+    if !crate::cmd::command_exists("systemctl") {
+        anyhow::bail!("systemctl not found — daemon setup requires a systemd-based system");
+    }
+
+    let is_active = match mode {
+        DaemonMode::System => systemd::is_daemon_active_system(),
+        DaemonMode::User => systemd::is_daemon_active_user(),
+    };
+
+    if crate::cmd::should_skip_port_check(is_update, is_active) {
+        tracing::info!("betcode-daemon is already active — skipping port check");
+        return Ok(());
+    }
+
+    match std::net::TcpListener::bind(addr) {
+        Ok(_) => tracing::debug!("port {} is available", addr.port()),
+        Err(e) => anyhow::bail!(
+            "port {} is already in use ({e}). Stop the service occupying it before running setup.",
+            addr.port()
+        ),
+    }
+
+    Ok(())
+}
+
+fn prompt_linger(non_interactive: bool) -> Result<bool> {
+    if non_interactive {
+        return Ok(false);
+    }
+    let confirmed = Confirm::new()
+        .with_prompt(
+            "Enable lingering? This keeps the daemon running after you log out \
+             (recommended for headless/CI machines, optional for workstations)",
+        )
+        .default(false)
+        .interact()?;
+    Ok(confirmed)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_mode_system() {
+        assert_eq!(parse_mode("system"), Ok(DaemonMode::System));
+    }
+
+    #[test]
+    fn parse_mode_user() {
+        assert_eq!(parse_mode("user"), Ok(DaemonMode::User));
+    }
+
+    #[test]
+    fn parse_mode_invalid() {
+        assert!(parse_mode("docker").is_err());
+    }
+
+    #[test]
+    #[allow(clippy::expect_used)]
+    fn default_db_path_system() {
+        let path = default_db_path(DaemonMode::System).expect("should resolve");
+        assert_eq!(path, PathBuf::from("/var/lib/betcode/daemon.db"));
+    }
+
+    #[test]
+    #[allow(clippy::expect_used)]
+    fn default_db_path_user_is_under_home() {
+        let path = default_db_path(DaemonMode::User).expect("should resolve");
+        assert!(
+            path.to_string_lossy().contains(".local/share/betcode"),
+            "user db path should be under ~/.local/share/betcode, got: {}",
+            path.display()
+        );
+    }
+}

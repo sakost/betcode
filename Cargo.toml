@@ -60,6 +60,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 dialoguer = "0.12"
 rand = "0.10"
 nix = { version = "0.31", features = ["user"] }
+dirs = "6"
 
 # CLI
 clap = { version = "4", features = ["derive"] }

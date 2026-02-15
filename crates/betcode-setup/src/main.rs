@@ -3,6 +3,8 @@ use clap::{Parser, Subcommand};
 use tracing_subscriber::EnvFilter;
 
 use betcode_setup::cli::CliArgs;
+#[cfg(unix)]
+use betcode_setup::daemon::DaemonArgs;
 use betcode_setup::relay::RelayArgs;
 #[cfg(feature = "releases")]
 use betcode_setup::releases::ReleasesArgs;
@@ -23,6 +25,9 @@ struct Cli {
 enum Commands {
     /// Set up the betcode relay server
     Relay(RelayArgs),
+    /// Set up the betcode daemon as a systemd service
+    #[cfg(unix)]
+    Daemon(DaemonArgs),
     /// Set up the betcode CLI for relay access
     Cli(CliArgs),
     /// Set up the betcode releases download server
@@ -43,6 +48,10 @@ fn main() -> Result<()> {
         Commands::Relay(args) => {
             betcode_setup::os::ensure_ubuntu()?;
             betcode_setup::relay::run(args, cli.non_interactive)?;
+        }
+        #[cfg(unix)]
+        Commands::Daemon(args) => {
+            betcode_setup::daemon::run(args, cli.non_interactive)?;
         }
         Commands::Cli(ref args) => betcode_setup::cli::run(args, cli.non_interactive)?,
         #[cfg(feature = "releases")]

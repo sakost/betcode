@@ -421,6 +421,7 @@ dependencies = [
  "anyhow",
  "clap",
  "dialoguer",
+ "dirs",
  "nix 0.31.1",
  "rand 0.10.0",
  "tempfile",
