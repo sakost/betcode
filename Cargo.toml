@@ -66,6 +66,9 @@ clap = { version = "4", features = ["derive"] }
 ratatui = { version = "0.30.0", features = ["unstable-rendered-line-info"] }
 crossterm = "0.29.0"
 
+# systemd integration
+sd-notify = "0.4"
+
 # Command system
 nucleo-matcher = "0.3"
 regex = "1"

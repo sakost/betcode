@@ -169,18 +169,49 @@ async fn main() -> anyhow::Result<()> {
         None
     };
 
-    info!(addr = %args.addr, "gRPC server listening");
-
     // Serve until shutdown signal
-    tokio::select! {
-        result = server.serve_tcp(args.addr) => {
-            result?;
+    #[cfg(unix)]
+    {
+        let mut sigterm =
+            tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
+
+        // Notify systemd that the daemon is ready to serve.
+        // The `true` parameter unsets $NOTIFY_SOCKET so child processes
+        // (Claude Code subprocesses) don't accidentally notify systemd.
+        sd_notify::notify(true, &[sd_notify::NotifyState::Ready])?;
+
+        info!(addr = %args.addr, "gRPC server ready");
+
+        tokio::select! {
+            result = server.serve_tcp(args.addr) => {
+                result?;
+            }
+            _ = tokio::signal::ctrl_c() => {
+                info!("Received Ctrl+C shutdown signal");
+            }
+            _ = sigterm.recv() => {
+                info!("Received SIGTERM shutdown signal");
+            }
+            _ = daemon_shutdown_rx.changed() => {
+                info!("Daemon shutdown requested via exit-daemon command");
+            }
         }
-        _ = tokio::signal::ctrl_c() => {
-            info!("Received Ctrl+C shutdown signal");
-        }
-        _ = daemon_shutdown_rx.changed() => {
-            info!("Daemon shutdown requested via exit-daemon command");
+    }
+
+    #[cfg(not(unix))]
+    {
+        info!(addr = %args.addr, "gRPC server ready");
+
+        tokio::select! {
+            result = server.serve_tcp(args.addr) => {
+                result?;
+            }
+            _ = tokio::signal::ctrl_c() => {
+                info!("Received Ctrl+C shutdown signal");
+            }
+            _ = daemon_shutdown_rx.changed() => {
+                info!("Daemon shutdown requested via exit-daemon command");
+            }
         }
     }
 
