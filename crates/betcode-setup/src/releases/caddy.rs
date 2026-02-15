@@ -13,6 +13,7 @@ const MAIN_CADDYFILE: &str = "/etc/caddy/Caddyfile";
 const CONF_DIR: &str = "/etc/caddy/conf.d";
 const SITE_CONFIG: &str = "/etc/caddy/conf.d/betcode-releases.caddy";
 const LOG_DIR: &str = "/var/log/caddy";
+const LOG_FILE: &str = "/var/log/caddy/betcode-releases.log";
 
 /// Set up Caddy as a reverse proxy for betcode-releases.
 pub fn setup(domain: &str, acme_email: Option<&str>) -> Result<()> {
@@ -130,11 +131,16 @@ fn write_site_config(domain: &str, acme_email: Option<&str>) -> Result<()> {
     Ok(())
 }
 
-/// Create `/var/log/caddy/` with caddy ownership.
+/// Create `/var/log/caddy/` and the log file with caddy ownership.
 fn create_log_dir() -> Result<()> {
     fs::create_dir_all(LOG_DIR).with_context(|| format!("failed to create {LOG_DIR}"))?;
     fs::set_permissions(LOG_DIR, fs::Permissions::from_mode(0o755))
         .context("failed to set permissions on log dir")?;
+
+    // Pre-create the log file so caddy doesn't need to create it at reload time
+    if !Path::new(LOG_FILE).exists() {
+        fs::File::create(LOG_FILE).with_context(|| format!("failed to create {LOG_FILE}"))?;
+    }
 
     run_cmd(
         "setting ownership on caddy log dir",
