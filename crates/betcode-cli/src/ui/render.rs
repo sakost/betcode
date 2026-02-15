@@ -80,7 +80,24 @@ pub fn draw(frame: &mut Frame<'_>, app: &mut App) {
         .split(frame.area());
 
     draw_header(frame, app, chunks[0]);
-    draw_messages(frame, app, chunks[1]);
+
+    if app.detail_panel.visible {
+        let msg_area = chunks[1];
+        let (conv_w, panel_w) = compute_detail_split(msg_area.width);
+        if conv_w == 0 {
+            // Overlay mode: detail panel covers the entire message area
+            draw_detail_panel(frame, app, msg_area);
+        } else {
+            let horiz = Layout::default()
+                .direction(Direction::Horizontal)
+                .constraints([Constraint::Length(conv_w), Constraint::Length(panel_w)])
+                .split(msg_area);
+            draw_messages(frame, app, horiz[0]);
+            draw_detail_panel(frame, app, horiz[1]);
+        }
+    } else {
+        draw_messages(frame, app, chunks[1]);
+    }
 
     match bottom_panel {
         BottomPanel::Input => draw_input(frame, app, chunks[2]),
@@ -657,6 +674,27 @@ pub fn format_duration_ms(ms: Option<u32>) -> String {
         Some(ms) => format!("{ms}ms"),
         None => String::new(),
     }
+}
+
+/// Compute conversation/panel widths for the detail panel split.
+/// Returns `(conversation_width, panel_width)`.
+/// If terminal is too narrow (<80), returns `(0, full_width)` for overlay mode.
+pub fn compute_detail_split(total_width: u16) -> (u16, u16) {
+    if total_width < 80 {
+        return (0, total_width);
+    }
+    let panel_width = (total_width * 2 / 5).max(30).min(total_width - 30);
+    let conv_width = total_width - panel_width;
+    (conv_width, panel_width)
+}
+
+/// Render the detail panel placeholder.
+///
+/// Draws a bordered block with a "Detail" title. The full implementation
+/// (tool call details, scrolling, etc.) is deferred to a later task.
+fn draw_detail_panel(frame: &mut Frame<'_>, _app: &App, area: Rect) {
+    let block = Block::default().borders(Borders::ALL).title("Detail");
+    frame.render_widget(block, area);
 }
 
 #[cfg(test)]

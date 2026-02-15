@@ -12,6 +12,7 @@ mod tests {
         App, AppMode, PendingPermission, PendingUserQuestion, QuestionOptionDisplay, ToolCallEntry,
         ToolCallStatus,
     };
+    use crate::ui::render::compute_detail_split;
     use crate::ui::{draw, format_duration_ms, format_tool_status_line};
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
@@ -588,5 +589,49 @@ mod tests {
         // Render should not panic and should only show 1 tool status line
         draw_app(80, 24, &mut app);
         assert_eq!(app.total_lines, 1, "Only tool start line should render");
+    }
+
+    // -- Detail panel layout split tests --
+
+    #[test]
+    fn layout_splits_when_detail_panel_visible() {
+        // With 120-col terminal, message area should split ~72/48
+        let (conv_width, panel_width) = compute_detail_split(120);
+        assert!(conv_width >= 60);
+        assert!(panel_width >= 30);
+        assert_eq!(conv_width + panel_width, 120);
+    }
+
+    #[test]
+    fn layout_no_split_when_narrow_terminal() {
+        let (conv_width, panel_width) = compute_detail_split(70);
+        // Falls back to overlay mode: panel takes full width
+        assert_eq!(conv_width, 0);
+        assert_eq!(panel_width, 70);
+    }
+
+    #[test]
+    fn layout_split_panel_min_width_30() {
+        // Even with exactly 80 cols, panel should be at least 30
+        let (conv_width, panel_width) = compute_detail_split(80);
+        assert!(panel_width >= 30);
+        assert!(conv_width >= 30);
+        assert_eq!(conv_width + panel_width, 80);
+    }
+
+    #[test]
+    fn render_detail_panel_visible_wide() {
+        let mut app = App::new();
+        app.detail_panel.visible = true;
+        // Should not panic on a wide terminal
+        draw_app(120, 30, &mut app);
+    }
+
+    #[test]
+    fn render_detail_panel_visible_narrow() {
+        let mut app = App::new();
+        app.detail_panel.visible = true;
+        // Should not panic on a narrow terminal (overlay mode)
+        draw_app(60, 20, &mut app);
     }
 }
