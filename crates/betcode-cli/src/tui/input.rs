@@ -91,6 +91,15 @@ pub async fn handle_term_event(app: &mut App, tx: &mpsc::Sender<AgentRequest>, e
                 app.show_status_panel = !app.show_status_panel;
                 return;
             }
+            // Ctrl+D toggles the detail panel.
+            if key
+                .modifiers
+                .contains(crossterm::event::KeyModifiers::CONTROL)
+                && key.code == KeyCode::Char('d')
+            {
+                app.toggle_detail_panel();
+                return;
+            }
             if key
                 .modifiers
                 .contains(crossterm::event::KeyModifiers::CONTROL)
@@ -271,6 +280,8 @@ fn show_help(app: &mut App) {
     lines.push("Keyboard shortcuts:".to_string());
     lines.push("  Ctrl+C               Quit".to_string());
     lines.push("  Ctrl+T               Toggle status panel".to_string());
+    lines.push("  Ctrl+D               Toggle detail panel".to_string());
+    lines.push("  Ctrl+Up/Down         Navigate tool calls (detail panel)".to_string());
     lines.push("  Tab                  Toggle completion popup".to_string());
     lines.push("  Shift+Up/Down        Scroll messages".to_string());
     lines.push("  PageUp/PageDown      Scroll messages (page)".to_string());
@@ -328,6 +339,9 @@ async fn handle_input_key(
     let shift = key
         .modifiers
         .contains(crossterm::event::KeyModifiers::SHIFT);
+    let ctrl = key
+        .modifiers
+        .contains(crossterm::event::KeyModifiers::CONTROL);
 
     match key.code {
         KeyCode::Enter => {
@@ -428,6 +442,8 @@ async fn handle_input_key(
         KeyCode::Right => {
             app.cursor_pos = (app.cursor_pos + 1).min(app.input.len());
         }
+        KeyCode::Up if ctrl && app.detail_panel.visible => app.select_prev_tool(),
+        KeyCode::Down if ctrl && app.detail_panel.visible => app.select_next_tool(),
         KeyCode::Up if shift => app.scroll_up(1),
         KeyCode::Down if shift => app.scroll_down(1),
         KeyCode::Up => app.history_up(),

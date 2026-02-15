@@ -111,6 +111,14 @@ impl CompletionState {
     }
 }
 
+/// State for the toggleable detail panel.
+#[derive(Debug, Clone, Default)]
+pub struct DetailPanelState {
+    pub visible: bool,
+    pub selected_tool_index: Option<usize>,
+    pub scroll_offset: u16,
+}
+
 /// Token usage info for status bar.
 #[derive(Debug, Clone)]
 pub struct TokenUsage {
@@ -170,6 +178,8 @@ pub struct App {
     pub agent_busy: bool,
     pub completion_state: CompletionState,
     pub show_status_panel: bool,
+    /// State for the toggleable detail panel (Ctrl+D).
+    pub detail_panel: DetailPanelState,
     /// Connection type displayed in the status panel ("local" or "relay").
     pub connection_type: String,
     /// Structured tracking of tool call lifecycle.
@@ -224,6 +234,7 @@ impl App {
             agent_busy: false,
             completion_state: CompletionState::default(),
             show_status_panel: false,
+            detail_panel: DetailPanelState::default(),
             connection_type: "local".to_string(),
             tool_calls: Vec::new(),
             spinner_tick: 0,
@@ -310,6 +321,45 @@ impl App {
     pub const fn scroll_to_bottom(&mut self) {
         self.scroll_offset = 0;
         self.scroll_pinned = true;
+    }
+
+    /// Toggle the detail panel visibility.
+    pub const fn toggle_detail_panel(&mut self) {
+        self.detail_panel.visible = !self.detail_panel.visible;
+        if self.detail_panel.visible
+            && self.detail_panel.selected_tool_index.is_none()
+            && !self.tool_calls.is_empty()
+        {
+            self.detail_panel.selected_tool_index = Some(self.tool_calls.len() - 1);
+        }
+    }
+
+    /// Select the next tool call in the detail panel (wrapping).
+    pub fn select_next_tool(&mut self) {
+        if self.tool_calls.is_empty() {
+            return;
+        }
+        let len = self.tool_calls.len();
+        self.detail_panel.selected_tool_index = Some(
+            self.detail_panel
+                .selected_tool_index
+                .map_or(0, |i| (i + 1) % len),
+        );
+        self.detail_panel.scroll_offset = 0;
+    }
+
+    /// Select the previous tool call in the detail panel (wrapping).
+    pub fn select_prev_tool(&mut self) {
+        if self.tool_calls.is_empty() {
+            return;
+        }
+        let len = self.tool_calls.len();
+        self.detail_panel.selected_tool_index = Some(
+            self.detail_panel
+                .selected_tool_index
+                .map_or(len - 1, |i| if i == 0 { len - 1 } else { i - 1 }),
+        );
+        self.detail_panel.scroll_offset = 0;
     }
 
     pub fn add_user_message(&mut self, content: String) {
@@ -1477,5 +1527,63 @@ mod tests {
         cs.selected_index = 19;
         cs.adjust_scroll();
         assert_eq!(cs.scroll_offset, 12); // 19+1-8=12
+    }
+
+    // =========================================================================
+    // DetailPanelState tests
+    // =========================================================================
+
+    #[test]
+    fn detail_panel_toggles() {
+        let mut app = App::new();
+        assert!(!app.detail_panel.visible);
+
+        app.toggle_detail_panel();
+        assert!(app.detail_panel.visible);
+
+        app.toggle_detail_panel();
+        assert!(!app.detail_panel.visible);
+    }
+
+    #[test]
+    fn detail_panel_selects_tool() {
+        let mut app = App::new();
+        // Add two tool calls
+        app.tool_calls.push(ToolCallEntry {
+            tool_id: "t1".to_string(),
+            tool_name: "Read".to_string(),
+            description: String::new(),
+            input_json: None,
+            output: Some("output1".to_string()),
+            status: ToolCallStatus::Done,
+            duration_ms: Some(100),
+            finished_at: None,
+            message_index: 0,
+        });
+        app.tool_calls.push(ToolCallEntry {
+            tool_id: "t2".to_string(),
+            tool_name: "Bash".to_string(),
+            description: String::new(),
+            input_json: None,
+            output: Some("output2".to_string()),
+            status: ToolCallStatus::Done,
+            duration_ms: Some(200),
+            finished_at: None,
+            message_index: 1,
+        });
+
+        // Defaults to last tool call
+        app.toggle_detail_panel();
+        assert_eq!(app.detail_panel.selected_tool_index, Some(1));
+
+        app.select_prev_tool();
+        assert_eq!(app.detail_panel.selected_tool_index, Some(0));
+
+        app.select_prev_tool();
+        // Wraps to end
+        assert_eq!(app.detail_panel.selected_tool_index, Some(1));
+
+        app.select_next_tool();
+        assert_eq!(app.detail_panel.selected_tool_index, Some(0));
     }
 }
