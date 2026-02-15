@@ -80,7 +80,7 @@ pub async fn ensure_valid_token(config: &mut CliConfig) -> anyhow::Result<()> {
 
     let refresh_token = auth.refresh_token.clone();
 
-    let channel = relay_channel(&relay_url, config.relay_ca_cert.as_deref())
+    let channel = relay_channel(&relay_url, config.relay_custom_ca_cert.as_deref())
         .await
         .map_err(|e| anyhow::anyhow!("Cannot reach relay: {e}"))?;
 
@@ -108,7 +108,7 @@ async fn auth_client(config: &CliConfig) -> anyhow::Result<AuthServiceClient<Cha
         .as_ref()
         .ok_or_else(|| anyhow::anyhow!("No relay URL configured. Use --relay <url>"))?;
 
-    let channel = relay_channel(relay_url, config.relay_ca_cert.as_deref()).await?;
+    let channel = relay_channel(relay_url, config.relay_custom_ca_cert.as_deref()).await?;
     Ok(AuthServiceClient::new(channel))
 }
 
@@ -193,7 +193,7 @@ async fn login(config: &mut CliConfig, username: &str, password: &str) -> anyhow
 
 async fn logout(config: &mut CliConfig) -> anyhow::Result<()> {
     if let (Some(auth), Some(relay_url)) = (&config.auth, &config.relay_url)
-        && let Ok(channel) = relay_channel(relay_url, config.relay_ca_cert.as_deref()).await
+        && let Ok(channel) = relay_channel(relay_url, config.relay_custom_ca_cert.as_deref()).await
     {
         let mut client = AuthServiceClient::new(channel);
         let _ = client

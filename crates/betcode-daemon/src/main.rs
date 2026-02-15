@@ -55,9 +55,10 @@ struct Args {
     #[arg(long, env = "BETCODE_RELAY_PASSWORD")]
     relay_password: Option<String>,
 
-    /// Path to CA certificate for verifying the relay's TLS certificate (PEM).
-    #[arg(long, env = "BETCODE_RELAY_CA_CERT")]
-    relay_ca_cert: Option<PathBuf>,
+    /// Path to custom CA certificate for verifying the relay's TLS certificate (PEM).
+    /// Use this for self-signed or development certificates.
+    #[arg(long, env = "BETCODE_RELAY_CUSTOM_CA_CERT")]
+    relay_custom_ca_cert: Option<PathBuf>,
 
     /// Base directory for git worktrees
     #[arg(long, env = "BETCODE_WORKTREE_DIR")]
@@ -136,7 +137,9 @@ async fn main() -> anyhow::Result<()> {
             username,
             password,
         );
-        tunnel_config.ca_cert_path.clone_from(&args.relay_ca_cert);
+        tunnel_config
+            .ca_cert_path
+            .clone_from(&args.relay_custom_ca_cert);
 
         info!(
             relay_url = %relay_url,

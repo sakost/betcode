@@ -50,9 +50,9 @@ struct Cli {
     #[arg(long)]
     machine: Option<String>,
 
-    /// Path to CA certificate for verifying relay TLS (for self-signed/dev certs)
+    /// Path to custom CA certificate for verifying relay TLS (for self-signed/dev certs)
     #[arg(long)]
-    relay_ca_cert: Option<std::path::PathBuf>,
+    relay_custom_ca_cert: Option<std::path::PathBuf>,
 
     /// Continue the most recent session in the current working directory
     #[arg(short = 'c', long = "continue")]
@@ -130,8 +130,8 @@ async fn main() -> anyhow::Result<()> {
     if let Some(ref mid) = cli.machine {
         cli_config.active_machine = Some(mid.clone());
     }
-    if let Some(ref ca) = cli.relay_ca_cert {
-        cli_config.relay_ca_cert = Some(ca.clone());
+    if let Some(ref ca) = cli.relay_custom_ca_cert {
+        cli_config.relay_custom_ca_cert = Some(ca.clone());
     }
 
     // Dispatch auth/machine subcommands (don't need daemon connection)
@@ -185,7 +185,7 @@ async fn main() -> anyhow::Result<()> {
             addr: cli_config.relay_url.clone().unwrap_or_default(),
             auth_token: cli_config.auth.as_ref().map(|a| a.access_token.clone()),
             machine_id: cli_config.active_machine.clone(),
-            ca_cert_path: cli_config.relay_ca_cert.clone(),
+            ca_cert_path: cli_config.relay_custom_ca_cert.clone(),
             ..Default::default()
         }
     } else {

@@ -74,7 +74,7 @@ async fn connect_relay(config: &CliConfig) -> anyhow::Result<Channel> {
         .relay_url
         .as_ref()
         .ok_or_else(|| anyhow::anyhow!("No relay URL configured. Use --relay <url>"))?;
-    relay_channel(relay_url, config.relay_ca_cert.as_deref()).await
+    relay_channel(relay_url, config.relay_custom_ca_cert.as_deref()).await
 }
 
 async fn register(config: &CliConfig, id: Option<String>, name: &str) -> anyhow::Result<()> {
@@ -211,7 +211,7 @@ mod tests {
     async fn connect_relay_with_nonexistent_ca_cert_fails() {
         let config = CliConfig {
             relay_url: Some("https://127.0.0.1:9999".into()),
-            relay_ca_cert: Some(std::path::PathBuf::from("/nonexistent/ca.pem")),
+            relay_custom_ca_cert: Some(std::path::PathBuf::from("/nonexistent/ca.pem")),
             ..Default::default()
         };
         let result = connect_relay(&config).await;
@@ -227,7 +227,7 @@ mod tests {
     async fn connect_relay_without_ca_cert_attempts_plain() {
         let config = CliConfig {
             relay_url: Some("http://127.0.0.1:1".into()),
-            relay_ca_cert: None,
+            relay_custom_ca_cert: None,
             ..Default::default()
         };
         let result = connect_relay(&config).await;
