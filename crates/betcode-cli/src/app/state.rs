@@ -31,6 +31,10 @@ pub struct DisplayMessage {
     pub role: MessageRole,
     pub content: String,
     pub streaming: bool,
+    /// Whether this message was created from a `ToolCallResult` event.
+    /// Used by the renderer to skip inline result messages (the Done/Error
+    /// status line already covers both start and result).
+    pub is_tool_result: bool,
 }
 
 /// Message role.
@@ -170,6 +174,8 @@ pub struct App {
     pub connection_type: String,
     /// Structured tracking of tool call lifecycle.
     pub tool_calls: Vec<ToolCallEntry>,
+    /// Current spinner animation tick (incremented by the ticker).
+    pub spinner_tick: usize,
     /// Local cache of commands fetched from daemon for `/` completion.
     pub command_cache: CommandCache,
     /// Sender to request async completion fetches (agents, files).
@@ -220,6 +226,7 @@ impl App {
             show_status_panel: false,
             connection_type: "local".to_string(),
             tool_calls: Vec::new(),
+            spinner_tick: 0,
             command_cache: CommandCache::new(),
             completion_request_tx: None,
             service_command_tx: None,
@@ -310,6 +317,7 @@ impl App {
             role: MessageRole::User,
             content,
             streaming: false,
+            is_tool_result: false,
         });
     }
 
@@ -318,6 +326,7 @@ impl App {
             role: MessageRole::Assistant,
             content: String::new(),
             streaming: true,
+            is_tool_result: false,
         });
     }
 
@@ -340,6 +349,7 @@ impl App {
             role,
             content,
             streaming: false,
+            is_tool_result: false,
         });
     }
 
@@ -394,6 +404,10 @@ impl App {
                 };
                 let msg = format!("[Tool Result ({status}): {preview}]");
                 self.add_system_message(MessageRole::Tool, msg);
+                // Mark as tool result so the renderer can skip it
+                if let Some(last) = self.messages.last_mut() {
+                    last.is_tool_result = true;
+                }
                 if let Some(entry) = self
                     .tool_calls
                     .iter_mut()
@@ -502,6 +516,7 @@ impl App {
                         role: MessageRole::Assistant,
                         content: delta.text,
                         streaming: true, // temporary, will be finished
+                        is_tool_result: false,
                     });
                 } else if let Some(msg) = self.messages.last_mut() {
                     msg.content.push_str(&delta.text);
@@ -546,6 +561,10 @@ impl App {
                     MessageRole::Tool,
                     format!("[Tool Result ({status}): {preview}]"),
                 );
+                // Mark as tool result so the renderer can skip it
+                if let Some(last) = self.messages.last_mut() {
+                    last.is_tool_result = true;
+                }
                 if let Some(entry) = self
                     .tool_calls
                     .iter_mut()

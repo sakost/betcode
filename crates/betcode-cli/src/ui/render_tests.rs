@@ -8,8 +8,11 @@
     clippy::cast_possible_truncation
 )]
 mod tests {
-    use crate::app::{App, AppMode, PendingPermission, PendingUserQuestion, QuestionOptionDisplay};
-    use crate::ui::draw;
+    use crate::app::{
+        App, AppMode, PendingPermission, PendingUserQuestion, QuestionOptionDisplay, ToolCallEntry,
+        ToolCallStatus,
+    };
+    use crate::ui::{draw, format_duration_ms, format_tool_status_line};
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
     use ratatui::text::{Line, Span};
@@ -419,5 +422,171 @@ mod tests {
             vec![0],
         );
         draw_app(40, 15, &mut app);
+    }
+
+    // -- Tool status line formatting tests --
+
+    #[test]
+    fn format_tool_line_running() {
+        let entry = ToolCallEntry {
+            tool_id: "t1".to_string(),
+            tool_name: "Read".to_string(),
+            description: "/src/main.rs".to_string(),
+            input_json: None,
+            output: None,
+            status: ToolCallStatus::Running,
+            duration_ms: None,
+            finished_at: None,
+            message_index: 0,
+        };
+        let line = format_tool_status_line(&entry, 0);
+        assert!(line.contains("Read"));
+        assert!(line.contains("/src/main.rs"));
+        assert!(line.starts_with('\u{280B}')); // ⠋
+    }
+
+    #[test]
+    fn format_tool_line_running_spinner_cycles() {
+        let entry = ToolCallEntry {
+            tool_id: "t1".to_string(),
+            tool_name: "Read".to_string(),
+            description: "/src/main.rs".to_string(),
+            input_json: None,
+            output: None,
+            status: ToolCallStatus::Running,
+            duration_ms: None,
+            finished_at: None,
+            message_index: 0,
+        };
+        // tick=1 should produce a different spinner char
+        let line = format_tool_status_line(&entry, 1);
+        assert!(line.starts_with('\u{2819}')); // ⠙
+    }
+
+    #[test]
+    fn format_tool_line_running_empty_description() {
+        let entry = ToolCallEntry {
+            tool_id: "t1".to_string(),
+            tool_name: "Read".to_string(),
+            description: String::new(),
+            input_json: None,
+            output: None,
+            status: ToolCallStatus::Running,
+            duration_ms: None,
+            finished_at: None,
+            message_index: 0,
+        };
+        let line = format_tool_status_line(&entry, 0);
+        assert_eq!(line, "\u{280B} Read");
+    }
+
+    #[test]
+    fn format_tool_line_done() {
+        let entry = ToolCallEntry {
+            tool_id: "t1".to_string(),
+            tool_name: "Read".to_string(),
+            description: "/src/main.rs".to_string(),
+            input_json: None,
+            output: Some("contents".to_string()),
+            status: ToolCallStatus::Done,
+            duration_ms: Some(1200),
+            finished_at: None,
+            message_index: 0,
+        };
+        let line = format_tool_status_line(&entry, 0);
+        assert!(line.starts_with('\u{2713}')); // ✓
+        assert!(line.contains("1.2s"));
+    }
+
+    #[test]
+    fn format_tool_line_error() {
+        let entry = ToolCallEntry {
+            tool_id: "t1".to_string(),
+            tool_name: "Bash".to_string(),
+            description: "rm".to_string(),
+            input_json: None,
+            output: Some("denied".to_string()),
+            status: ToolCallStatus::Error,
+            duration_ms: Some(50),
+            finished_at: None,
+            message_index: 0,
+        };
+        let line = format_tool_status_line(&entry, 0);
+        assert!(line.starts_with('\u{2717}')); // ✗
+    }
+
+    #[test]
+    fn format_duration_ms_seconds() {
+        assert_eq!(format_duration_ms(Some(1200)), "1.2s");
+        assert_eq!(format_duration_ms(Some(1000)), "1.0s");
+        assert_eq!(format_duration_ms(Some(2500)), "2.5s");
+    }
+
+    #[test]
+    fn format_duration_ms_millis() {
+        assert_eq!(format_duration_ms(Some(50)), "50ms");
+        assert_eq!(format_duration_ms(Some(999)), "999ms");
+    }
+
+    #[test]
+    fn format_duration_ms_none() {
+        assert_eq!(format_duration_ms(None), "");
+    }
+
+    #[test]
+    fn format_tool_line_error_with_duration_ms() {
+        let entry = ToolCallEntry {
+            tool_id: "t1".to_string(),
+            tool_name: "Bash".to_string(),
+            description: "rm".to_string(),
+            input_json: None,
+            output: Some("denied".to_string()),
+            status: ToolCallStatus::Error,
+            duration_ms: Some(50),
+            finished_at: None,
+            message_index: 0,
+        };
+        let line = format_tool_status_line(&entry, 0);
+        assert!(line.contains("50ms"));
+    }
+
+    #[test]
+    fn tool_result_message_skipped_in_render() {
+        // Verify that is_tool_result messages are not rendered (no panic, reduced line count)
+        use betcode_proto::v1::agent_event::Event;
+        let mut app = App::new();
+
+        // Simulate tool start + result via events
+        app.handle_event(betcode_proto::v1::AgentEvent {
+            sequence: 1,
+            timestamp: None,
+            parent_tool_use_id: String::new(),
+            event: Some(Event::ToolCallStart(betcode_proto::v1::ToolCallStart {
+                tool_id: "t1".to_string(),
+                tool_name: "Read".to_string(),
+                input: None,
+                description: "/src/main.rs".to_string(),
+            })),
+        });
+        app.handle_event(betcode_proto::v1::AgentEvent {
+            sequence: 2,
+            timestamp: None,
+            parent_tool_use_id: String::new(),
+            event: Some(Event::ToolCallResult(betcode_proto::v1::ToolCallResult {
+                tool_id: "t1".to_string(),
+                output: "file contents".to_string(),
+                is_error: false,
+                duration_ms: 100,
+            })),
+        });
+
+        // We have 2 messages but the result should be skipped
+        assert_eq!(app.messages.len(), 2);
+        assert!(!app.messages[0].is_tool_result);
+        assert!(app.messages[1].is_tool_result);
+
+        // Render should not panic and should only show 1 tool status line
+        draw_app(80, 24, &mut app);
+        assert_eq!(app.total_lines, 1, "Only tool start line should render");
     }
 }

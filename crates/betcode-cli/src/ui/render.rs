@@ -8,7 +8,7 @@ use ratatui::widgets::{Block, Borders, Clear, Padding, Paragraph, Wrap};
 use unicode_width::UnicodeWidthStr;
 
 use super::panels;
-use crate::app::{App, AppMode, MessageRole};
+use crate::app::{App, AppMode, MessageRole, ToolCallEntry, ToolCallStatus};
 
 /// Which panel to show at the bottom.
 enum BottomPanel {
@@ -179,14 +179,38 @@ fn draw_header(frame: &mut Frame<'_>, app: &App, area: Rect) {
     frame.render_widget(header, area);
 }
 
+#[allow(clippy::too_many_lines)]
 fn draw_messages(frame: &mut Frame<'_>, app: &mut App, area: Rect) {
     let mut lines: Vec<Line<'_>> = Vec::new();
+    let mut rendered_count = 0usize;
 
     for (i, msg) in app.messages.iter().enumerate() {
-        // Add empty line separator between messages (not before the first)
-        if i > 0 {
+        // Skip tool result messages -- the Done/Error status line covers both
+        if msg.is_tool_result {
+            continue;
+        }
+
+        // Add empty line separator between rendered messages
+        if rendered_count > 0 {
             lines.push(Line::from(""));
         }
+        rendered_count += 1;
+
+        // For Tool role messages, look up the corresponding ToolCallEntry and
+        // render with format_tool_status_line + color instead of raw text.
+        if msg.role == MessageRole::Tool
+            && let Some(entry) = app.tool_calls.iter().find(|e| e.message_index == i)
+        {
+            let text = format_tool_status_line(entry, app.spinner_tick);
+            let color = match entry.status {
+                ToolCallStatus::Running => Color::Cyan,
+                ToolCallStatus::Done => Color::Green,
+                ToolCallStatus::Error => Color::Red,
+            };
+            lines.push(Line::from(Span::styled(text, Style::default().fg(color))));
+            continue;
+        }
+
         let (prefix, color) = match msg.role {
             MessageRole::User => ("You: ", Color::Green),
             MessageRole::Assistant => ("Claude: ", Color::Blue),
@@ -214,8 +238,8 @@ fn draw_messages(frame: &mut Frame<'_>, app: &mut App, area: Rect) {
                 Span::styled(cursor, Style::default().fg(Color::White)),
             ]));
             let indent = " ".repeat(prefix.len());
-            for (i, content_line) in content_lines.iter().enumerate().skip(1) {
-                let cursor = if msg.streaming && i == content_lines.len() - 1 {
+            for (j, content_line) in content_lines.iter().enumerate().skip(1) {
+                let cursor = if msg.streaming && j == content_lines.len() - 1 {
                     "\u{2588}"
                 } else {
                     ""
@@ -588,6 +612,51 @@ fn break_long_word(
         }
     }
     w
+}
+
+/// Braille spinner animation characters.
+const SPINNER_CHARS: &[char] = &[
+    '\u{280B}', '\u{2819}', '\u{2839}', '\u{2838}', '\u{283C}', '\u{2834}', '\u{2826}', '\u{2827}',
+    '\u{2807}', '\u{280F}',
+];
+
+/// Format a tool call entry as a single status line with icon prefix.
+///
+/// - Running: `⠋ Read /src/main.rs` (spinner animates through `SPINNER_CHARS`)
+/// - Done: `✓ Read 0.2s`
+/// - Error: `✗ Bash 0.1s`
+pub fn format_tool_status_line(entry: &ToolCallEntry, tick: usize) -> String {
+    match entry.status {
+        ToolCallStatus::Running => {
+            let spinner = SPINNER_CHARS[tick % SPINNER_CHARS.len()];
+            if entry.description.is_empty() {
+                format!("{spinner} {}", entry.tool_name)
+            } else {
+                format!("{spinner} {} {}", entry.tool_name, entry.description)
+            }
+        }
+        ToolCallStatus::Done => {
+            let duration = format_duration_ms(entry.duration_ms);
+            format!("\u{2713} {} {duration}", entry.tool_name)
+        }
+        ToolCallStatus::Error => {
+            let duration = format_duration_ms(entry.duration_ms);
+            format!("\u{2717} {} {duration}", entry.tool_name)
+        }
+    }
+}
+
+/// Format a duration in milliseconds as a human-readable string.
+///
+/// - `>= 1000ms` → `"1.2s"`
+/// - `< 1000ms` → `"50ms"`
+/// - `None` → `""`
+pub fn format_duration_ms(ms: Option<u32>) -> String {
+    match ms {
+        Some(ms) if ms >= 1000 => format!("{:.1}s", f64::from(ms) / 1000.0),
+        Some(ms) => format!("{ms}ms"),
+        None => String::new(),
+    }
 }
 
 #[cfg(test)]
