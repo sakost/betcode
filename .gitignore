@@ -26,3 +26,5 @@ metrics/
 
 # Environment files
 .env
+
+.worktree
