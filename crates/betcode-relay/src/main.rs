@@ -48,12 +48,8 @@ struct Args {
     #[arg(long, env = "BETCODE_DB_PATH")]
     db_path: Option<PathBuf>,
 
-    /// JWT secret key.
-    #[arg(
-        long,
-        env = "BETCODE_JWT_SECRET",
-        default_value = "dev-secret-change-me"
-    )]
+    /// JWT secret key (required; at least 32 bytes).
+    #[arg(long, env = "BETCODE_JWT_SECRET")]
     jwt_secret: String,
 
     /// Access token TTL in seconds.
@@ -97,6 +93,8 @@ async fn main() -> anyhow::Result<()> {
         addr = %args.addr,
         "Starting betcode-relay"
     );
+
+    betcode_relay::auth::validate_jwt_secret(&args.jwt_secret)?;
 
     let db = if let Some(path) = &args.db_path {
         info!(path = %path.display(), "Opening relay database");

@@ -7,4 +7,4 @@ pub mod jwt;
 pub mod password;
 
 pub use claims::Claims;
-pub use jwt::JwtManager;
+pub use jwt::{JwtManager, JwtSecretError, validate_jwt_secret};

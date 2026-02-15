@@ -5,6 +5,39 @@ use sha2::{Digest, Sha256};
 
 use super::claims::Claims;
 
+/// The well-known insecure default JWT secret that must never be used in production.
+const INSECURE_DEFAULT_SECRET: &str = "dev-secret-change-me";
+
+/// Minimum length in bytes for a JWT secret.
+const MIN_SECRET_LENGTH: usize = 32;
+
+/// Errors arising from JWT secret validation.
+#[derive(Debug, thiserror::Error)]
+pub enum JwtSecretError {
+    /// The secret matches the well-known insecure default.
+    #[error(
+        "JWT secret is the insecure default 'dev-secret-change-me'. Set BETCODE_JWT_SECRET or --jwt-secret"
+    )]
+    InsecureDefault,
+    /// The secret is shorter than the required minimum length.
+    #[error("JWT secret must be at least {MIN_SECRET_LENGTH} bytes, got {0}")]
+    TooShort(usize),
+}
+
+/// Validate that a JWT secret is safe for production use.
+///
+/// Rejects the well-known default `"dev-secret-change-me"` and any secret
+/// shorter than 32 bytes.
+pub fn validate_jwt_secret(secret: &str) -> Result<(), JwtSecretError> {
+    if secret == INSECURE_DEFAULT_SECRET {
+        return Err(JwtSecretError::InsecureDefault);
+    }
+    if secret.len() < MIN_SECRET_LENGTH {
+        return Err(JwtSecretError::TooShort(secret.len()));
+    }
+    Ok(())
+}
+
 /// Manages JWT token creation and validation.
 #[derive(Clone)]
 pub struct JwtManager {
@@ -147,5 +180,46 @@ mod tests {
 
         let h3 = JwtManager::hash_token("different-token");
         assert_ne!(h1, h3);
+    }
+
+    #[test]
+    fn validate_jwt_secret_rejects_default() {
+        let err = validate_jwt_secret("dev-secret-change-me").unwrap_err();
+        assert!(matches!(err, JwtSecretError::InsecureDefault));
+    }
+
+    #[test]
+    fn validate_jwt_secret_rejects_short_secret() {
+        let err = validate_jwt_secret("too-short").unwrap_err();
+        assert!(matches!(err, JwtSecretError::TooShort(9)));
+    }
+
+    #[test]
+    fn validate_jwt_secret_rejects_empty_secret() {
+        let err = validate_jwt_secret("").unwrap_err();
+        assert!(matches!(err, JwtSecretError::TooShort(0)));
+    }
+
+    #[test]
+    fn validate_jwt_secret_accepts_valid_secret() {
+        // 40 bytes - well above the 32-byte minimum
+        let result = validate_jwt_secret("a]3kF9$mP2xL7nQ4wR8vT1yU6bJ0dH5gZ!cE@sA");
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn validate_jwt_secret_accepts_exactly_32_bytes() {
+        let secret = "abcdefghijklmnopqrstuvwxyz012345"; // exactly 32 bytes
+        assert_eq!(secret.len(), 32);
+        let result = validate_jwt_secret(secret);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn validate_jwt_secret_rejects_31_bytes() {
+        let secret = "abcdefghijklmnopqrstuvwxyz01234"; // 31 bytes
+        assert_eq!(secret.len(), 31);
+        let err = validate_jwt_secret(secret).unwrap_err();
+        assert!(matches!(err, JwtSecretError::TooShort(31)));
     }
 }
