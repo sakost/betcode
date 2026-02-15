@@ -1,5 +1,6 @@
 //! TUI rendering components.
 
+pub mod detail_panel;
 mod panels;
 mod render;
 #[cfg(test)]

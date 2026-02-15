@@ -7,6 +7,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Padding, Paragraph, Wrap};
 use unicode_width::UnicodeWidthStr;
 
+use super::detail_panel;
 use super::panels;
 use crate::app::{App, AppMode, MessageRole, ToolCallEntry, ToolCallStatus};
 
@@ -688,13 +689,12 @@ pub fn compute_detail_split(total_width: u16) -> (u16, u16) {
     (conv_width, panel_width)
 }
 
-/// Render the detail panel placeholder.
+/// Render the detail panel with full tool call information.
 ///
-/// Draws a bordered block with a "Detail" title. The full implementation
-/// (tool call details, scrolling, etc.) is deferred to a later task.
-fn draw_detail_panel(frame: &mut Frame<'_>, _app: &App, area: Rect) {
-    let block = Block::default().borders(Borders::ALL).title("Detail");
-    frame.render_widget(block, area);
+/// Delegates to [`detail_panel::draw_detail_panel`] which shows the selected
+/// tool call's status, output, and scroll position.
+fn draw_detail_panel(frame: &mut Frame<'_>, app: &App, area: Rect) {
+    detail_panel::draw_detail_panel(frame, app, area);
 }
 
 #[cfg(test)]

@@ -1,0 +1,165 @@
+//! Detail panel rendering for selected tool call.
+
+use ratatui::Frame;
+use ratatui::layout::Rect;
+use ratatui::style::{Color, Style};
+use ratatui::text::{Line, Span};
+use ratatui::widgets::{Block, Borders, Paragraph, Wrap};
+
+use crate::app::{App, ToolCallEntry, ToolCallStatus};
+
+use super::render::format_duration_ms;
+
+/// Build the title string for the detail panel block.
+///
+/// - If the entry has a non-empty description: `"Read (/src/main.rs)"`
+/// - If the description is empty: `"Read"`
+pub fn panel_title(entry: &ToolCallEntry) -> String {
+    if entry.description.is_empty() {
+        entry.tool_name.clone()
+    } else {
+        format!("{} ({})", entry.tool_name, entry.description)
+    }
+}
+
+/// Format a status line with icon, status text, and optional duration.
+///
+/// - Running: `"• Running..."`
+/// - Done:    `"✓ Done (1.2s)"`
+/// - Error:   `"✗ Error (50ms)"`
+pub fn format_status_line(status: ToolCallStatus, duration_ms: Option<u32>) -> String {
+    match status {
+        ToolCallStatus::Running => "\u{2022} Running...".to_string(),
+        ToolCallStatus::Done => {
+            let d = format_duration_ms(duration_ms);
+            format!("\u{2713} Done ({d})")
+        }
+        ToolCallStatus::Error => {
+            let d = format_duration_ms(duration_ms);
+            format!("\u{2717} Error ({d})")
+        }
+    }
+}
+
+/// Render the detail panel showing the selected tool call's full information.
+///
+/// If no tool call is selected, displays a placeholder message with navigation hints.
+/// Otherwise shows the tool name/description as the block title, a colored status
+/// line, a separator, and the tool output (or a "Waiting..." placeholder).
+pub fn draw_detail_panel(frame: &mut Frame<'_>, app: &App, area: Rect) {
+    let entry = app
+        .detail_panel
+        .selected_tool_index
+        .and_then(|i| app.tool_calls.get(i));
+
+    let Some(entry) = entry else {
+        let block = Block::default().borders(Borders::ALL).title("Detail");
+        let para = Paragraph::new("No tool call selected.\nUse Ctrl+Up/Down to navigate.")
+            .block(block)
+            .style(Style::default().fg(Color::DarkGray));
+        frame.render_widget(para, area);
+        return;
+    };
+
+    let title = panel_title(entry);
+    let status_color = match entry.status {
+        ToolCallStatus::Running => Color::Cyan,
+        ToolCallStatus::Done => Color::Green,
+        ToolCallStatus::Error => Color::Red,
+    };
+
+    let mut lines: Vec<Line<'_>> = vec![
+        Line::from(Span::styled(
+            format_status_line(entry.status, entry.duration_ms),
+            Style::default().fg(status_color),
+        )),
+        Line::from("\u{2500}".repeat(area.width.saturating_sub(2) as usize)),
+    ];
+
+    if let Some(ref output) = entry.output {
+        for line in output.lines() {
+            let owned: String = line.to_owned();
+            lines.push(Line::from(owned));
+        }
+    } else {
+        lines.push(Line::from(Span::styled(
+            "Waiting for output...",
+            Style::default().fg(Color::DarkGray),
+        )));
+    }
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title(title)
+        .title_style(Style::default().fg(Color::Yellow));
+
+    let scroll = app.detail_panel.scroll_offset;
+    let para = Paragraph::new(lines)
+        .block(block)
+        .wrap(Wrap { trim: false })
+        .scroll((scroll, 0));
+
+    frame.render_widget(para, area);
+}
+
+#[cfg(test)]
+#[allow(
+    clippy::panic,
+    clippy::expect_used,
+    clippy::unwrap_used,
+    clippy::cast_possible_truncation
+)]
+mod tests {
+    use super::*;
+    use crate::app::{ToolCallEntry, ToolCallStatus};
+
+    #[test]
+    fn panel_title_includes_tool_name_and_description() {
+        let entry = ToolCallEntry {
+            tool_id: "t1".to_string(),
+            tool_name: "Read".to_string(),
+            description: "/src/main.rs".to_string(),
+            input_json: None,
+            output: Some("file contents".to_string()),
+            status: ToolCallStatus::Done,
+            duration_ms: Some(1200),
+            finished_at: None,
+            message_index: 0,
+        };
+        let title = panel_title(&entry);
+        assert_eq!(title, "Read (/src/main.rs)");
+    }
+
+    #[test]
+    fn panel_title_no_description() {
+        let entry = ToolCallEntry {
+            tool_id: "t1".to_string(),
+            tool_name: "Read".to_string(),
+            description: String::new(),
+            input_json: None,
+            output: None,
+            status: ToolCallStatus::Running,
+            duration_ms: None,
+            finished_at: None,
+            message_index: 0,
+        };
+        let title = panel_title(&entry);
+        assert_eq!(title, "Read");
+    }
+
+    #[test]
+    fn status_line_formatting() {
+        assert_eq!(
+            format_status_line(ToolCallStatus::Done, Some(1200)),
+            "\u{2713} Done (1.2s)"
+        );
+        assert_eq!(
+            format_status_line(ToolCallStatus::Error, Some(50)),
+            "\u{2717} Error (50ms)"
+        );
+        assert_eq!(
+            format_status_line(ToolCallStatus::Running, None),
+            "\u{2022} Running..."
+        );
+    }
+}
