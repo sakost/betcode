@@ -54,3 +54,46 @@ impl RelaySetupConfig {
         Ok(())
     }
 }
+
+/// Deployment mode for the daemon.
+#[cfg(unix)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DaemonMode {
+    /// System-level service (root, /etc/systemd/system/)
+    System,
+    /// User-level service (no root, ~/.config/systemd/user/)
+    User,
+}
+
+#[cfg(unix)]
+impl fmt::Display for DaemonMode {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::System => write!(f, "system"),
+            Self::User => write!(f, "user"),
+        }
+    }
+}
+
+/// Configuration collected for daemon deployment.
+#[cfg(unix)]
+#[derive(Debug, Clone)]
+pub struct DaemonSetupConfig {
+    pub mode: DaemonMode,
+    /// System user to run as (system mode only)
+    pub user: String,
+    pub addr: SocketAddr,
+    pub db_path: PathBuf,
+    pub max_processes: usize,
+    pub max_sessions: usize,
+    pub relay_url: Option<String>,
+    pub machine_id: Option<String>,
+    pub machine_name: String,
+    pub relay_username: Option<String>,
+    pub relay_password: Option<String>,
+    pub relay_custom_ca_cert: Option<PathBuf>,
+    pub worktree_dir: Option<PathBuf>,
+    pub daemon_binary_path: Option<PathBuf>,
+    /// Whether to enable lingering for user services
+    pub enable_linger: bool,
+}
