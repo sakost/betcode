@@ -41,15 +41,13 @@ pub enum MachineAction {
 
 /// Execute a machine subcommand.
 pub async fn run(action: MachineAction, config: &mut CliConfig) -> anyhow::Result<()> {
-    // Refresh token before relay operations (Switch is local-only)
-    if !matches!(action, MachineAction::Switch { .. }) {
-        auth_cmd::ensure_valid_token(config).await?;
-    }
+    // Refresh token before relay operations
+    auth_cmd::ensure_valid_token(config).await?;
 
     match action {
         MachineAction::Register { id, name } => register(config, id, &name).await,
         MachineAction::List => list(config).await,
-        MachineAction::Switch { machine_id } => switch(config, &machine_id),
+        MachineAction::Switch { machine_id } => switch(config, &machine_id).await,
         MachineAction::Status => status(config).await,
     }
 }
@@ -136,11 +134,36 @@ async fn list(config: &CliConfig) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn switch(config: &mut CliConfig, machine_id: &str) -> anyhow::Result<()> {
-    config.active_machine = Some(machine_id.into());
-    config.save()?;
-    let mut out = io::stdout();
-    writeln!(out, "Active machine: {machine_id}")?;
+async fn switch(config: &mut CliConfig, machine_id: &str) -> anyhow::Result<()> {
+    // Validate the machine ID exists on the relay
+    let channel = connect_relay(config).await?;
+    let mut client = MachineServiceClient::new(channel);
+    let request = make_authed_request(
+        GetMachineRequest {
+            machine_id: machine_id.to_string(),
+        },
+        config,
+    )?;
+    match client.get_machine(request).await {
+        Ok(resp) => {
+            let machine = resp
+                .into_inner()
+                .machine
+                .ok_or_else(|| anyhow::anyhow!("Machine '{machine_id}' not found on relay"))?;
+            config.active_machine = Some(machine.machine_id.clone());
+            config.save()?;
+            let mut out = io::stdout();
+            writeln!(
+                out,
+                "Active machine: {} ({})",
+                machine.machine_id, machine.name
+            )?;
+        }
+        Err(e) => anyhow::bail!(
+            "Machine '{machine_id}' not found: {}. Run `betcode machine list` to see available machines.",
+            e.message()
+        ),
+    }
     Ok(())
 }
 
@@ -185,10 +208,9 @@ mod tests {
     use super::*;
 
     #[test]
-    fn switch_sets_active_machine_in_memory() {
-        // switch() is a pure local config operation — no relay contact needed.
-        // Test only the in-memory state change, NOT the save() side effect,
-        // because save() writes to the real ~/.betcode/config.json.
+    fn active_machine_stored_in_config() {
+        // switch() now validates against the relay, so we only test the
+        // config field here — the relay interaction is tested via integration.
         let config = CliConfig {
             active_machine: Some("m-unit-test".into()),
             ..CliConfig::default()
