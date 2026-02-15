@@ -7,9 +7,8 @@ use std::sync::Arc;
 
 use tracing::{info, warn};
 
-use betcode_proto::v1::{EncryptedPayload, FrameType, StreamPayload, TunnelFrame};
-
 use crate::registry::ConnectionRegistry;
+use crate::router::forwarder::build_request_frame;
 use crate::storage::{BufferMessageParams, RelayDatabase};
 
 /// Manages message buffering for offline machines.
@@ -92,23 +91,8 @@ impl BufferManager {
             let metadata: std::collections::HashMap<String, String> =
                 serde_json::from_str(&msg.metadata).unwrap_or_default();
 
-            let frame = TunnelFrame {
-                request_id: msg.request_id.clone(),
-                frame_type: FrameType::Request as i32,
-                timestamp: Some(prost_types::Timestamp::from(std::time::SystemTime::now())),
-                payload: Some(betcode_proto::v1::tunnel_frame::Payload::StreamData(
-                    StreamPayload {
-                        method: msg.method.clone(),
-                        encrypted: Some(EncryptedPayload {
-                            ciphertext: msg.payload.clone(),
-                            nonce: Vec::new(),
-                            ephemeral_pubkey: Vec::new(),
-                        }),
-                        sequence: 0,
-                        metadata,
-                    },
-                )),
-            };
+            let frame =
+                build_request_frame(&msg.request_id, &msg.method, msg.payload.clone(), metadata);
 
             if conn.send_frame(frame).await.is_err() {
                 warn!(
@@ -190,6 +174,7 @@ pub enum BufferError {
 #[allow(clippy::panic, clippy::expect_used, clippy::unwrap_used)]
 mod tests {
     use super::*;
+    use betcode_proto::v1::FrameType;
     use tokio::sync::mpsc;
 
     async fn setup() -> (BufferManager, Arc<ConnectionRegistry>) {

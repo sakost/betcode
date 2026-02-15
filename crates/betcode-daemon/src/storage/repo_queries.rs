@@ -10,27 +10,30 @@ const UPDATE_GIT_REPO_SQL: &str = "UPDATE git_repos SET name = ?, worktree_mode 
     local_subfolder = ?, custom_path = ?, setup_script = ?, auto_gitignore = ?, \
     last_active = ? WHERE id = ?";
 
-/// Bind the common update-repo parameters to `UPDATE_GIT_REPO_SQL`.
-#[allow(clippy::too_many_arguments)]
-fn bind_update_git_repo_params<'q>(
-    name: &'q str,
-    worktree_mode: &'q str,
-    local_subfolder: &'q str,
-    custom_path: Option<&'q str>,
-    setup_script: Option<&'q str>,
-    auto_gitignore: bool,
-    now: i64,
-    id: &'q str,
-) -> sqlx::query::Query<'q, sqlx::Sqlite, sqlx::sqlite::SqliteArguments<'q>> {
-    sqlx::query(UPDATE_GIT_REPO_SQL)
-        .bind(name)
-        .bind(worktree_mode)
-        .bind(local_subfolder)
-        .bind(custom_path)
-        .bind(setup_script)
-        .bind(i64::from(auto_gitignore))
-        .bind(now)
-        .bind(id)
+/// Common git repo fields shared between create and update operations.
+pub struct GitRepoParams<'a> {
+    pub name: &'a str,
+    pub worktree_mode: &'a str,
+    pub local_subfolder: &'a str,
+    pub custom_path: Option<&'a str>,
+    pub setup_script: Option<&'a str>,
+    pub auto_gitignore: bool,
+}
+
+impl GitRepoParams<'_> {
+    /// Bind the common repo fields to an existing query builder.
+    fn bind_to<'q>(
+        &'q self,
+        query: sqlx::query::Query<'q, sqlx::Sqlite, sqlx::sqlite::SqliteArguments<'q>>,
+    ) -> sqlx::query::Query<'q, sqlx::Sqlite, sqlx::sqlite::SqliteArguments<'q>> {
+        query
+            .bind(self.name)
+            .bind(self.worktree_mode)
+            .bind(self.local_subfolder)
+            .bind(self.custom_path)
+            .bind(self.setup_script)
+            .bind(i64::from(self.auto_gitignore))
+    }
 }
 
 impl Database {
@@ -39,36 +42,26 @@ impl Database {
     // =========================================================================
 
     /// Create a new git repo record.
-    #[allow(clippy::too_many_arguments)]
     pub async fn create_git_repo(
         &self,
         id: &str,
-        name: &str,
         repo_path: &str,
-        worktree_mode: &str,
-        local_subfolder: &str,
-        custom_path: Option<&str>,
-        setup_script: Option<&str>,
-        auto_gitignore: bool,
+        params: &GitRepoParams<'_>,
     ) -> Result<GitRepoRow, DatabaseError> {
         let now = unix_timestamp();
 
-        sqlx::query(
-            "INSERT INTO git_repos (id, name, repo_path, worktree_mode, local_subfolder, custom_path, setup_script, auto_gitignore, created_at, last_active) \
+        let base = sqlx::query(
+            "INSERT INTO git_repos (id, repo_path, name, worktree_mode, local_subfolder, custom_path, setup_script, auto_gitignore, created_at, last_active) \
              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(id)
-        .bind(name)
-        .bind(repo_path)
-        .bind(worktree_mode)
-        .bind(local_subfolder)
-        .bind(custom_path)
-        .bind(setup_script)
-        .bind(i64::from(auto_gitignore))
-        .bind(now)
-        .bind(now)
-        .execute(self.pool())
-        .await?;
+        .bind(repo_path);
+        params
+            .bind_to(base)
+            .bind(now)
+            .bind(now)
+            .execute(self.pool())
+            .await?;
 
         self.get_git_repo(id).await
     }
@@ -122,31 +115,19 @@ impl Database {
     }
 
     /// Update a git repo's configuration.
-    #[allow(clippy::too_many_arguments)]
     pub async fn update_git_repo(
         &self,
         id: &str,
-        name: &str,
-        worktree_mode: &str,
-        local_subfolder: &str,
-        custom_path: Option<&str>,
-        setup_script: Option<&str>,
-        auto_gitignore: bool,
+        params: &GitRepoParams<'_>,
     ) -> Result<GitRepoRow, DatabaseError> {
         let now = unix_timestamp();
 
-        bind_update_git_repo_params(
-            name,
-            worktree_mode,
-            local_subfolder,
-            custom_path,
-            setup_script,
-            auto_gitignore,
-            now,
-            id,
-        )
-        .execute(self.pool())
-        .await?;
+        params
+            .bind_to(sqlx::query(UPDATE_GIT_REPO_SQL))
+            .bind(now)
+            .bind(id)
+            .execute(self.pool())
+            .await?;
 
         self.get_git_repo(id).await
     }
@@ -191,11 +172,20 @@ impl Database {
         let final_ag = auto_gitignore.unwrap_or(existing.auto_gitignore != 0);
         let now = unix_timestamp();
 
-        bind_update_git_repo_params(
-            final_name, final_wt, final_sub, final_cp, final_ss, final_ag, now, id,
-        )
-        .execute(&mut *tx)
-        .await?;
+        let merged = GitRepoParams {
+            name: final_name,
+            worktree_mode: final_wt,
+            local_subfolder: final_sub,
+            custom_path: final_cp,
+            setup_script: final_ss,
+            auto_gitignore: final_ag,
+        };
+        merged
+            .bind_to(sqlx::query(UPDATE_GIT_REPO_SQL))
+            .bind(now)
+            .bind(id)
+            .execute(&mut *tx)
+            .await?;
 
         let updated = sqlx::query_as::<_, GitRepoRow>("SELECT * FROM git_repos WHERE id = ?")
             .bind(id)
@@ -298,9 +288,20 @@ mod tests {
         name: &str,
         path: &str,
     ) -> super::GitRepoRow {
-        db.create_git_repo(id, name, path, "global", ".worktree", None, None, true)
-            .await
-            .unwrap()
+        db.create_git_repo(
+            id,
+            path,
+            &super::GitRepoParams {
+                name,
+                worktree_mode: "global",
+                local_subfolder: ".worktree",
+                custom_path: None,
+                setup_script: None,
+                auto_gitignore: true,
+            },
+        )
+        .await
+        .unwrap()
     }
 
     /// Seed two repos ("ra", "rb") with 3 worktrees: 2 for "ra" and 1 for "rb".
@@ -325,13 +326,15 @@ mod tests {
         let repo = db
             .create_git_repo(
                 "r1",
-                "myrepo",
                 "/path/to/repo",
-                "global",
-                ".worktree",
-                None,
-                None,
-                true,
+                &super::GitRepoParams {
+                    name: "myrepo",
+                    worktree_mode: "global",
+                    local_subfolder: ".worktree",
+                    custom_path: None,
+                    setup_script: None,
+                    auto_gitignore: true,
+                },
             )
             .await
             .unwrap();
@@ -349,13 +352,15 @@ mod tests {
         let db = Database::open_in_memory().await.unwrap();
         db.create_git_repo(
             "r1",
-            "myrepo",
             "/path/to/repo",
-            "global",
-            ".worktree",
-            None,
-            None,
-            true,
+            &super::GitRepoParams {
+                name: "myrepo",
+                worktree_mode: "global",
+                local_subfolder: ".worktree",
+                custom_path: None,
+                setup_script: None,
+                auto_gitignore: true,
+            },
         )
         .await
         .unwrap();
@@ -368,9 +373,20 @@ mod tests {
     async fn list_repos() {
         let db = Database::open_in_memory().await.unwrap();
         create_test_repo(&db, "r1", "a", "/a").await;
-        db.create_git_repo("r2", "b", "/b", "local", ".wt", None, None, false)
-            .await
-            .unwrap();
+        db.create_git_repo(
+            "r2",
+            "/b",
+            &super::GitRepoParams {
+                name: "b",
+                worktree_mode: "local",
+                local_subfolder: ".wt",
+                custom_path: None,
+                setup_script: None,
+                auto_gitignore: false,
+            },
+        )
+        .await
+        .unwrap();
 
         let repos = db.list_git_repos().await.unwrap();
         assert_eq!(repos.len(), 2);
@@ -381,13 +397,15 @@ mod tests {
         let db = Database::open_in_memory().await.unwrap();
         db.create_git_repo(
             "r1",
-            "old",
             "/repo",
-            "global",
-            ".worktree",
-            None,
-            None,
-            true,
+            &super::GitRepoParams {
+                name: "old",
+                worktree_mode: "global",
+                local_subfolder: ".worktree",
+                custom_path: None,
+                setup_script: None,
+                auto_gitignore: true,
+            },
         )
         .await
         .unwrap();
@@ -395,12 +413,14 @@ mod tests {
         let updated = db
             .update_git_repo(
                 "r1",
-                "new-name",
-                "custom",
-                ".worktree",
-                Some("/custom/path"),
-                Some("make build"),
-                false,
+                &super::GitRepoParams {
+                    name: "new-name",
+                    worktree_mode: "custom",
+                    local_subfolder: ".worktree",
+                    custom_path: Some("/custom/path"),
+                    setup_script: Some("make build"),
+                    auto_gitignore: false,
+                },
             )
             .await
             .unwrap();
@@ -415,13 +435,15 @@ mod tests {
         let db = Database::open_in_memory().await.unwrap();
         db.create_git_repo(
             "r1",
-            "repo",
             "/repo",
-            "global",
-            ".worktree",
-            None,
-            None,
-            true,
+            &super::GitRepoParams {
+                name: "repo",
+                worktree_mode: "global",
+                local_subfolder: ".worktree",
+                custom_path: None,
+                setup_script: None,
+                auto_gitignore: true,
+            },
         )
         .await
         .unwrap();
@@ -449,18 +471,13 @@ mod tests {
         let db = Database::open_in_memory().await.unwrap();
         // Create 3 repos
         for i in 0..3 {
-            db.create_git_repo(
+            create_test_repo(
+                &db,
                 &format!("r{i}"),
                 &format!("repo-{i}"),
                 &format!("/path/{i}"),
-                "global",
-                ".worktree",
-                None,
-                None,
-                true,
             )
-            .await
-            .unwrap();
+            .await;
         }
 
         // Page 1: limit 2, offset 0
@@ -483,13 +500,15 @@ mod tests {
         let result = db
             .create_git_repo(
                 "r2",
-                "b",
                 "/same/path",
-                "global",
-                ".worktree",
-                None,
-                None,
-                true,
+                &super::GitRepoParams {
+                    name: "b",
+                    worktree_mode: "global",
+                    local_subfolder: ".worktree",
+                    custom_path: None,
+                    setup_script: None,
+                    auto_gitignore: true,
+                },
             )
             .await;
         assert!(result.is_err());
@@ -521,18 +540,13 @@ mod tests {
     async fn list_repos_paginated_limit_zero_returns_all_with_offset() {
         let db = Database::open_in_memory().await.unwrap();
         for i in 0..5 {
-            db.create_git_repo(
+            create_test_repo(
+                &db,
                 &format!("r{i}"),
                 &format!("repo-{i}"),
                 &format!("/path/{i}"),
-                "global",
-                ".worktree",
-                None,
-                None,
-                true,
             )
-            .await
-            .unwrap();
+            .await;
         }
 
         // limit=0, offset=0 should return all 5
@@ -572,13 +586,15 @@ mod tests {
         let db = Database::open_in_memory().await.unwrap();
         db.create_git_repo(
             "r1",
-            "original",
             "/repo",
-            "global",
-            ".worktree",
-            Some("/old/path"),
-            Some("old script"),
-            true,
+            &super::GitRepoParams {
+                name: "original",
+                worktree_mode: "global",
+                local_subfolder: ".worktree",
+                custom_path: Some("/old/path"),
+                setup_script: Some("old script"),
+                auto_gitignore: true,
+            },
         )
         .await
         .unwrap();

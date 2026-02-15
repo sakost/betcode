@@ -27,7 +27,7 @@ pub struct RequestRouter {
 ///
 /// This is the common frame structure used by `forward_request`,
 /// `forward_stream`, and `forward_bidi_stream`.
-fn build_request_frame(
+pub(crate) fn build_request_frame(
     request_id: &str,
     method: &str,
     data: Vec<u8>,

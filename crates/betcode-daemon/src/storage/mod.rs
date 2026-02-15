@@ -9,3 +9,4 @@ mod repo_queries;
 
 pub use db::{Database, DatabaseError};
 pub use models::*;
+pub use repo_queries::GitRepoParams;

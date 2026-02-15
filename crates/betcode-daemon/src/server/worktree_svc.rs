@@ -237,13 +237,15 @@ mod tests {
         svc.db
             .create_git_repo(
                 "r1",
-                "repo",
                 "/tmp/repo",
-                "global",
-                ".worktree",
-                None,
-                None,
-                true,
+                &crate::storage::GitRepoParams {
+                    name: "repo",
+                    worktree_mode: "global",
+                    local_subfolder: ".worktree",
+                    custom_path: None,
+                    setup_script: None,
+                    auto_gitignore: true,
+                },
             )
             .await
             .unwrap();

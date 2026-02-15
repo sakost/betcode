@@ -393,9 +393,20 @@ mod tests {
 
     /// Register a standard test git repo in the database with common defaults.
     async fn register_test_repo(db: &Database, id: &str, name: &str, repo_path: &str) {
-        db.create_git_repo(id, name, repo_path, "global", ".worktree", None, None, true)
-            .await
-            .unwrap();
+        db.create_git_repo(
+            id,
+            repo_path,
+            &crate::storage::GitRepoParams {
+                name,
+                worktree_mode: "global",
+                local_subfolder: ".worktree",
+                custom_path: None,
+                setup_script: None,
+                auto_gitignore: true,
+            },
+        )
+        .await
+        .unwrap();
     }
 
     #[tokio::test]
@@ -569,13 +580,15 @@ mod tests {
         // Register the repo in DB (needed for FK)
         db.create_git_repo(
             "r1",
-            "testrepo",
             &repo_dir.path().to_string_lossy(),
-            "global",
-            ".worktree",
-            None,
-            None,
-            true,
+            &crate::storage::GitRepoParams {
+                name: "testrepo",
+                worktree_mode: "global",
+                local_subfolder: ".worktree",
+                custom_path: None,
+                setup_script: None,
+                auto_gitignore: true,
+            },
         )
         .await
         .unwrap();

@@ -564,9 +564,20 @@ mod tests {
 
     /// Create a simple git repo with sensible defaults for testing.
     async fn create_test_repo(db: &Database, id: &str, name: &str, path: &str) {
-        db.create_git_repo(id, name, path, "global", ".worktree", None, None, true)
-            .await
-            .unwrap();
+        db.create_git_repo(
+            id,
+            path,
+            &crate::storage::GitRepoParams {
+                name,
+                worktree_mode: "global",
+                local_subfolder: ".worktree",
+                custom_path: None,
+                setup_script: None,
+                auto_gitignore: true,
+            },
+        )
+        .await
+        .unwrap();
     }
 
     /// Seed a DB with a default repo ("r1") and a worktree ("wt-1") on branch "feat".

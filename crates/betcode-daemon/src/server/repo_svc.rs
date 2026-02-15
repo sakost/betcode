@@ -11,7 +11,7 @@ use betcode_proto::v1::{
     WorktreeMode, git_repo_service_server::GitRepoService,
 };
 
-use crate::storage::{Database, DatabaseError, GitRepoRow};
+use crate::storage::{Database, DatabaseError, GitRepoParams, GitRepoRow};
 use crate::worktree::WorktreeManager;
 
 /// `GitRepoService` implementation backed by `Database`.
@@ -146,13 +146,15 @@ impl GitRepoService for GitRepoServiceImpl {
             .db
             .create_git_repo(
                 &id,
-                &name,
                 repo_path,
-                worktree_mode,
-                local_subfolder,
-                custom_path,
-                setup_script,
-                req.auto_gitignore,
+                &GitRepoParams {
+                    name: &name,
+                    worktree_mode,
+                    local_subfolder,
+                    custom_path,
+                    setup_script,
+                    auto_gitignore: req.auto_gitignore,
+                },
             )
             .await
             .map_err(|e| Status::internal(e.to_string()))?;
@@ -371,13 +373,15 @@ impl GitRepoService for GitRepoServiceImpl {
                 .db
                 .create_git_repo(
                     &id,
-                    &name,
                     &path_str,
-                    "global",
-                    ".worktree",
-                    None,
-                    None,
-                    true,
+                    &GitRepoParams {
+                        name: &name,
+                        worktree_mode: "global",
+                        local_subfolder: ".worktree",
+                        custom_path: None,
+                        setup_script: None,
+                        auto_gitignore: true,
+                    },
                 )
                 .await
             {
