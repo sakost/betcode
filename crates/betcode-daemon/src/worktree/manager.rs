@@ -561,10 +561,14 @@ mod tests {
         let wt_base = tempfile::tempdir().unwrap();
         let repo_dir = tempfile::tempdir().unwrap();
 
-        // Initialize a git repo in the temp directory
+        // Initialize a git repo in the temp directory.
+        // Clear git env vars that leak when running inside a pre-commit hook.
         let status = std::process::Command::new("git")
             .args(["init"])
             .current_dir(repo_dir.path())
+            .env_remove("GIT_DIR")
+            .env_remove("GIT_INDEX_FILE")
+            .env_remove("GIT_WORK_TREE")
             .output()
             .unwrap();
         assert!(status.status.success(), "git init failed");
@@ -573,6 +577,9 @@ mod tests {
         let status = std::process::Command::new("git")
             .args(["commit", "--allow-empty", "-m", "init"])
             .current_dir(repo_dir.path())
+            .env_remove("GIT_DIR")
+            .env_remove("GIT_INDEX_FILE")
+            .env_remove("GIT_WORK_TREE")
             .output()
             .unwrap();
         assert!(status.status.success(), "git commit failed");
