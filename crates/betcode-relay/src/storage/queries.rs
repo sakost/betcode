@@ -91,21 +91,51 @@ impl RelayDatabase {
     }
 
     /// Find a valid (non-revoked, non-expired) token by hash.
+    ///
+    /// Tokens that have been soft-rotated within `grace_window_secs` are still
+    /// returned so the caller can handle grace-period retries.
     pub async fn get_token_by_hash(
         &self,
         token_hash: &str,
+        grace_window_secs: i64,
     ) -> Result<Option<Token>, DatabaseError> {
         let now = unix_timestamp();
+        let grace_cutoff = now - grace_window_secs;
 
         let token = sqlx::query_as::<_, Token>(
-            "SELECT * FROM tokens WHERE token_hash = ? AND revoked = 0 AND expires_at > ?",
+            "SELECT * FROM tokens WHERE token_hash = ? AND expires_at > ? AND revoked = 0 \
+             AND (rotated_at IS NULL OR rotated_at > ?)",
         )
         .bind(token_hash)
         .bind(now)
+        .bind(grace_cutoff)
         .fetch_optional(self.pool())
         .await?;
 
         Ok(token)
+    }
+
+    /// Soft-rotate a token: set `rotated_at` and `successor_id`.
+    ///
+    /// Only sets `rotated_at` when it is `NULL` (first rotation). On a
+    /// grace-period retry the original timestamp is preserved so the grace
+    /// window cannot be extended indefinitely.
+    ///
+    /// Returns `true` if a row was updated.
+    pub async fn rotate_token(&self, id: &str, successor_id: &str) -> Result<bool, DatabaseError> {
+        let now = unix_timestamp();
+
+        let result = sqlx::query(
+            "UPDATE tokens SET rotated_at = COALESCE(rotated_at, ?), successor_id = ? \
+             WHERE id = ? AND revoked = 0",
+        )
+        .bind(now)
+        .bind(successor_id)
+        .bind(id)
+        .execute(self.pool())
+        .await?;
+
+        Ok(result.rows_affected() > 0)
     }
 
     /// Revoke a token by ID.

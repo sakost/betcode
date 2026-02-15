@@ -60,6 +60,10 @@ struct Args {
     #[arg(long, default_value_t = 604800)]
     refresh_ttl: i64,
 
+    /// Grace period for refresh token rotation retries (seconds).
+    #[arg(long, default_value_t = 30)]
+    refresh_grace_period: i64,
+
     /// Request forwarding timeout in seconds.
     #[arg(long, default_value_t = 30)]
     request_timeout: u64,
@@ -120,7 +124,7 @@ async fn main() -> anyhow::Result<()> {
     ));
 
     // Build services
-    let auth = AuthServiceImpl::new(db.clone(), Arc::clone(&jwt));
+    let auth = AuthServiceImpl::new(db.clone(), Arc::clone(&jwt), args.refresh_grace_period);
     let tunnel = TunnelServiceImpl::new(Arc::clone(&registry), db.clone(), Arc::clone(&buffer));
     let machine = MachineServiceImpl::new(db.clone());
     let agent_proxy = AgentProxyService::new(Arc::clone(&router), db.clone());

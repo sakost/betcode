@@ -82,13 +82,13 @@ async fn find_token_by_hash() {
         .await
         .unwrap();
 
-    let found = db.get_token_by_hash("tokenhash").await.unwrap();
+    let found = db.get_token_by_hash("tokenhash", 0).await.unwrap();
     assert!(found.is_some());
 
     db.create_token("t2", "u1", "expiredhash", unix_timestamp() - 1)
         .await
         .unwrap();
-    let not_found = db.get_token_by_hash("expiredhash").await.unwrap();
+    let not_found = db.get_token_by_hash("expiredhash", 0).await.unwrap();
     assert!(not_found.is_none());
 }
 
@@ -104,7 +104,159 @@ async fn revoke_token() {
 
     assert!(db.revoke_token("t1").await.unwrap());
 
-    let found = db.get_token_by_hash("tokenhash").await.unwrap();
+    let found = db.get_token_by_hash("tokenhash", 0).await.unwrap();
+    assert!(found.is_none());
+}
+
+// === Token rotation tests ===
+
+#[tokio::test]
+async fn rotate_token_sets_rotated_at_and_successor() {
+    let db = test_db().await;
+    create_test_user(&db).await;
+
+    let future = unix_timestamp() + 3600;
+    db.create_token("t1", "u1", "hash1", future).await.unwrap();
+    db.create_token("t2", "u1", "hash2", future).await.unwrap();
+
+    let now = unix_timestamp();
+    assert!(db.rotate_token("t1", "t2").await.unwrap());
+
+    let token = db.get_token("t1").await.unwrap();
+    assert!(token.rotated_at.is_some());
+    let rotated_at = token.rotated_at.unwrap();
+    assert!((rotated_at - now).abs() <= 1);
+    assert_eq!(token.successor_id.as_deref(), Some("t2"));
+    assert_eq!(token.revoked, 0);
+}
+
+#[tokio::test]
+async fn rotate_token_preserves_original_rotated_at() {
+    let db = test_db().await;
+    create_test_user(&db).await;
+
+    let future = unix_timestamp() + 3600;
+    db.create_token("t1", "u1", "hash1", future).await.unwrap();
+    db.create_token("t2", "u1", "hash2", future).await.unwrap();
+    db.create_token("t3", "u1", "hash3", future).await.unwrap();
+
+    // First rotation
+    assert!(db.rotate_token("t1", "t2").await.unwrap());
+    let first_rotated_at = db.get_token("t1").await.unwrap().rotated_at.unwrap();
+
+    // Small delay is not needed — COALESCE keeps original value regardless.
+    // Second rotation with a different successor.
+    assert!(db.rotate_token("t1", "t3").await.unwrap());
+    let token = db.get_token("t1").await.unwrap();
+
+    // rotated_at is preserved from first call (COALESCE)
+    assert_eq!(token.rotated_at.unwrap(), first_rotated_at);
+    // successor_id is updated to the latest
+    assert_eq!(token.successor_id.as_deref(), Some("t3"));
+}
+
+#[tokio::test]
+async fn rotate_token_noop_on_revoked_token() {
+    let db = test_db().await;
+    create_test_user(&db).await;
+
+    let future = unix_timestamp() + 3600;
+    db.create_token("t1", "u1", "hash1", future).await.unwrap();
+    db.create_token("t2", "u1", "hash2", future).await.unwrap();
+
+    // Hard-revoke first
+    assert!(db.revoke_token("t1").await.unwrap());
+
+    // rotate_token should be a no-op (WHERE revoked = 0 won't match)
+    assert!(!db.rotate_token("t1", "t2").await.unwrap());
+
+    let token = db.get_token("t1").await.unwrap();
+    assert_eq!(token.revoked, 1);
+    assert!(token.rotated_at.is_none());
+    assert!(token.successor_id.is_none());
+}
+
+#[tokio::test]
+async fn get_token_by_hash_returns_active_token() {
+    let db = test_db().await;
+    create_test_user(&db).await;
+
+    let future = unix_timestamp() + 3600;
+    db.create_token("t1", "u1", "hash1", future).await.unwrap();
+
+    let found = db.get_token_by_hash("hash1", 30).await.unwrap();
+    assert!(found.is_some());
+    let token = found.unwrap();
+    assert_eq!(token.id, "t1");
+    assert!(token.rotated_at.is_none());
+}
+
+#[tokio::test]
+async fn get_token_by_hash_returns_recently_rotated() {
+    let db = test_db().await;
+    create_test_user(&db).await;
+
+    let future = unix_timestamp() + 3600;
+    db.create_token("t1", "u1", "hash1", future).await.unwrap();
+    db.create_token("t2", "u1", "hash2", future).await.unwrap();
+
+    // Rotate t1 → t2 (rotated_at = now)
+    db.rotate_token("t1", "t2").await.unwrap();
+
+    // Within grace window of 30s, should still be found
+    let found = db.get_token_by_hash("hash1", 30).await.unwrap();
+    assert!(found.is_some());
+    assert_eq!(found.unwrap().id, "t1");
+}
+
+#[tokio::test]
+async fn get_token_by_hash_excludes_old_rotated() {
+    let db = test_db().await;
+    create_test_user(&db).await;
+
+    let future = unix_timestamp() + 3600;
+    db.create_token("t1", "u1", "hash1", future).await.unwrap();
+    db.create_token("t2", "u1", "hash2", future).await.unwrap();
+
+    // Rotate t1, then manually backdate rotated_at to simulate expired grace
+    db.rotate_token("t1", "t2").await.unwrap();
+    sqlx::query("UPDATE tokens SET rotated_at = ? WHERE id = ?")
+        .bind(unix_timestamp() - 60) // 60s ago — past any reasonable grace window
+        .bind("t1")
+        .execute(db.pool())
+        .await
+        .unwrap();
+
+    // With a 30s grace window, should NOT be found
+    let found = db.get_token_by_hash("hash1", 30).await.unwrap();
+    assert!(found.is_none());
+}
+
+#[tokio::test]
+async fn get_token_by_hash_excludes_hard_revoked() {
+    let db = test_db().await;
+    create_test_user(&db).await;
+
+    let future = unix_timestamp() + 3600;
+    db.create_token("t1", "u1", "hash1", future).await.unwrap();
+
+    db.revoke_token("t1").await.unwrap();
+
+    // Hard-revoked token should not be found even with grace window
+    let found = db.get_token_by_hash("hash1", 30).await.unwrap();
+    assert!(found.is_none());
+}
+
+#[tokio::test]
+async fn get_token_by_hash_excludes_expired() {
+    let db = test_db().await;
+    create_test_user(&db).await;
+
+    // Token expired 1 second ago
+    let past = unix_timestamp() - 1;
+    db.create_token("t1", "u1", "hash1", past).await.unwrap();
+
+    let found = db.get_token_by_hash("hash1", 30).await.unwrap();
     assert!(found.is_none());
 }
 

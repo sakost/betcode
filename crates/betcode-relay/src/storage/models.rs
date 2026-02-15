@@ -20,6 +20,8 @@ pub struct Token {
     pub expires_at: i64,
     pub revoked: i64,
     pub created_at: i64,
+    pub rotated_at: Option<i64>,
+    pub successor_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]

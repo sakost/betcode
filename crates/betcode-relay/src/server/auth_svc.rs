@@ -18,18 +18,24 @@ use crate::storage::RelayDatabase;
 pub struct AuthServiceImpl {
     db: RelayDatabase,
     jwt: Arc<JwtManager>,
+    grace_period_secs: i64,
 }
 
 /// Issued token pair returned by [`AuthServiceImpl::issue_token_pair`].
 struct TokenPair {
+    token_id: String,
     access_token: String,
     refresh_token: String,
     expires_in: i64,
 }
 
 impl AuthServiceImpl {
-    pub const fn new(db: RelayDatabase, jwt: Arc<JwtManager>) -> Self {
-        Self { db, jwt }
+    pub const fn new(db: RelayDatabase, jwt: Arc<JwtManager>, grace_period_secs: i64) -> Self {
+        Self {
+            db,
+            jwt,
+            grace_period_secs,
+        }
     }
 
     /// Issue an access + refresh token pair and persist the refresh token hash.
@@ -52,6 +58,7 @@ impl AuthServiceImpl {
             .map_err(|e| Status::internal(format!("Token storage failed: {e}")))?;
 
         Ok(TokenPair {
+            token_id,
             access_token,
             refresh_token,
             expires_in,
@@ -156,18 +163,33 @@ impl AuthService for AuthServiceImpl {
         let token_hash = JwtManager::hash_token(&req.refresh_token);
         let stored = self
             .db
-            .get_token_by_hash(&token_hash)
+            .get_token_by_hash(&token_hash, self.grace_period_secs)
             .await
             .map_err(|e| Status::internal(format!("Token lookup failed: {e}")))?
             .ok_or_else(|| Status::unauthenticated("Refresh token revoked or expired"))?;
 
-        // Revoke old refresh token (rotation)
-        self.db
-            .revoke_token(&stored.id)
-            .await
-            .map_err(|e| Status::internal(format!("Token revocation failed: {e}")))?;
+        // Grace-period retry: the client never received the previous response.
+        // Revoke the orphaned successor token that the client never saw.
+        if let Some(ref successor_id) = stored.successor_id {
+            info!(
+                token_id = %stored.id,
+                successor_id = %successor_id,
+                "Grace-period retry: revoking orphaned successor"
+            );
+            self.db
+                .revoke_token(successor_id)
+                .await
+                .map_err(|e| Status::internal(format!("Successor revocation failed: {e}")))?;
+        }
 
+        // Issue fresh token pair
         let tokens = self.issue_token_pair(&claims.sub, &claims.username).await?;
+
+        // Soft-rotate: mark old token as rotated, link to new successor
+        self.db
+            .rotate_token(&stored.id, &tokens.token_id)
+            .await
+            .map_err(|e| Status::internal(format!("Token rotation failed: {e}")))?;
 
         Ok(Response::new(RefreshTokenResponse {
             access_token: tokens.access_token,
@@ -186,7 +208,7 @@ impl AuthService for AuthServiceImpl {
         let token_hash = JwtManager::hash_token(&req.refresh_token);
         let stored = self
             .db
-            .get_token_by_hash(&token_hash)
+            .get_token_by_hash(&token_hash, self.grace_period_secs)
             .await
             .map_err(|e| Status::internal(format!("Token lookup failed: {e}")))?;
 
