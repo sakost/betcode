@@ -393,36 +393,80 @@ fn draw_input(frame: &mut Frame<'_>, app: &App, area: Rect) {
 }
 
 fn draw_status_bar(frame: &mut Frame<'_>, app: &App, area: Rect) {
-    let usage = app.token_usage.as_ref().map_or(String::new(), |u| {
-        format!(
-            " | Tokens: {}in/{}out | ${:.4}",
-            u.input_tokens, u.output_tokens, u.cost_usd
-        )
-    });
+    let dim = Style::default().fg(Color::DarkGray);
+
+    // -- Left side: connection type · [running tool] · token usage --
+    let mut left_spans: Vec<Span<'_>> = Vec::new();
+
+    // Connection / status label
+    left_spans.push(Span::styled(&app.status, dim));
+
+    // Running tool (most recent Running entry, if any)
+    let running_tool = app
+        .tool_calls
+        .iter()
+        .rev()
+        .find(|t| matches!(t.status, ToolCallStatus::Running));
+    if let Some(entry) = running_tool {
+        let spinner = SPINNER_CHARS[app.spinner_tick % SPINNER_CHARS.len()];
+        let tool_text = if entry.description.is_empty() {
+            format!(" \u{00b7} {spinner} {}", entry.tool_name)
+        } else {
+            format!(
+                " \u{00b7} {spinner} {} {}",
+                entry.tool_name, entry.description
+            )
+        };
+        left_spans.push(Span::styled(tool_text, Style::default().fg(Color::Cyan)));
+    }
+
+    // Token usage
+    if let Some(ref u) = app.token_usage {
+        left_spans.push(Span::styled(
+            format!(
+                " \u{00b7} {}in/{}out \u{00b7} ${:.4}",
+                u.input_tokens, u.output_tokens, u.cost_usd
+            ),
+            dim,
+        ));
+    }
+
+    // -- Right side: contextual keybinding hints --
     let keys_hint =
         match app.mode {
-            AppMode::PermissionPrompt => " | Y:allow A:session Tab:edit N:deny X:deny+stop",
+            AppMode::PermissionPrompt => "Y:allow A:session Tab:edit N:deny X:deny+stop",
             AppMode::PermissionEditInput
             | AppMode::PermissionComment
-            | AppMode::PermissionDenyMessage => " | Enter:submit Esc:back",
-            AppMode::UserQuestion => " | Enter:submit Esc:cancel",
+            | AppMode::PermissionDenyMessage => "Enter:submit Esc:back",
+            AppMode::UserQuestion => "Enter:submit Esc:cancel",
             AppMode::FingerprintVerification => {
                 if app.pending_fingerprint.as_ref().is_some_and(
                     super::super::tui::fingerprint_panel::FingerprintPrompt::needs_action,
                 ) {
-                    " | Y:accept N/Esc:reject"
+                    "Y:accept N/Esc:reject"
                 } else {
-                    " | Press any key to continue"
+                    "Press any key to continue"
                 }
             }
-            AppMode::Normal | AppMode::SessionList => " | Ctrl+C: quit | Enter: send",
+            AppMode::Normal | AppMode::SessionList => {
+                if app.detail_panel.visible {
+                    "Ctrl+Up/Down: tools | Ctrl+C: quit"
+                } else {
+                    "Ctrl+D: detail | Ctrl+C: quit"
+                }
+            }
         };
 
-    let status = Paragraph::new(Line::from(vec![
-        Span::styled(&app.status, Style::default().fg(Color::DarkGray)),
-        Span::styled(usage, Style::default().fg(Color::DarkGray)),
-        Span::styled(keys_hint, Style::default().fg(Color::DarkGray)),
-    ]));
+    // Compute widths to right-align keybinding hints
+    let left_width: usize = left_spans.iter().map(Span::width).sum();
+    let right_width = keys_hint.len();
+    let bar_width = area.width as usize;
+    let gap = bar_width.saturating_sub(left_width + right_width);
+
+    left_spans.push(Span::raw(" ".repeat(gap)));
+    left_spans.push(Span::styled(keys_hint, dim));
+
+    let status = Paragraph::new(Line::from(left_spans));
     frame.render_widget(status, area);
 }
 

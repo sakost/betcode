@@ -400,6 +400,7 @@ pub async fn run(
     let result: anyhow::Result<()> = loop {
         tokio::select! {
             _ = tick.tick() => {
+                app.spinner_tick = app.spinner_tick.wrapping_add(1);
                 terminal.draw(|f| ui::draw(f, &mut app))?;
             }
             Some(term_event) = term_rx.recv() => {
