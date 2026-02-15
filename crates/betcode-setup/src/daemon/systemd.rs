@@ -54,7 +54,15 @@ pub fn deploy_system(config: &DaemonSetupConfig, is_update: bool) -> Result<()> 
     }
 
     install_daemon_binary(config)?;
-    enable_and_start_system(is_update)?;
+
+    if config.enable_service {
+        enable_and_start_system(is_update)?;
+    } else {
+        tracing::info!(
+            "service not enabled — run `sudo systemctl enable --now betcode-daemon` to start it"
+        );
+    }
+
     Ok(())
 }
 
@@ -79,7 +87,13 @@ pub fn deploy_user(config: &DaemonSetupConfig, is_update: bool) -> Result<()> {
         )?;
     }
 
-    enable_and_start_user(is_update)?;
+    if config.enable_service {
+        enable_and_start_user(is_update)?;
+    } else {
+        tracing::info!(
+            "service not enabled — run `systemctl --user enable --now betcode-daemon` to start it"
+        );
+    }
 
     if config.enable_linger {
         enable_linger()?;

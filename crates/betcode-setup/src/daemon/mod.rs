@@ -123,6 +123,12 @@ pub fn run(args: DaemonArgs, non_interactive: bool) -> Result<()> {
         false
     };
 
+    let enable_service = if is_update {
+        true
+    } else {
+        prompt_enable_service(non_interactive)?
+    };
+
     let config = DaemonSetupConfig {
         mode: args.mode,
         user: args.user,
@@ -139,6 +145,7 @@ pub fn run(args: DaemonArgs, non_interactive: bool) -> Result<()> {
         worktree_dir: args.worktree_dir,
         daemon_binary_path,
         enable_linger,
+        enable_service,
     };
 
     tracing::info!("daemon setup: mode={}, addr={}", config.mode, config.addr);
@@ -184,6 +191,20 @@ fn validate_systemd_prereqs(addr: SocketAddr, is_update: bool, mode: DaemonMode)
     Ok(())
 }
 
+fn prompt_enable_service(non_interactive: bool) -> Result<bool> {
+    if non_interactive {
+        return Ok(true);
+    }
+    let confirmed = Confirm::new()
+        .with_prompt(
+            "Enable and start the daemon service now? \
+             (you can do this later with `systemctl enable --now betcode-daemon`)",
+        )
+        .default(true)
+        .interact()?;
+    Ok(confirmed)
+}
+
 fn prompt_linger(non_interactive: bool) -> Result<bool> {
     if non_interactive {
         return Ok(false);
@@ -217,6 +238,7 @@ pub(crate) fn make_test_daemon_config(mode: DaemonMode) -> DaemonSetupConfig {
         worktree_dir: None,
         daemon_binary_path: None,
         enable_linger: false,
+        enable_service: true,
     }
 }
 

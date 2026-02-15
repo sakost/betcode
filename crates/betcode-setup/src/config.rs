@@ -96,4 +96,6 @@ pub struct DaemonSetupConfig {
     pub daemon_binary_path: Option<PathBuf>,
     /// Whether to enable lingering for user services
     pub enable_linger: bool,
+    /// Whether to enable and start the systemd service
+    pub enable_service: bool,
 }
