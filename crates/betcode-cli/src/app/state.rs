@@ -35,6 +35,9 @@ pub struct DisplayMessage {
     /// Used by the renderer to skip inline result messages (the Done/Error
     /// status line already covers both start and result).
     pub is_tool_result: bool,
+    /// Label for messages originating from a subagent (e.g. `"subagent"`).
+    /// `None` for main-agent messages.
+    pub agent_label: Option<String>,
 }
 
 /// Message role.
@@ -383,6 +386,7 @@ impl App {
             content,
             streaming: false,
             is_tool_result: false,
+            agent_label: None,
         });
     }
 
@@ -392,6 +396,7 @@ impl App {
             content: String::new(),
             streaming: true,
             is_tool_result: false,
+            agent_label: None,
         });
     }
 
@@ -415,6 +420,7 @@ impl App {
             content,
             streaming: false,
             is_tool_result: false,
+            agent_label: None,
         });
     }
 
@@ -422,6 +428,12 @@ impl App {
     #[allow(clippy::too_many_lines)]
     pub fn handle_event(&mut self, event: AgentEvent) {
         use betcode_proto::v1::agent_event::Event;
+
+        let agent_label = if event.parent_tool_use_id.is_empty() {
+            None
+        } else {
+            Some("subagent".to_string())
+        };
 
         match event.event {
             Some(Event::TextDelta(delta)) => {
@@ -432,6 +444,9 @@ impl App {
                 if !delta.text.is_empty() {
                     if self.messages.last().is_none_or(|m| !m.streaming) {
                         self.start_assistant_message();
+                        if let Some(msg) = self.messages.last_mut() {
+                            msg.agent_label.clone_from(&agent_label);
+                        }
                     }
                     self.append_text(&delta.text);
                 }
@@ -448,6 +463,9 @@ impl App {
                     format!("[Tool: {} - {}]", tool.tool_name, tool.description)
                 };
                 self.add_system_message(MessageRole::Tool, msg);
+                if let Some(last) = self.messages.last_mut() {
+                    last.agent_label.clone_from(&agent_label);
+                }
                 self.tool_calls.push(ToolCallEntry {
                     tool_id: tool.tool_id.clone(),
                     tool_name: tool.tool_name.clone(),
@@ -472,6 +490,7 @@ impl App {
                 // Mark as tool result so the renderer can skip it
                 if let Some(last) = self.messages.last_mut() {
                     last.is_tool_result = true;
+                    last.agent_label.clone_from(&agent_label);
                 }
                 if let Some(entry) = self
                     .tool_calls
@@ -547,6 +566,9 @@ impl App {
             Some(Event::Error(err)) => {
                 let msg = format!("[Error: {} - {}]", err.code, err.message);
                 self.add_system_message(MessageRole::System, msg);
+                if let Some(last) = self.messages.last_mut() {
+                    last.agent_label.clone_from(&agent_label);
+                }
                 if err.is_fatal {
                     self.status = format!("Fatal error: {}", err.message);
                 }
@@ -565,6 +587,12 @@ impl App {
     pub fn load_history_event(&mut self, event: AgentEvent) {
         use betcode_proto::v1::agent_event::Event;
 
+        let agent_label = if event.parent_tool_use_id.is_empty() {
+            None
+        } else {
+            Some("subagent".to_string())
+        };
+
         match event.event {
             Some(Event::TextDelta(delta)) => {
                 if delta.text.is_empty() {
@@ -582,6 +610,7 @@ impl App {
                         content: delta.text,
                         streaming: true, // temporary, will be finished
                         is_tool_result: false,
+                        agent_label,
                     });
                 } else if let Some(msg) = self.messages.last_mut() {
                     msg.content.push_str(&delta.text);
@@ -603,6 +632,9 @@ impl App {
                     format!("[Tool: {} - {}]", tool.tool_name, tool.description)
                 };
                 self.add_system_message(MessageRole::Tool, msg);
+                if let Some(last) = self.messages.last_mut() {
+                    last.agent_label.clone_from(&agent_label);
+                }
                 self.tool_calls.push(ToolCallEntry {
                     tool_id: tool.tool_id.clone(),
                     tool_name: tool.tool_name.clone(),
@@ -629,6 +661,7 @@ impl App {
                 // Mark as tool result so the renderer can skip it
                 if let Some(last) = self.messages.last_mut() {
                     last.is_tool_result = true;
+                    last.agent_label.clone_from(&agent_label);
                 }
                 if let Some(entry) = self
                     .tool_calls
@@ -654,6 +687,9 @@ impl App {
             Some(Event::Error(err)) => {
                 let msg = format!("[Error: {} - {}]", err.code, err.message);
                 self.add_system_message(MessageRole::System, msg);
+                if let Some(last) = self.messages.last_mut() {
+                    last.agent_label.clone_from(&agent_label);
+                }
             }
             Some(Event::UserInput(input)) => {
                 self.add_user_message(input.content);
@@ -1617,5 +1653,47 @@ mod tests {
 
         app.select_next_tool();
         assert_eq!(app.detail_panel.selected_tool_index, Some(0));
+    }
+
+    // =========================================================================
+    // Agent identity (agent_label) tests
+    // =========================================================================
+
+    #[test]
+    fn messages_tagged_with_agent_context() {
+        let mut app = App::new();
+
+        // Event from main agent (empty parent_tool_use_id)
+        app.handle_event(AgentEvent {
+            sequence: 1,
+            timestamp: None,
+            parent_tool_use_id: String::new(),
+            event: Some(betcode_proto::v1::agent_event::Event::TextDelta(
+                betcode_proto::v1::TextDelta {
+                    text: "Hello".to_string(),
+                    is_complete: true,
+                },
+            )),
+        });
+
+        assert!(app.messages.last().unwrap().agent_label.is_none());
+
+        // Event from subagent
+        app.handle_event(AgentEvent {
+            sequence: 2,
+            timestamp: None,
+            parent_tool_use_id: "tool-abc-123".to_string(),
+            event: Some(betcode_proto::v1::agent_event::Event::TextDelta(
+                betcode_proto::v1::TextDelta {
+                    text: "Sub output".to_string(),
+                    is_complete: true,
+                },
+            )),
+        });
+
+        assert_eq!(
+            app.messages.last().unwrap().agent_label.as_deref(),
+            Some("subagent")
+        );
     }
 }

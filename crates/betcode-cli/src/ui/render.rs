@@ -238,23 +238,32 @@ fn draw_messages(frame: &mut Frame<'_>, app: &mut App, area: Rect) {
         let prefix_style = Style::default().fg(color).add_modifier(Modifier::BOLD);
         let content_lines: Vec<&str> = msg.content.split('\n').collect();
 
+        // Build optional agent label span
+        let mut label_spans: Vec<Span<'_>> = Vec::new();
+        if let Some(ref label) = msg.agent_label {
+            label_spans.push(Span::styled(
+                format!("[{label}] "),
+                Style::default().fg(Color::Magenta),
+            ));
+        }
+
         if content_lines.is_empty() || (content_lines.len() == 1 && content_lines[0].is_empty()) {
             let cursor = if msg.streaming { "\u{2588}" } else { "" };
-            lines.push(Line::from(vec![
-                Span::styled(prefix, prefix_style),
-                Span::styled(cursor, Style::default().fg(Color::White)),
-            ]));
+            let mut spans = label_spans.clone();
+            spans.push(Span::styled(prefix, prefix_style));
+            spans.push(Span::styled(cursor, Style::default().fg(Color::White)));
+            lines.push(Line::from(spans));
         } else {
             let cursor = if msg.streaming && content_lines.len() == 1 {
                 "\u{2588}"
             } else {
                 ""
             };
-            lines.push(Line::from(vec![
-                Span::styled(prefix, prefix_style),
-                Span::raw(content_lines[0]),
-                Span::styled(cursor, Style::default().fg(Color::White)),
-            ]));
+            let mut spans = label_spans;
+            spans.push(Span::styled(prefix, prefix_style));
+            spans.push(Span::raw(content_lines[0]));
+            spans.push(Span::styled(cursor, Style::default().fg(Color::White)));
+            lines.push(Line::from(spans));
             let indent = " ".repeat(prefix.len());
             for (j, content_line) in content_lines.iter().enumerate().skip(1) {
                 let cursor = if msg.streaming && j == content_lines.len() - 1 {
