@@ -235,7 +235,7 @@ mod tests {
     use tonic::{Code, Status};
 
     use super::{is_peer_disconnect, verify_machine_ownership};
-    use crate::storage::RelayDatabase;
+    use crate::server::test_helpers::{test_db_with_owner, test_db_with_two_users};
 
     // ── Primary signal: gRPC status code ────────────────────────────
 
@@ -301,25 +301,14 @@ mod tests {
 
     #[tokio::test]
     async fn owner_can_access_their_machine() {
-        let db = RelayDatabase::open_in_memory().await.unwrap();
-        db.create_user("u1", "alice", "a@t.com", "hash")
-            .await
-            .unwrap();
-        db.create_machine("m1", "m1", "u1", "{}").await.unwrap();
+        let db = test_db_with_owner().await;
         let result = verify_machine_ownership(&db, "m1", "u1").await;
         assert!(result.is_ok());
     }
 
     #[tokio::test]
     async fn non_owner_gets_permission_denied() {
-        let db = RelayDatabase::open_in_memory().await.unwrap();
-        db.create_user("u1", "alice", "a@t.com", "hash")
-            .await
-            .unwrap();
-        db.create_user("u2", "eve", "e@t.com", "hash")
-            .await
-            .unwrap();
-        db.create_machine("m1", "m1", "u1", "{}").await.unwrap();
+        let db = test_db_with_two_users().await;
         let err = verify_machine_ownership(&db, "m1", "u2").await.unwrap_err();
         assert_eq!(err.code(), Code::PermissionDenied);
         assert!(err.message().contains("Not your machine"));
@@ -327,7 +316,7 @@ mod tests {
 
     #[tokio::test]
     async fn nonexistent_machine_gets_not_found() {
-        let db = RelayDatabase::open_in_memory().await.unwrap();
+        let db = test_db_with_owner().await;
         let err = verify_machine_ownership(&db, "no-such-machine", "u1")
             .await
             .unwrap_err();

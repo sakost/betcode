@@ -7,22 +7,17 @@ use tonic::{Code, Request};
 use betcode_proto::v1::TunnelHeartbeat;
 use betcode_proto::v1::tunnel_service_server::TunnelService;
 
-use crate::auth::claims::Claims;
 use crate::buffer::BufferManager;
 use crate::registry::ConnectionRegistry;
-use crate::server::test_helpers::test_claims;
+use crate::server::test_helpers::{
+    test_claims, test_claims_u2, test_db_with_owner, test_db_with_two_users,
+};
 use crate::server::tunnel_svc::TunnelServiceImpl;
-use crate::storage::RelayDatabase;
 
 /// Build a `TunnelServiceImpl` backed by an in-memory DB that already
 /// contains user "u1" (alice) and machine "m1" owned by "u1".
 async fn setup() -> TunnelServiceImpl {
-    let db = RelayDatabase::open_in_memory().await.unwrap();
-    db.create_user("u1", "alice", "a@t.com", "hash")
-        .await
-        .unwrap();
-    db.create_machine("m1", "m1", "u1", "{}").await.unwrap();
-
+    let db = test_db_with_owner().await;
     let registry = Arc::new(ConnectionRegistry::new());
     let buffer = Arc::new(BufferManager::new(db.clone(), Arc::clone(&registry)));
     TunnelServiceImpl::new(registry, db, buffer)
@@ -31,15 +26,7 @@ async fn setup() -> TunnelServiceImpl {
 /// Build a `TunnelServiceImpl` backed by an in-memory DB that also contains
 /// a second user "u2" (eve) who does NOT own machine "m1".
 async fn setup_with_second_user() -> TunnelServiceImpl {
-    let db = RelayDatabase::open_in_memory().await.unwrap();
-    db.create_user("u1", "alice", "a@t.com", "hash")
-        .await
-        .unwrap();
-    db.create_user("u2", "eve", "e@t.com", "hash")
-        .await
-        .unwrap();
-    db.create_machine("m1", "m1", "u1", "{}").await.unwrap();
-
+    let db = test_db_with_two_users().await;
     let registry = Arc::new(ConnectionRegistry::new());
     let buffer = Arc::new(BufferManager::new(db.clone(), Arc::clone(&registry)));
     TunnelServiceImpl::new(registry, db, buffer)
@@ -52,14 +39,7 @@ fn attach_claims(req: &mut Request<TunnelHeartbeat>) {
 
 /// Attach claims for user "u2" (eve) to a request.
 fn attach_wrong_owner_claims(req: &mut Request<TunnelHeartbeat>) {
-    req.extensions_mut().insert(Claims {
-        jti: "test-jti-u2".into(),
-        sub: "u2".into(),
-        username: "eve".into(),
-        iat: 0,
-        exp: i64::MAX,
-        token_type: "access".into(),
-    });
+    req.extensions_mut().insert(test_claims_u2());
 }
 
 // ── heartbeat: ownership check ──────────────────────────────────────

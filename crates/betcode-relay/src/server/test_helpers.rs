@@ -31,6 +31,40 @@ pub fn test_claims() -> Claims {
     }
 }
 
+/// Build `Claims` for a *second* user ("u2" / eve) who does **not** own
+/// the default test machine.
+pub fn test_claims_u2() -> Claims {
+    Claims {
+        jti: "test-jti-u2".into(),
+        sub: "u2".into(),
+        username: "eve".into(),
+        iat: 0,
+        exp: i64::MAX,
+        token_type: "access".into(),
+    }
+}
+
+/// Create an in-memory DB pre-populated with user "u1" (alice) and machine
+/// "m1" owned by "u1".
+pub async fn test_db_with_owner() -> RelayDatabase {
+    let db = RelayDatabase::open_in_memory().await.unwrap();
+    db.create_user("u1", "alice", "a@t.com", "hash")
+        .await
+        .unwrap();
+    db.create_machine("m1", "m1", "u1", "{}").await.unwrap();
+    db
+}
+
+/// Create an in-memory DB pre-populated with user "u1" (alice), user "u2"
+/// (eve), and machine "m1" owned by "u1".
+pub async fn test_db_with_two_users() -> RelayDatabase {
+    let db = test_db_with_owner().await;
+    db.create_user("u2", "eve", "e@t.com", "hash")
+        .await
+        .unwrap();
+    db
+}
+
 /// Create a `Request<T>` with the `x-machine-id` header and test claims
 /// already attached.
 pub fn make_request<T>(inner: T, machine_id: &str) -> Request<T> {
@@ -205,14 +239,7 @@ pub fn make_request_wrong_owner<T>(inner: T, machine_id: &str) -> Request<T> {
     let mut req = Request::new(inner);
     req.metadata_mut()
         .insert("x-machine-id", machine_id.parse().unwrap());
-    req.extensions_mut().insert(Claims {
-        jti: "test-jti-u2".into(),
-        sub: "u2".into(),
-        username: "eve".into(),
-        iat: 0,
-        exp: i64::MAX,
-        token_type: "access".into(),
-    });
+    req.extensions_mut().insert(test_claims_u2());
     req
 }
 
