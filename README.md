@@ -138,6 +138,12 @@ Copyright 2026 Konstantin Sazhenov
 
 ---
 
+## Acknowledgments
+
+BetCode was inspired by [Happy](https://happy.engineering/) — a mobile and web client for Claude Code with real-time voice, end-to-end encryption, and relay-based connectivity. Happy pioneered the idea of controlling Claude Code remotely from a phone. BetCode takes a different architectural approach: instead of emulating a PTY, it wraps the CLI as a subprocess and bridges the native NDJSON stream to gRPC, giving full control over process lifecycle, session multiplexing, and worktree management.
+
+---
+
 ## Disclaimer
 
 This project is **not** affiliated with, endorsed by, or sponsored by [Anthropic](https://www.anthropic.com/). "Claude" and "Claude Code" are trademarks or products of Anthropic, PBC. BetCode is an independent open-source project that wraps the publicly available Claude Code CLI. Use of Claude Code is subject to Anthropic's own terms of service.
