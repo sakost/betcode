@@ -903,8 +903,11 @@ mod tests {
         );
 
         // When detail panel is closed, all messages are shown
-        let visible: Vec<_> = filter_visible_messages(&messages, false).collect();
-        assert_eq!(visible.len(), 4, "all shown when panel closed");
+        assert_eq!(
+            filter_visible_messages(&messages, false).count(),
+            4,
+            "all shown when panel closed"
+        );
     }
 
     #[test]

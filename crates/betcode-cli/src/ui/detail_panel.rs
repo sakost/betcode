@@ -111,38 +111,25 @@ pub fn draw_detail_panel(frame: &mut Frame<'_>, app: &App, area: Rect) {
 )]
 mod tests {
     use super::*;
-    use crate::app::{ToolCallEntry, ToolCallStatus};
+    use crate::app::ToolCallStatus;
+    use crate::ui::test_helpers::make_tool_entry;
 
     #[test]
     fn panel_title_includes_tool_name_and_description() {
-        let entry = ToolCallEntry {
-            tool_id: "t1".to_string(),
-            tool_name: "Read".to_string(),
-            description: "/src/main.rs".to_string(),
-            input_json: None,
-            output: Some("file contents".to_string()),
-            status: ToolCallStatus::Done,
-            duration_ms: Some(1200),
-            finished_at: None,
-            message_index: 0,
-        };
+        let entry = make_tool_entry(
+            "Read",
+            "/src/main.rs",
+            ToolCallStatus::Done,
+            Some(1200),
+            Some("file contents"),
+        );
         let title = panel_title(&entry);
         assert_eq!(title, "Read (/src/main.rs)");
     }
 
     #[test]
     fn panel_title_no_description() {
-        let entry = ToolCallEntry {
-            tool_id: "t1".to_string(),
-            tool_name: "Read".to_string(),
-            description: String::new(),
-            input_json: None,
-            output: None,
-            status: ToolCallStatus::Running,
-            duration_ms: None,
-            finished_at: None,
-            message_index: 0,
-        };
+        let entry = make_tool_entry("Read", "", ToolCallStatus::Running, None, None);
         let title = panel_title(&entry);
         assert_eq!(title, "Read");
     }

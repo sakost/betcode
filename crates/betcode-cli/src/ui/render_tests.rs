@@ -9,10 +9,10 @@
 )]
 mod tests {
     use crate::app::{
-        App, AppMode, PendingPermission, PendingUserQuestion, QuestionOptionDisplay, ToolCallEntry,
-        ToolCallStatus,
+        App, AppMode, PendingPermission, PendingUserQuestion, QuestionOptionDisplay, ToolCallStatus,
     };
     use crate::ui::render::compute_detail_split;
+    use crate::ui::test_helpers::make_tool_entry;
     use crate::ui::{draw, format_duration_ms, format_tool_status_line};
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
@@ -429,17 +429,7 @@ mod tests {
 
     #[test]
     fn format_tool_line_running() {
-        let entry = ToolCallEntry {
-            tool_id: "t1".to_string(),
-            tool_name: "Read".to_string(),
-            description: "/src/main.rs".to_string(),
-            input_json: None,
-            output: None,
-            status: ToolCallStatus::Running,
-            duration_ms: None,
-            finished_at: None,
-            message_index: 0,
-        };
+        let entry = make_tool_entry("Read", "/src/main.rs", ToolCallStatus::Running, None, None);
         let line = format_tool_status_line(&entry, 0);
         assert!(line.contains("Read"));
         assert!(line.contains("/src/main.rs"));
@@ -448,17 +438,7 @@ mod tests {
 
     #[test]
     fn format_tool_line_running_spinner_cycles() {
-        let entry = ToolCallEntry {
-            tool_id: "t1".to_string(),
-            tool_name: "Read".to_string(),
-            description: "/src/main.rs".to_string(),
-            input_json: None,
-            output: None,
-            status: ToolCallStatus::Running,
-            duration_ms: None,
-            finished_at: None,
-            message_index: 0,
-        };
+        let entry = make_tool_entry("Read", "/src/main.rs", ToolCallStatus::Running, None, None);
         // tick=1 should produce a different spinner char
         let line = format_tool_status_line(&entry, 1);
         assert!(line.starts_with('\u{2819}')); // ⠙
@@ -466,34 +446,20 @@ mod tests {
 
     #[test]
     fn format_tool_line_running_empty_description() {
-        let entry = ToolCallEntry {
-            tool_id: "t1".to_string(),
-            tool_name: "Read".to_string(),
-            description: String::new(),
-            input_json: None,
-            output: None,
-            status: ToolCallStatus::Running,
-            duration_ms: None,
-            finished_at: None,
-            message_index: 0,
-        };
+        let entry = make_tool_entry("Read", "", ToolCallStatus::Running, None, None);
         let line = format_tool_status_line(&entry, 0);
         assert_eq!(line, "\u{280B} Read");
     }
 
     #[test]
     fn format_tool_line_done() {
-        let entry = ToolCallEntry {
-            tool_id: "t1".to_string(),
-            tool_name: "Read".to_string(),
-            description: "/src/main.rs".to_string(),
-            input_json: None,
-            output: Some("contents".to_string()),
-            status: ToolCallStatus::Done,
-            duration_ms: Some(1200),
-            finished_at: None,
-            message_index: 0,
-        };
+        let entry = make_tool_entry(
+            "Read",
+            "/src/main.rs",
+            ToolCallStatus::Done,
+            Some(1200),
+            Some("contents"),
+        );
         let line = format_tool_status_line(&entry, 0);
         assert!(line.starts_with('\u{2713}')); // ✓
         assert!(line.contains("1.2s"));
@@ -501,17 +467,13 @@ mod tests {
 
     #[test]
     fn format_tool_line_error() {
-        let entry = ToolCallEntry {
-            tool_id: "t1".to_string(),
-            tool_name: "Bash".to_string(),
-            description: "rm".to_string(),
-            input_json: None,
-            output: Some("denied".to_string()),
-            status: ToolCallStatus::Error,
-            duration_ms: Some(50),
-            finished_at: None,
-            message_index: 0,
-        };
+        let entry = make_tool_entry(
+            "Bash",
+            "rm",
+            ToolCallStatus::Error,
+            Some(50),
+            Some("denied"),
+        );
         let line = format_tool_status_line(&entry, 0);
         assert!(line.starts_with('\u{2717}')); // ✗
     }
@@ -536,17 +498,13 @@ mod tests {
 
     #[test]
     fn format_tool_line_error_with_duration_ms() {
-        let entry = ToolCallEntry {
-            tool_id: "t1".to_string(),
-            tool_name: "Bash".to_string(),
-            description: "rm".to_string(),
-            input_json: None,
-            output: Some("denied".to_string()),
-            status: ToolCallStatus::Error,
-            duration_ms: Some(50),
-            finished_at: None,
-            message_index: 0,
-        };
+        let entry = make_tool_entry(
+            "Bash",
+            "rm",
+            ToolCallStatus::Error,
+            Some(50),
+            Some("denied"),
+        );
         let line = format_tool_status_line(&entry, 0);
         assert!(line.contains("50ms"));
     }
