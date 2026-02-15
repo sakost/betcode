@@ -115,6 +115,29 @@ pub struct TokenUsage {
     pub cost_usd: f64,
 }
 
+/// Status of a tracked tool call.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ToolCallStatus {
+    Running,
+    Done,
+    Error,
+}
+
+/// Structured tracking of a single tool invocation.
+#[derive(Debug, Clone)]
+pub struct ToolCallEntry {
+    pub tool_id: String,
+    pub tool_name: String,
+    pub description: String,
+    pub input_json: Option<String>,
+    pub output: Option<String>,
+    pub status: ToolCallStatus,
+    pub duration_ms: Option<u32>,
+    pub finished_at: Option<std::time::Instant>,
+    /// Index of the "[Tool: ...]" message in `App.messages`.
+    pub message_index: usize,
+}
+
 /// TUI application state.
 #[allow(clippy::struct_excessive_bools)]
 pub struct App {
@@ -145,6 +168,8 @@ pub struct App {
     pub show_status_panel: bool,
     /// Connection type displayed in the status panel ("local" or "relay").
     pub connection_type: String,
+    /// Structured tracking of tool call lifecycle.
+    pub tool_calls: Vec<ToolCallEntry>,
     /// Local cache of commands fetched from daemon for `/` completion.
     pub command_cache: CommandCache,
     /// Sender to request async completion fetches (agents, files).
@@ -194,6 +219,7 @@ impl App {
             completion_state: CompletionState::default(),
             show_status_panel: false,
             connection_type: "local".to_string(),
+            tool_calls: Vec::new(),
             command_cache: CommandCache::new(),
             completion_request_tx: None,
             service_command_tx: None,
@@ -347,16 +373,42 @@ impl App {
                     format!("[Tool: {} - {}]", tool.tool_name, tool.description)
                 };
                 self.add_system_message(MessageRole::Tool, msg);
+                self.tool_calls.push(ToolCallEntry {
+                    tool_id: tool.tool_id.clone(),
+                    tool_name: tool.tool_name.clone(),
+                    description: tool.description.clone(),
+                    input_json: tool.input.as_ref().map(|s| format!("{s:?}")),
+                    output: None,
+                    status: ToolCallStatus::Running,
+                    duration_ms: None,
+                    finished_at: None,
+                    message_index: self.messages.len() - 1,
+                });
             }
             Some(Event::ToolCallResult(result)) => {
                 let status = if result.is_error { "ERROR" } else { "OK" };
                 let preview = if result.output.len() > 200 {
                     format!("{}...", &result.output[..200])
                 } else {
-                    result.output
+                    result.output.clone()
                 };
                 let msg = format!("[Tool Result ({status}): {preview}]");
                 self.add_system_message(MessageRole::Tool, msg);
+                if let Some(entry) = self
+                    .tool_calls
+                    .iter_mut()
+                    .rev()
+                    .find(|e| e.tool_id == result.tool_id)
+                {
+                    entry.status = if result.is_error {
+                        ToolCallStatus::Error
+                    } else {
+                        ToolCallStatus::Done
+                    };
+                    entry.output = Some(result.output);
+                    entry.duration_ms = Some(result.duration_ms);
+                    entry.finished_at = Some(std::time::Instant::now());
+                }
             }
             Some(Event::PermissionRequest(perm)) => {
                 let original_input = perm.input.map(struct_to_json);
@@ -430,6 +482,7 @@ impl App {
     /// All messages are added as non-streaming. `PermissionRequest` events are
     /// skipped (historical, not actionable). `StatusChange` and Usage are skipped
     /// per user preference (system-internal events).
+    #[allow(clippy::too_many_lines)]
     pub fn load_history_event(&mut self, event: AgentEvent) {
         use betcode_proto::v1::agent_event::Event;
 
@@ -470,18 +523,45 @@ impl App {
                     format!("[Tool: {} - {}]", tool.tool_name, tool.description)
                 };
                 self.add_system_message(MessageRole::Tool, msg);
+                self.tool_calls.push(ToolCallEntry {
+                    tool_id: tool.tool_id.clone(),
+                    tool_name: tool.tool_name.clone(),
+                    description: tool.description.clone(),
+                    input_json: tool.input.as_ref().map(|s| format!("{s:?}")),
+                    output: None,
+                    status: ToolCallStatus::Running,
+                    duration_ms: None,
+                    finished_at: None,
+                    message_index: self.messages.len() - 1,
+                });
             }
             Some(Event::ToolCallResult(result)) => {
                 let status = if result.is_error { "ERROR" } else { "OK" };
                 let preview = if result.output.len() > 200 {
                     format!("{}...", &result.output[..200])
                 } else {
-                    result.output
+                    result.output.clone()
                 };
                 self.add_system_message(
                     MessageRole::Tool,
                     format!("[Tool Result ({status}): {preview}]"),
                 );
+                if let Some(entry) = self
+                    .tool_calls
+                    .iter_mut()
+                    .rev()
+                    .find(|e| e.tool_id == result.tool_id)
+                {
+                    entry.status = if result.is_error {
+                        ToolCallStatus::Error
+                    } else {
+                        ToolCallStatus::Done
+                    };
+                    entry.output = Some(result.output);
+                    entry.duration_ms = Some(result.duration_ms);
+                    // History replay: original wall-clock time is lost, leave as None
+                    entry.finished_at = None;
+                }
             }
             Some(Event::SessionInfo(info)) => {
                 self.session_id = Some(info.session_id.clone());
@@ -1233,6 +1313,74 @@ mod tests {
         assert_eq!(app.messages[2].content, "And 3+3?");
         assert_eq!(app.messages[3].role, MessageRole::Assistant);
         assert_eq!(app.messages[3].content, "6");
+    }
+
+    // =========================================================================
+    // ToolCallEntry lifecycle tests
+    // =========================================================================
+
+    #[test]
+    fn tool_call_entry_tracks_lifecycle() {
+        use betcode_proto::v1::agent_event::Event;
+        let mut app = App::new();
+        assert!(app.tool_calls.is_empty());
+
+        app.handle_event(make_event(Event::ToolCallStart(
+            betcode_proto::v1::ToolCallStart {
+                tool_id: "t1".to_string(),
+                tool_name: "Read".to_string(),
+                input: None,
+                description: "/src/main.rs".to_string(),
+            },
+        )));
+
+        assert_eq!(app.tool_calls.len(), 1);
+        assert_eq!(app.tool_calls[0].tool_name, "Read");
+        assert!(matches!(app.tool_calls[0].status, ToolCallStatus::Running));
+        assert!(app.tool_calls[0].finished_at.is_none());
+
+        app.handle_event(make_event(Event::ToolCallResult(
+            betcode_proto::v1::ToolCallResult {
+                tool_id: "t1".to_string(),
+                output: "file contents here".to_string(),
+                is_error: false,
+                duration_ms: 150,
+            },
+        )));
+
+        assert_eq!(app.tool_calls.len(), 1);
+        assert!(matches!(app.tool_calls[0].status, ToolCallStatus::Done));
+        assert_eq!(
+            app.tool_calls[0].output.as_deref(),
+            Some("file contents here")
+        );
+        assert_eq!(app.tool_calls[0].duration_ms, Some(150));
+    }
+
+    #[test]
+    fn tool_call_entry_tracks_error() {
+        use betcode_proto::v1::agent_event::Event;
+        let mut app = App::new();
+
+        app.handle_event(make_event(Event::ToolCallStart(
+            betcode_proto::v1::ToolCallStart {
+                tool_id: "t2".to_string(),
+                tool_name: "Bash".to_string(),
+                input: None,
+                description: "rm -rf /".to_string(),
+            },
+        )));
+
+        app.handle_event(make_event(Event::ToolCallResult(
+            betcode_proto::v1::ToolCallResult {
+                tool_id: "t2".to_string(),
+                output: "permission denied".to_string(),
+                is_error: true,
+                duration_ms: 50,
+            },
+        )));
+
+        assert!(matches!(app.tool_calls[0].status, ToolCallStatus::Error));
     }
 
     // =========================================================================
