@@ -4,7 +4,9 @@ use std::path::Path;
 
 use anyhow::{Context, Result};
 
-use crate::cmd::{command_exists, ensure_system_user, run_cmd};
+use crate::cmd::{
+    command_exists, create_setup_directories, ensure_system_user, run_cmd, write_env_if_fresh,
+};
 use crate::config::RelaySetupConfig;
 
 use super::templates;
@@ -41,29 +43,7 @@ pub fn deploy(config: &RelaySetupConfig, is_update: bool) -> Result<()> {
 }
 
 fn create_directories(config: &RelaySetupConfig) -> Result<()> {
-    let db_dir = config
-        .db_path
-        .parent()
-        .unwrap_or_else(|| Path::new("/var/lib/betcode"));
-
-    for dir in &[db_dir, Path::new("/etc/betcode")] {
-        tracing::info!("creating directory: {}", dir.display());
-        fs::create_dir_all(dir).with_context(|| format!("failed to create {}", dir.display()))?;
-    }
-
-    run_cmd(
-        "setting ownership on /var/lib/betcode",
-        "chown",
-        &["-R", "betcode:betcode", &db_dir.to_string_lossy()],
-    )?;
-
-    run_cmd(
-        "setting ownership on /etc/betcode",
-        "chown",
-        &["root:betcode", "/etc/betcode"],
-    )?;
-
-    Ok(())
+    create_setup_directories(&config.db_path, "betcode")
 }
 
 fn write_env_file(config: &RelaySetupConfig, is_update: bool) -> Result<()> {
@@ -71,14 +51,10 @@ fn write_env_file(config: &RelaySetupConfig, is_update: bool) -> Result<()> {
 }
 
 fn write_env_file_inner(config: &RelaySetupConfig, is_update: bool, path: &str) -> Result<()> {
-    if is_update && Path::new(path).exists() {
-        tracing::warn!("existing {path} preserved — to regenerate, delete it and re-run setup");
+    let content = templates::env_file(config);
+    if !write_env_if_fresh(path, &content, is_update)? {
         return Ok(());
     }
-
-    tracing::info!("writing environment file: {path}");
-    let content = templates::env_file(config);
-    fs::write(path, content).context("failed to write relay.env")?;
 
     // Skip chown/chmod in tests (requires root)
     #[cfg(not(test))]

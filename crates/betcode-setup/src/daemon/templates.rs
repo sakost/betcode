@@ -89,34 +89,14 @@ pub fn env_file(config: &DaemonSetupConfig) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::{DaemonMode, DaemonSetupConfig};
-    use std::net::SocketAddr;
+    use crate::config::DaemonMode;
     use std::path::PathBuf;
 
-    #[allow(clippy::expect_used)]
-    fn test_config(mode: DaemonMode) -> DaemonSetupConfig {
-        DaemonSetupConfig {
-            mode,
-            user: "betcode".into(),
-            addr: "127.0.0.1:50051".parse::<SocketAddr>().expect("valid addr"),
-            db_path: PathBuf::from("/var/lib/betcode/daemon.db"),
-            max_processes: 5,
-            max_sessions: 10,
-            relay_url: None,
-            machine_id: None,
-            machine_name: "betcode-daemon".into(),
-            relay_username: None,
-            relay_password: None,
-            relay_custom_ca_cert: None,
-            worktree_dir: None,
-            daemon_binary_path: None,
-            enable_linger: false,
-        }
-    }
+    use super::super::make_test_daemon_config;
 
     #[test]
     fn system_unit_contains_user() {
-        let config = test_config(DaemonMode::System);
+        let config = make_test_daemon_config(DaemonMode::System);
         let unit = systemd_unit_system(&config);
         assert!(unit.contains("User=betcode"));
         assert!(unit.contains("Group=betcode"));
@@ -124,14 +104,14 @@ mod tests {
 
     #[test]
     fn system_unit_is_type_notify() {
-        let config = test_config(DaemonMode::System);
+        let config = make_test_daemon_config(DaemonMode::System);
         let unit = systemd_unit_system(&config);
         assert!(unit.contains("Type=notify"));
     }
 
     #[test]
     fn system_unit_has_hardening() {
-        let config = test_config(DaemonMode::System);
+        let config = make_test_daemon_config(DaemonMode::System);
         let unit = systemd_unit_system(&config);
         assert!(unit.contains("NoNewPrivileges=true"));
         assert!(unit.contains("ProtectSystem=strict"));
@@ -159,7 +139,7 @@ mod tests {
 
     #[test]
     fn env_file_contains_required_keys() {
-        let config = test_config(DaemonMode::System);
+        let config = make_test_daemon_config(DaemonMode::System);
         let content = env_file(&config);
         assert!(content.contains("BETCODE_ADDR=127.0.0.1:50051"));
         assert!(content.contains("BETCODE_DB_PATH=/var/lib/betcode/daemon.db"));
@@ -170,7 +150,7 @@ mod tests {
 
     #[test]
     fn env_file_omits_unset_relay_fields() {
-        let config = test_config(DaemonMode::System);
+        let config = make_test_daemon_config(DaemonMode::System);
         let content = env_file(&config);
         assert!(!content.contains("BETCODE_RELAY_URL"));
         assert!(!content.contains("BETCODE_RELAY_USERNAME"));
@@ -179,7 +159,7 @@ mod tests {
 
     #[test]
     fn env_file_includes_relay_fields_when_set() {
-        let mut config = test_config(DaemonMode::System);
+        let mut config = make_test_daemon_config(DaemonMode::System);
         config.relay_url = Some("https://relay.example.com".into());
         config.relay_username = Some("admin".into());
         config.relay_password = Some("secret123".into());

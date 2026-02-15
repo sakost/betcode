@@ -199,6 +199,28 @@ fn prompt_linger(non_interactive: bool) -> Result<bool> {
 }
 
 #[cfg(test)]
+#[allow(clippy::expect_used)]
+pub(crate) fn make_test_daemon_config(mode: DaemonMode) -> DaemonSetupConfig {
+    DaemonSetupConfig {
+        mode,
+        user: "betcode".into(),
+        addr: "127.0.0.1:50051".parse::<SocketAddr>().expect("valid addr"),
+        db_path: PathBuf::from("/var/lib/betcode/daemon.db"),
+        max_processes: 5,
+        max_sessions: 10,
+        relay_url: None,
+        machine_id: None,
+        machine_name: "betcode-daemon".into(),
+        relay_username: None,
+        relay_password: None,
+        relay_custom_ca_cert: None,
+        worktree_dir: None,
+        daemon_binary_path: None,
+        enable_linger: false,
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
 

@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 
-use crate::cmd::{ensure_system_user, run_cmd};
+use crate::cmd::{create_setup_directories, ensure_system_user, run_cmd, write_env_if_fresh};
 use crate::config::DaemonSetupConfig;
 
 use super::templates;
@@ -135,33 +135,7 @@ fn ensure_user_exists(config: &DaemonSetupConfig) -> Result<()> {
 
 /// Create system directories: `/var/lib/betcode` and `/etc/betcode`.
 fn create_system_directories(config: &DaemonSetupConfig) -> Result<()> {
-    let db_dir = config
-        .db_path
-        .parent()
-        .unwrap_or_else(|| Path::new("/var/lib/betcode"));
-
-    for dir in &[db_dir, Path::new("/etc/betcode")] {
-        tracing::info!("creating directory: {}", dir.display());
-        fs::create_dir_all(dir).with_context(|| format!("failed to create {}", dir.display()))?;
-    }
-
-    run_cmd(
-        "setting ownership on data directory",
-        "chown",
-        &[
-            "-R",
-            &format!("{user}:{user}", user = config.user),
-            &db_dir.to_string_lossy(),
-        ],
-    )?;
-
-    run_cmd(
-        "setting ownership on /etc/betcode",
-        "chown",
-        &[&format!("root:{}", config.user), "/etc/betcode"],
-    )?;
-
-    Ok(())
+    create_setup_directories(&config.db_path, &config.user)
 }
 
 /// Write the environment file. Preserves existing content on update.
@@ -171,25 +145,12 @@ fn write_env_file(
     path: &str,
     is_system: bool,
 ) -> Result<()> {
-    write_env_file_inner(config, is_update, path, is_system)
-}
-
-fn write_env_file_inner(
-    config: &DaemonSetupConfig,
-    is_update: bool,
-    path: &str,
-    is_system: bool,
-) -> Result<()> {
-    if is_update && Path::new(path).exists() {
-        tracing::warn!("existing {path} preserved — to regenerate, delete it and re-run setup");
+    let content = templates::env_file(config);
+    if !write_env_if_fresh(path, &content, is_update)? {
         return Ok(());
     }
 
-    tracing::info!("writing environment file: {path}");
-    let content = templates::env_file(config);
-    fs::write(path, content).context("failed to write daemon.env")?;
-
-    // Skip chown/chmod in tests (requires root / specific user)
+    // Set permissions (skip in tests — requires root / specific user)
     #[cfg(not(test))]
     {
         if is_system {
@@ -363,30 +324,9 @@ fn enable_linger() -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::{DaemonMode, DaemonSetupConfig};
-    use std::net::SocketAddr;
-    use std::path::PathBuf;
+    use crate::config::DaemonMode;
 
-    #[allow(clippy::expect_used)]
-    fn test_config() -> DaemonSetupConfig {
-        DaemonSetupConfig {
-            mode: DaemonMode::System,
-            user: "betcode".into(),
-            addr: "127.0.0.1:50051".parse::<SocketAddr>().expect("valid addr"),
-            db_path: PathBuf::from("/var/lib/betcode/daemon.db"),
-            max_processes: 5,
-            max_sessions: 10,
-            relay_url: None,
-            machine_id: None,
-            machine_name: "betcode-daemon".into(),
-            relay_username: None,
-            relay_password: None,
-            relay_custom_ca_cert: None,
-            worktree_dir: None,
-            daemon_binary_path: None,
-            enable_linger: false,
-        }
-    }
+    use super::super::make_test_daemon_config;
 
     #[test]
     fn system_unit_path_is_correct() {
@@ -396,33 +336,34 @@ mod tests {
         );
     }
 
-    #[test]
+    /// Write an env file via `write_env_file` into a temp directory and
+    /// return its final contents. Optionally seeds the file with `initial`
+    /// content before calling the function under test.
     #[allow(clippy::expect_used)]
-    fn write_env_file_creates_on_fresh_install() {
+    fn run_write_env_file(is_update: bool, initial: Option<&str>) -> String {
         let dir = tempfile::tempdir().expect("tempdir");
         let env_path = dir.path().join("daemon.env");
+        if let Some(data) = initial {
+            std::fs::write(&env_path, data).expect("write");
+        }
 
-        let config = test_config();
-        let result = write_env_file_inner(&config, false, env_path.to_str().expect("path"), true);
-        assert!(result.is_ok(), "write_env_file_inner should succeed");
+        let config = make_test_daemon_config(DaemonMode::System);
+        let result = write_env_file(&config, is_update, env_path.to_str().expect("path"), true);
+        assert!(result.is_ok(), "write_env_file should succeed");
 
-        let content = std::fs::read_to_string(&env_path).expect("read");
+        std::fs::read_to_string(&env_path).expect("read")
+    }
+
+    #[test]
+    fn write_env_file_creates_on_fresh_install() {
+        let content = run_write_env_file(false, None);
         assert!(content.contains("BETCODE_ADDR=127.0.0.1:50051"));
         assert!(content.contains("BETCODE_DB_PATH=/var/lib/betcode/daemon.db"));
     }
 
     #[test]
-    #[allow(clippy::expect_used)]
     fn write_env_file_preserves_on_update() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let env_path = dir.path().join("daemon.env");
-        std::fs::write(&env_path, "BETCODE_ADDR=original\n").expect("write");
-
-        let config = test_config();
-        let result = write_env_file_inner(&config, true, env_path.to_str().expect("path"), true);
-        assert!(result.is_ok(), "write_env_file_inner should succeed");
-
-        let content = std::fs::read_to_string(&env_path).expect("read");
+        let content = run_write_env_file(true, Some("BETCODE_ADDR=original\n"));
         assert!(
             content.contains("original"),
             "env file must be preserved on update"
@@ -430,16 +371,8 @@ mod tests {
     }
 
     #[test]
-    #[allow(clippy::expect_used)]
     fn write_env_file_creates_on_update_when_missing() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let env_path = dir.path().join("daemon.env");
-
-        let config = test_config();
-        let result = write_env_file_inner(&config, true, env_path.to_str().expect("path"), true);
-        assert!(result.is_ok(), "write_env_file_inner should succeed");
-
-        let content = std::fs::read_to_string(&env_path).expect("read");
+        let content = run_write_env_file(true, None);
         assert!(
             content.contains("BETCODE_ADDR="),
             "env file should be created even on update if it doesn't exist"

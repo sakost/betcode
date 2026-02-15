@@ -1,3 +1,5 @@
+use std::fs;
+use std::path::Path;
 use std::process::Command;
 
 use anyhow::{Context, Result, bail};
@@ -49,6 +51,52 @@ pub fn command_exists(program: &str) -> bool {
 /// expected to be in use so we skip the availability check.
 pub const fn should_skip_port_check(is_update: bool, service_is_active: bool) -> bool {
     is_update && service_is_active
+}
+
+/// Create the standard setup directories and set ownership.
+///
+/// Creates the parent of `db_path` (defaulting to `/var/lib/betcode`) and
+/// `/etc/betcode`, then sets ownership to `user:user` on the data dir and
+/// `root:user` on the config dir.
+pub fn create_setup_directories(db_path: &Path, user: &str) -> Result<()> {
+    let db_dir = db_path
+        .parent()
+        .unwrap_or_else(|| Path::new("/var/lib/betcode"));
+
+    for dir in &[db_dir, Path::new("/etc/betcode")] {
+        tracing::info!("creating directory: {}", dir.display());
+        fs::create_dir_all(dir).with_context(|| format!("failed to create {}", dir.display()))?;
+    }
+
+    run_cmd(
+        "setting ownership on data directory",
+        "chown",
+        &["-R", &format!("{user}:{user}"), &db_dir.to_string_lossy()],
+    )?;
+
+    run_cmd(
+        "setting ownership on /etc/betcode",
+        "chown",
+        &[&format!("root:{user}"), "/etc/betcode"],
+    )?;
+
+    Ok(())
+}
+
+/// Write an environment file only on fresh install (or if missing on update).
+///
+/// If `is_update` is true and the file already exists, it is preserved
+/// and the function returns `Ok(false)`. Otherwise the file is written
+/// and `Ok(true)` is returned.
+pub fn write_env_if_fresh(path: &str, content: &str, is_update: bool) -> Result<bool> {
+    if is_update && Path::new(path).exists() {
+        tracing::warn!("existing {path} preserved — to regenerate, delete it and re-run setup");
+        return Ok(false);
+    }
+
+    tracing::info!("writing environment file: {path}");
+    fs::write(path, content).context("failed to write environment file")?;
+    Ok(true)
 }
 
 /// Create the `betcode` system user if it does not already exist.
