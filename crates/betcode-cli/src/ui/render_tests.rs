@@ -553,7 +553,8 @@ mod tests {
 
     #[test]
     fn tool_result_message_skipped_in_render() {
-        // Verify that is_tool_result messages are not rendered (no panic, reduced line count)
+        // Verify that is_tool_result messages are hidden when detail panel is visible.
+        // When the detail panel is open, tool results are shown there instead.
         use betcode_proto::v1::agent_event::Event;
         let mut app = App::new();
 
@@ -581,14 +582,25 @@ mod tests {
             })),
         });
 
-        // We have 2 messages but the result should be skipped
+        // We have 2 messages but the result should be skipped when panel is open
         assert_eq!(app.messages.len(), 2);
         assert!(!app.messages[0].is_tool_result);
         assert!(app.messages[1].is_tool_result);
 
-        // Render should not panic and should only show 1 tool status line
+        // Without detail panel: both messages render (tool start + result = 3 lines with separator)
         draw_app(80, 24, &mut app);
-        assert_eq!(app.total_lines, 1, "Only tool start line should render");
+        assert_eq!(
+            app.total_lines, 3,
+            "Both tool messages render when panel is closed"
+        );
+
+        // With detail panel open: only tool start renders, result is hidden
+        app.detail_panel.visible = true;
+        draw_app(80, 24, &mut app);
+        assert_eq!(
+            app.total_lines, 1,
+            "Only tool start line should render when panel is open"
+        );
     }
 
     // -- Detail panel layout split tests --

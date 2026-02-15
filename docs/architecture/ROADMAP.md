@@ -187,18 +187,17 @@ list/get` commands.
 
 - **Direct LAN mode**: mDNS discovery, explicit config, mTLS reuse, automatic
   prefer LAN over relay.
-- **Flutter web**: PWA build, same codebase, gRPC-web transport.
 - **Push notifications**: drift schema exists (NotificationCache table) but not
   wired to FCM/APNs or agent events.
 - **Mutual TLS for daemons**: Server TLS exists but daemons authenticate via JWT,
   not client certificates. Certificates table exists in relay DB but unused for auth.
 - **Configurable buffer TTL/cap**: Message buffer uses fixed 1hr TTL with no
   per-machine capacity cap (roadmap specified 24h TTL, 1000 msg cap).
-- **CLI JSON output**: Headless mode outputs plain text only; no structured
-  JSON/stream-json output format.
 - **Opt-in metrics**: Not started.
 - **Session delete**: Flutter shows "coming soon" stub.
 - **GitLab write operations**: Currently read-only (no create/edit/approve MRs).
+- **CLI JSON output** (low priority for now): Headless mode outputs plain text
+  only; no structured JSON/stream-json output format.
 
 ---
 

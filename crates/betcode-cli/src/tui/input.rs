@@ -129,6 +129,26 @@ pub async fn handle_term_event(app: &mut App, tx: &mpsc::Sender<AgentRequest>, e
                 }
             }
         }
+        TermEvent::Mouse(mouse) => {
+            use crossterm::event::MouseEventKind;
+            match mouse.kind {
+                MouseEventKind::ScrollUp => {
+                    if app.detail_panel.visible {
+                        app.scroll_detail_panel(-3);
+                    } else {
+                        app.scroll_up(3);
+                    }
+                }
+                MouseEventKind::ScrollDown => {
+                    if app.detail_panel.visible {
+                        app.scroll_detail_panel(3);
+                    } else {
+                        app.scroll_down(3);
+                    }
+                }
+                _ => {}
+            }
+        }
         TermEvent::Resize(_, _) => { /* terminal auto-handles resize on next draw */ }
     }
 }

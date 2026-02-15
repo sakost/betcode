@@ -9,7 +9,7 @@ use unicode_width::UnicodeWidthStr;
 
 use super::detail_panel;
 use super::panels;
-use crate::app::{App, AppMode, MessageRole, ToolCallEntry, ToolCallStatus};
+use crate::app::{App, AppMode, DisplayMessage, MessageRole, ToolCallEntry, ToolCallStatus};
 
 /// Which panel to show at the bottom.
 enum BottomPanel {
@@ -197,22 +197,33 @@ fn draw_header(frame: &mut Frame<'_>, app: &App, area: Rect) {
     frame.render_widget(header, area);
 }
 
+/// Filter messages for display, optionally hiding tool result messages.
+///
+/// When `detail_panel_visible` is `true`, messages with `is_tool_result` set
+/// are excluded because the detail panel already provides the full tool output.
+/// Returns an iterator of `(original_index, &DisplayMessage)` so callers can
+/// still look up the corresponding [`ToolCallEntry`] by `message_index`.
+pub fn filter_visible_messages(
+    messages: &[DisplayMessage],
+    detail_panel_visible: bool,
+) -> impl Iterator<Item = (usize, &DisplayMessage)> {
+    messages
+        .iter()
+        .enumerate()
+        .filter(move |(_, m)| !(detail_panel_visible && m.is_tool_result))
+}
+
 #[allow(clippy::too_many_lines)]
 fn draw_messages(frame: &mut Frame<'_>, app: &mut App, area: Rect) {
     let mut lines: Vec<Line<'_>> = Vec::new();
-    let mut rendered_count = 0usize;
 
-    for (i, msg) in app.messages.iter().enumerate() {
-        // Skip tool result messages -- the Done/Error status line covers both
-        if msg.is_tool_result {
-            continue;
-        }
-
+    for (rendered_count, (i, msg)) in
+        filter_visible_messages(&app.messages, app.detail_panel.visible).enumerate()
+    {
         // Add empty line separator between rendered messages
         if rendered_count > 0 {
             lines.push(Line::from(""));
         }
-        rendered_count += 1;
 
         // For Tool role messages, look up the corresponding ToolCallEntry and
         // render with format_tool_status_line + color instead of raw text.
@@ -847,5 +858,85 @@ mod tests {
         // (pos 28 is the consumed space between "uvwxyz" and "abcdefghijk")
         let (row, col) = compute_wrapped_cursor(text, 29, 20);
         assert_eq!((row, col), (2, 0), "last word wraps to third line");
+    }
+
+    #[test]
+    fn tool_result_messages_hidden_when_detail_panel_open() {
+        let messages = vec![
+            DisplayMessage {
+                role: MessageRole::Assistant,
+                content: "Looking at it".into(),
+                streaming: false,
+                agent_label: None,
+                is_tool_result: false,
+            },
+            DisplayMessage {
+                role: MessageRole::Tool,
+                content: "[Tool: Read]".into(),
+                streaming: false,
+                agent_label: None,
+                is_tool_result: false,
+            },
+            DisplayMessage {
+                role: MessageRole::Tool,
+                content: "[Tool Result (OK): ...]".into(),
+                streaming: false,
+                agent_label: None,
+                is_tool_result: true,
+            },
+            DisplayMessage {
+                role: MessageRole::Assistant,
+                content: "Here's what I found".into(),
+                streaming: false,
+                agent_label: None,
+                is_tool_result: false,
+            },
+        ];
+
+        // When detail panel is open, tool result messages are hidden
+        let visible: Vec<_> = filter_visible_messages(&messages, true).collect();
+        assert_eq!(visible.len(), 3, "result message hidden when panel open");
+        // Verify the hidden message is the tool result (index 2)
+        assert!(
+            visible.iter().all(|(_, m)| !m.is_tool_result),
+            "no tool result messages in filtered output"
+        );
+
+        // When detail panel is closed, all messages are shown
+        let visible: Vec<_> = filter_visible_messages(&messages, false).collect();
+        assert_eq!(visible.len(), 4, "all shown when panel closed");
+    }
+
+    #[test]
+    fn filter_visible_messages_preserves_original_indices() {
+        let messages = vec![
+            DisplayMessage {
+                role: MessageRole::Assistant,
+                content: "msg0".into(),
+                streaming: false,
+                agent_label: None,
+                is_tool_result: false,
+            },
+            DisplayMessage {
+                role: MessageRole::Tool,
+                content: "result".into(),
+                streaming: false,
+                agent_label: None,
+                is_tool_result: true,
+            },
+            DisplayMessage {
+                role: MessageRole::Assistant,
+                content: "msg2".into(),
+                streaming: false,
+                agent_label: None,
+                is_tool_result: false,
+            },
+        ];
+
+        let visible: Vec<_> = filter_visible_messages(&messages, true).collect();
+        assert_eq!(visible.len(), 2);
+        // Original indices must be preserved for tool call lookup
+        assert_eq!(visible[0].0, 0, "first visible message keeps index 0");
+        assert_eq!(visible[1].0, 2, "second visible message keeps index 2");
     }
 }

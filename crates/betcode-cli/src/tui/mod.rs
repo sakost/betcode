@@ -45,6 +45,7 @@ pub struct ServiceCommandExec {
 /// Terminal events forwarded from the UI reader thread.
 pub enum TermEvent {
     Key(crossterm::event::KeyEvent),
+    Mouse(crossterm::event::MouseEvent),
     Resize(u16, u16),
 }
 
@@ -96,7 +97,11 @@ pub async fn run(
     // 2. Enter raw mode, create terminal
     enable_raw_mode()?;
     let mut stdout = io::stdout();
-    execute!(stdout, EnterAlternateScreen)?;
+    execute!(
+        stdout,
+        EnterAlternateScreen,
+        crossterm::event::EnableMouseCapture
+    )?;
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
@@ -120,6 +125,11 @@ pub async fn run(
                             continue;
                         }
                         if term_tx.blocking_send(TermEvent::Key(key)).is_err() {
+                            break;
+                        }
+                    }
+                    Ok(Event::Mouse(mouse)) => {
+                        if term_tx.blocking_send(TermEvent::Mouse(mouse)).is_err() {
                             break;
                         }
                     }
@@ -448,7 +458,11 @@ pub async fn run(
 
     // 9. Restore terminal first so the user gets their shell back immediately
     let _ = disable_raw_mode();
-    let _ = execute!(terminal.backend_mut(), LeaveAlternateScreen);
+    let _ = execute!(
+        terminal.backend_mut(),
+        crossterm::event::DisableMouseCapture,
+        LeaveAlternateScreen
+    );
     let _ = terminal.show_cursor();
 
     if let Err(ref e) = result {
