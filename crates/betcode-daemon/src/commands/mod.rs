@@ -5,10 +5,6 @@ use std::collections::HashMap;
 
 use betcode_core::commands::{CommandEntry, builtin_commands};
 
-/// Placeholder session ID used for daemon-wide plugin entries until
-/// `execute_reload_remote` receives proper session context.
-pub const DAEMON_PLUGIN_SESSION: &str = "__daemon_global__";
-
 /// Registry holding all available commands with a layered model.
 ///
 /// The base layer contains daemon-wide commands (builtins, Claude Code capabilities).
