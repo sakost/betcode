@@ -49,6 +49,55 @@ pub enum TermEvent {
     Resize(u16, u16),
 }
 
+/// Spawn a one-shot task that fetches the command registry from the daemon and
+/// sends the result through `tx`. Does nothing if `cmd_client` is `None`.
+fn spawn_registry_fetch(
+    cmd_client: Option<
+        betcode_proto::v1::command_service_client::CommandServiceClient<tonic::transport::Channel>,
+    >,
+    auth_token: Option<String>,
+    machine_id: Option<String>,
+    tx: tokio::sync::mpsc::Sender<Vec<CachedCommand>>,
+) {
+    let Some(mut client) = cmd_client else {
+        return;
+    };
+    tokio::spawn(async move {
+        let mut request = tonic::Request::new(betcode_proto::v1::GetCommandRegistryRequest {});
+        crate::connection::attach_relay_metadata(
+            &mut request,
+            auth_token.as_deref(),
+            machine_id.as_deref(),
+        );
+        match client.get_command_registry(request).await {
+            Ok(resp) => {
+                let cached: Vec<CachedCommand> = resp
+                    .into_inner()
+                    .commands
+                    .into_iter()
+                    .map(|c| {
+                        let category = betcode_proto::v1::CommandCategory::try_from(c.category)
+                            .map_or_else(|_| "Unknown".to_string(), |cat| format!("{cat:?}"));
+                        CachedCommand {
+                            name: c.name,
+                            description: c.description,
+                            category,
+                            source: c.source,
+                        }
+                    })
+                    .collect();
+                let _ = tx.send(cached).await;
+            }
+            Err(e) => {
+                tracing::warn!(
+                    ?e,
+                    "Could not fetch command registry, completions may be limited"
+                );
+            }
+        }
+    });
+}
+
 /// Run the interactive TUI mode.
 ///
 /// Establishes the gRPC stream, enters raw mode, spawns a dedicated terminal
@@ -175,48 +224,17 @@ pub async fn run(
 
     // 6. Fetch command registry in background (non-blocking so UI starts immediately)
     let (cmd_registry_tx, mut cmd_registry_rx) =
-        tokio::sync::mpsc::channel::<Vec<CachedCommand>>(1);
-    if let Some(mut cmd_client) = conn.command_service_client() {
-        let auth_token = conn.auth_token().cloned();
-        let machine_id = conn.machine_id().map(std::string::ToString::to_string);
-        tokio::spawn(async move {
-            let mut request = tonic::Request::new(betcode_proto::v1::GetCommandRegistryRequest {});
-            crate::connection::attach_relay_metadata(
-                &mut request,
-                auth_token.as_deref(),
-                machine_id.as_deref(),
-            );
-            match cmd_client.get_command_registry(request).await {
-                Ok(resp) => {
-                    let cached: Vec<CachedCommand> = resp
-                        .into_inner()
-                        .commands
-                        .into_iter()
-                        .map(|c| {
-                            let category =
-                                match betcode_proto::v1::CommandCategory::try_from(c.category) {
-                                    Ok(cat) => format!("{cat:?}"),
-                                    Err(_) => "Unknown".to_string(),
-                                };
-                            CachedCommand {
-                                name: c.name,
-                                description: c.description,
-                                category,
-                                source: c.source,
-                            }
-                        })
-                        .collect();
-                    let _ = cmd_registry_tx.send(cached).await;
-                }
-                Err(e) => {
-                    tracing::warn!(
-                        ?e,
-                        "Could not fetch command registry, completions may be limited"
-                    );
-                }
-            }
-        });
-    }
+        tokio::sync::mpsc::channel::<Vec<CachedCommand>>(4);
+    // Keep connection details for re-fetching the registry on SessionInfo events.
+    let registry_cmd_client = conn.command_service_client();
+    let registry_auth_token = conn.auth_token().cloned();
+    let registry_machine_id = conn.machine_id().map(std::string::ToString::to_string);
+    spawn_registry_fetch(
+        registry_cmd_client.clone(),
+        registry_auth_token.clone(),
+        registry_machine_id.clone(),
+        cmd_registry_tx.clone(),
+    );
 
     // 7. Spawn async completion fetcher task
     let (completion_req_tx, mut completion_req_rx) =
@@ -434,7 +452,23 @@ pub async fn run(
             }
             Some(grpc_result) = event_rx.recv() => {
                 match grpc_result {
-                    Ok(event) => app.handle_event(event),
+                    Ok(event) => {
+                        // Re-fetch the command registry when a SessionInfo event
+                        // arrives — MCP tools may have been merged into the
+                        // registry during session initialisation.
+                        if matches!(
+                            event.event,
+                            Some(betcode_proto::v1::agent_event::Event::SessionInfo(_))
+                        ) {
+                            spawn_registry_fetch(
+                                registry_cmd_client.clone(),
+                                registry_auth_token.clone(),
+                                registry_machine_id.clone(),
+                                cmd_registry_tx.clone(),
+                            );
+                        }
+                        app.handle_event(event);
+                    }
                     Err(e) => {
                         error!(?e, "Daemon stream error");
                         let msg = e.message();
