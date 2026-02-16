@@ -1110,7 +1110,9 @@ impl DaemonConnection {
             .as_mut()
             .ok_or(ConnectionError::NotConnected)?;
 
-        let mut request = tonic::Request::new(betcode_proto::v1::GetCommandRegistryRequest {});
+        let mut request = tonic::Request::new(betcode_proto::v1::GetCommandRegistryRequest {
+            session_id: String::new(),
+        });
         apply_relay_meta(&mut request, &auth_token, &machine_id);
         let response = client
             .get_command_registry(request)
@@ -1188,6 +1190,7 @@ impl DaemonConnection {
         let mut request = tonic::Request::new(ExecuteServiceCommandRequest {
             command: command.to_string(),
             args,
+            session_id: String::new(),
         });
         apply_relay_meta(&mut request, &auth_token, &machine_id);
         let response = client

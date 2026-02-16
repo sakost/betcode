@@ -66,7 +66,9 @@ async fn test_full_command_flow() {
 
     // Test 1: get_command_registry returns builtins + user commands
     let response = service
-        .get_command_registry(tonic::Request::new(GetCommandRegistryRequest {}))
+        .get_command_registry(tonic::Request::new(GetCommandRegistryRequest {
+            session_id: "test-session".to_string(),
+        }))
         .await
         .unwrap();
     let commands = response.into_inner().commands;
@@ -130,6 +132,7 @@ async fn test_full_command_flow() {
         .execute_service_command(tonic::Request::new(ExecuteServiceCommandRequest {
             command: "pwd".to_string(),
             args: vec![],
+            session_id: "test-session".to_string(),
         }))
         .await
         .unwrap();

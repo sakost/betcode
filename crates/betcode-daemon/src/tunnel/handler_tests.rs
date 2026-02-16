@@ -1783,7 +1783,9 @@ async fn get_command_registry_through_tunnel() {
         .with_command_service()
         .build()
         .await;
-    let req = GetCommandRegistryRequest {};
+    let req = GetCommandRegistryRequest {
+        session_id: "test-session".to_string(),
+    };
     let r = h
         .handle_frame(req_frame("cmd1", METHOD_GET_COMMAND_REGISTRY, encode(&req)))
         .await;
@@ -1850,7 +1852,9 @@ async fn list_path_through_tunnel() {
 #[tokio::test]
 async fn command_service_not_set_returns_error() {
     let HandlerTestOutput { handler: h, .. } = HandlerTestBuilder::new().build().await; // No command service set
-    let req = GetCommandRegistryRequest {};
+    let req = GetCommandRegistryRequest {
+        session_id: "test-session".to_string(),
+    };
     let r = h
         .handle_frame(req_frame(
             "cmd-err",
@@ -2107,6 +2111,7 @@ async fn execute_service_command_streams_output() {
     let req = ExecuteServiceCommandRequest {
         command: "pwd".into(),
         args: vec![],
+        session_id: "test-session".to_string(),
     };
     let result = h
         .handle_frame(req_frame(
@@ -2182,6 +2187,7 @@ async fn execute_service_command_not_set_sends_error() {
     let req = ExecuteServiceCommandRequest {
         command: "pwd".into(),
         args: vec![],
+        session_id: "test-session".to_string(),
     };
     let result = h
         .handle_frame(req_frame(

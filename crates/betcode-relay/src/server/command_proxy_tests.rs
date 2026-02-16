@@ -43,7 +43,12 @@ async fn get_command_registry_routes_to_machine() {
             }],
         },
     );
-    let req = make_request(GetCommandRegistryRequest {}, "m1");
+    let req = make_request(
+        GetCommandRegistryRequest {
+            session_id: "test-session".to_string(),
+        },
+        "m1",
+    );
     let resp = svc.get_command_registry(req).await.unwrap().into_inner();
     assert_eq!(resp.commands.len(), 1);
     assert_eq!(resp.commands[0].name, "test-cmd");
@@ -280,25 +285,49 @@ async fn disable_plugin_routes_to_machine() {
 #[tokio::test]
 async fn machine_offline_returns_unavailable() {
     let svc = setup_offline().await;
-    assert_offline_error!(svc, get_command_registry, GetCommandRegistryRequest {});
+    assert_offline_error!(
+        svc,
+        get_command_registry,
+        GetCommandRegistryRequest {
+            session_id: "test-session".to_string(),
+        }
+    );
 }
 
 #[tokio::test]
 async fn missing_machine_id_returns_invalid_argument() {
     let (svc, _router, _rx) = setup_with_machine("m1").await;
-    assert_no_machine_error!(svc, get_command_registry, GetCommandRegistryRequest {});
+    assert_no_machine_error!(
+        svc,
+        get_command_registry,
+        GetCommandRegistryRequest {
+            session_id: "test-session".to_string(),
+        }
+    );
 }
 
 #[tokio::test]
 async fn missing_claims_returns_internal() {
     let (svc, _router, _rx) = setup_with_machine("m1").await;
-    assert_no_claims_error!(svc, get_command_registry, GetCommandRegistryRequest {});
+    assert_no_claims_error!(
+        svc,
+        get_command_registry,
+        GetCommandRegistryRequest {
+            session_id: "test-session".to_string(),
+        }
+    );
 }
 
 #[tokio::test]
 async fn wrong_owner_returns_permission_denied() {
     let (svc, _router, _rx) = setup_with_machine("m1").await;
-    assert_wrong_owner_error!(svc, get_command_registry, GetCommandRegistryRequest {});
+    assert_wrong_owner_error!(
+        svc,
+        get_command_registry,
+        GetCommandRegistryRequest {
+            session_id: "test-session".to_string(),
+        }
+    );
 }
 
 #[tokio::test]
@@ -307,7 +336,9 @@ async fn daemon_error_propagated_to_client() {
     assert_daemon_error!(
         svc,
         get_command_registry,
-        GetCommandRegistryRequest {},
+        GetCommandRegistryRequest {
+            session_id: "test-session".to_string(),
+        },
         router,
         rx,
         "daemon error"
@@ -333,6 +364,7 @@ async fn execute_service_command_streams_output() {
         ExecuteServiceCommandRequest {
             command: "test-cmd".into(),
             args: vec![],
+            session_id: "test-session".to_string(),
         },
         "m1",
     );

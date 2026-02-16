@@ -74,7 +74,8 @@ impl ServiceExecutor {
         }
 
         // Re-discover plugin commands from ~/.claude/
-        registry.clear_plugin_sources();
+        // TODO: replace "daemon" placeholder with actual session_id once
+        // execute_reload_remote receives session context (next batch).
         let claude_dir = dirs::home_dir().map_or_else(
             || {
                 tracing::warn!(
@@ -86,9 +87,7 @@ impl ServiceExecutor {
         );
         let plugin_entries = betcode_core::commands::discover_plugin_entries(&claude_dir);
         let plugin_count = plugin_entries.len();
-        for entry in plugin_entries {
-            registry.add(entry);
-        }
+        registry.set_session_entries("daemon", plugin_entries);
 
         let mut msg = format!("Reloaded {count} commands, {plugin_count} plugin entries");
         if !result.warnings.is_empty() {

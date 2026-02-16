@@ -63,7 +63,9 @@ fn spawn_registry_fetch(
         return;
     };
     tokio::spawn(async move {
-        let mut request = tonic::Request::new(betcode_proto::v1::GetCommandRegistryRequest {});
+        let mut request = tonic::Request::new(betcode_proto::v1::GetCommandRegistryRequest {
+            session_id: String::new(),
+        });
         crate::connection::attach_relay_metadata(
             &mut request,
             auth_token.as_deref(),
@@ -389,6 +391,7 @@ pub async fn run(
                     tonic::Request::new(betcode_proto::v1::ExecuteServiceCommandRequest {
                         command: exec.command.clone(),
                         args: exec.args,
+                        session_id: String::new(),
                     });
                 crate::connection::attach_relay_metadata(
                     &mut request,

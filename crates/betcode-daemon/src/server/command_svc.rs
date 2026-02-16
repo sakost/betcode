@@ -486,6 +486,7 @@ mod tests {
         let request = tonic::Request::new(ExecuteServiceCommandRequest {
             command: command.to_string(),
             args,
+            session_id: "test-session".to_string(),
         });
         let response = svc.execute_service_command(request).await.unwrap();
         let mut stream = response.into_inner();
@@ -495,7 +496,9 @@ mod tests {
     #[tokio::test]
     async fn test_get_command_registry() {
         let service = create_test_service().await;
-        let request = tonic::Request::new(GetCommandRegistryRequest {});
+        let request = tonic::Request::new(GetCommandRegistryRequest {
+            session_id: "test-session".to_string(),
+        });
         let response = service.get_command_registry(request).await.unwrap();
         let entries = response.into_inner().commands;
         assert!(entries.iter().any(|e| e.name == "cd"));
@@ -568,6 +571,7 @@ mod tests {
         let request = tonic::Request::new(ExecuteServiceCommandRequest {
             command: "exit-daemon".to_string(),
             args: vec![],
+            session_id: "test-session".to_string(),
         });
         let response = service.execute_service_command(request).await.unwrap();
         let mut stream = response.into_inner();
