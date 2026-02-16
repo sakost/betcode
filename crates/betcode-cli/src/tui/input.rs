@@ -228,6 +228,8 @@ fn show_help(app: &mut App) {
     // Collect commands grouped by category
     let mut service_cmds = Vec::new();
     let mut cc_cmds = Vec::new();
+    let mut skill_cmds = Vec::new();
+    let mut mcp_cmds = Vec::new();
     let mut plugin_cmds = Vec::new();
 
     for cmd in app.command_cache.all() {
@@ -235,6 +237,8 @@ fn show_help(app: &mut App) {
         match cmd.category.as_str() {
             "Service" => service_cmds.push(entry),
             "ClaudeCode" => cc_cmds.push(entry),
+            "Skill" => skill_cmds.push(entry),
+            "Mcp" => mcp_cmds.push(entry),
             _ => plugin_cmds.push(entry),
         }
     }
@@ -255,6 +259,18 @@ fn show_help(app: &mut App) {
         lines.push(String::new());
         lines.push("Claude Code:".to_string());
         lines.extend(cc_cmds);
+    }
+
+    if !mcp_cmds.is_empty() {
+        lines.push(String::new());
+        lines.push("MCP Tools:".to_string());
+        lines.extend(mcp_cmds);
+    }
+
+    if !skill_cmds.is_empty() {
+        lines.push(String::new());
+        lines.push("Skills:".to_string());
+        lines.extend(skill_cmds);
     }
 
     if !plugin_cmds.is_empty() {
@@ -620,6 +636,103 @@ mod tests {
         handle_completion_key(&mut app, up_key());
         assert_eq!(app.completion_state.selected_index, 19);
         assert_eq!(app.completion_state.scroll_offset, 12); // 19+1-8=12
+    }
+
+    #[test]
+    fn help_shows_skill_and_mcp_sections() {
+        use crate::commands::cache::CachedCommand;
+
+        let mut app = App::new();
+        app.command_cache.load(vec![
+            CachedCommand {
+                name: "cd".to_string(),
+                description: "Change directory".to_string(),
+                category: "Service".to_string(),
+                source: "builtin".to_string(),
+            },
+            CachedCommand {
+                name: "compact".to_string(),
+                description: "Compact context".to_string(),
+                category: "ClaudeCode".to_string(),
+                source: "claude-code".to_string(),
+            },
+            CachedCommand {
+                name: "my-skill".to_string(),
+                description: "A skill command".to_string(),
+                category: "Skill".to_string(),
+                source: "skill".to_string(),
+            },
+            CachedCommand {
+                name: "mcp-tool".to_string(),
+                description: "An MCP tool".to_string(),
+                category: "Mcp".to_string(),
+                source: "mcp".to_string(),
+            },
+            CachedCommand {
+                name: "custom-plugin".to_string(),
+                description: "A plugin command".to_string(),
+                category: "Plugin".to_string(),
+                source: "plugin".to_string(),
+            },
+        ]);
+
+        show_help(&mut app);
+
+        // The last message should be the help output
+        let help_content = &app.messages.last().unwrap().content;
+
+        assert!(
+            help_content.contains("Service:"),
+            "Help should contain Service section"
+        );
+        assert!(
+            help_content.contains("Claude Code:"),
+            "Help should contain Claude Code section"
+        );
+        assert!(
+            help_content.contains("Skills:"),
+            "Help should contain Skills section"
+        );
+        assert!(
+            help_content.contains("MCP Tools:"),
+            "Help should contain MCP Tools section"
+        );
+        assert!(
+            help_content.contains("Plugins:"),
+            "Help should contain Plugins section"
+        );
+
+        // Verify commands appear under their correct sections
+        assert!(
+            help_content.contains("/my-skill"),
+            "Skills section should contain skill commands"
+        );
+        assert!(
+            help_content.contains("/mcp-tool"),
+            "MCP Tools section should contain MCP commands"
+        );
+        assert!(
+            help_content.contains("/custom-plugin"),
+            "Plugins section should contain plugin commands"
+        );
+    }
+
+    #[test]
+    fn help_omits_empty_skill_and_mcp_sections() {
+        let mut app = App::new();
+        // No commands loaded — all sections should be absent
+        show_help(&mut app);
+
+        let help_content = &app.messages.last().unwrap().content;
+
+        assert!(
+            !help_content.contains("Skills:"),
+            "Skills section should be omitted when no skill commands exist"
+        );
+        assert!(
+            !help_content.contains("MCP Tools:"),
+            "MCP Tools section should be omitted when no MCP commands exist"
+        );
     }
 
     #[tokio::test]
