@@ -141,7 +141,11 @@ async fn handle_start(
         "Starting conversation"
     );
 
-    let sid = start.session_id.clone();
+    let sid = if start.session_id.is_empty() {
+        uuid::Uuid::new_v4().to_string()
+    } else {
+        start.session_id.clone()
+    };
     let model = if start.model.is_empty() {
         "claude-sonnet-4".to_string()
     } else {

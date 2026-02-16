@@ -1098,7 +1098,11 @@ impl TunnelRequestHandler {
             return;
         };
 
-        let sid = start_conv.session_id.clone();
+        let sid = if start_conv.session_id.is_empty() {
+            uuid::Uuid::new_v4().to_string()
+        } else {
+            start_conv.session_id.clone()
+        };
         // Only pass a model to the subprocess if the client explicitly requests one.
         // When None, Claude Code uses its own default based on the user's API key.
         let model = if start_conv.model.is_empty() {
