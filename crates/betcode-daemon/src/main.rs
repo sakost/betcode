@@ -171,47 +171,33 @@ async fn main() -> anyhow::Result<()> {
 
     // Serve until shutdown signal
     #[cfg(unix)]
-    {
-        let mut sigterm =
-            tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
+    let mut sigterm = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
 
-        // Notify systemd that the daemon is ready to serve.
-        // The `true` parameter unsets $NOTIFY_SOCKET so child processes
-        // (Claude Code subprocesses) don't accidentally notify systemd.
-        sd_notify::notify(true, &[sd_notify::NotifyState::Ready])?;
+    // Notify systemd that the daemon is ready to serve (unix only).
+    // The `true` parameter unsets $NOTIFY_SOCKET so child processes
+    // (Claude Code subprocesses) don't accidentally notify systemd.
+    #[cfg(unix)]
+    sd_notify::notify(true, &[sd_notify::NotifyState::Ready])?;
 
-        info!(addr = %args.addr, "gRPC server ready");
-
-        tokio::select! {
-            result = server.serve_tcp(args.addr) => {
-                result?;
-            }
-            _ = tokio::signal::ctrl_c() => {
-                info!("Received Ctrl+C shutdown signal");
-            }
-            _ = sigterm.recv() => {
-                info!("Received SIGTERM shutdown signal");
-            }
-            _ = daemon_shutdown_rx.changed() => {
-                info!("Daemon shutdown requested via exit-daemon command");
-            }
-        }
-    }
-
+    #[cfg(unix)]
+    let sigterm_future = sigterm.recv();
     #[cfg(not(unix))]
-    {
-        info!(addr = %args.addr, "gRPC server ready");
+    let sigterm_future = std::future::pending::<Option<()>>();
 
-        tokio::select! {
-            result = server.serve_tcp(args.addr) => {
-                result?;
-            }
-            _ = tokio::signal::ctrl_c() => {
-                info!("Received Ctrl+C shutdown signal");
-            }
-            _ = daemon_shutdown_rx.changed() => {
-                info!("Daemon shutdown requested via exit-daemon command");
-            }
+    info!(addr = %args.addr, "gRPC server ready");
+
+    tokio::select! {
+        result = server.serve_tcp(args.addr) => {
+            result?;
+        }
+        _ = tokio::signal::ctrl_c() => {
+            info!("Received Ctrl+C shutdown signal");
+        }
+        _ = sigterm_future => {
+            info!("Received SIGTERM shutdown signal");
+        }
+        _ = daemon_shutdown_rx.changed() => {
+            info!("Daemon shutdown requested via exit-daemon command");
         }
     }
 

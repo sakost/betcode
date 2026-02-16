@@ -28,6 +28,16 @@ async fn setup_user_and_machine(db: &RelayDatabase) {
     create_test_machine(db, "m1", "laptop").await;
 }
 
+/// Create test DB with user "u1" and two tokens "t1", "t2" expiring in 1 hour.
+async fn setup_two_tokens() -> (RelayDatabase, i64) {
+    let db = test_db().await;
+    create_test_user(&db).await;
+    let future = unix_timestamp() + 3600;
+    db.create_token("t1", "u1", "hash1", future).await.unwrap();
+    db.create_token("t2", "u1", "hash2", future).await.unwrap();
+    (db, future)
+}
+
 // === User tests ===
 
 #[tokio::test]
@@ -112,12 +122,7 @@ async fn revoke_token() {
 
 #[tokio::test]
 async fn rotate_token_sets_rotated_at_and_successor() {
-    let db = test_db().await;
-    create_test_user(&db).await;
-
-    let future = unix_timestamp() + 3600;
-    db.create_token("t1", "u1", "hash1", future).await.unwrap();
-    db.create_token("t2", "u1", "hash2", future).await.unwrap();
+    let (db, _future) = setup_two_tokens().await;
 
     let now = unix_timestamp();
     assert!(db.rotate_token("t1", "t2").await.unwrap());
@@ -132,12 +137,7 @@ async fn rotate_token_sets_rotated_at_and_successor() {
 
 #[tokio::test]
 async fn rotate_token_preserves_original_rotated_at() {
-    let db = test_db().await;
-    create_test_user(&db).await;
-
-    let future = unix_timestamp() + 3600;
-    db.create_token("t1", "u1", "hash1", future).await.unwrap();
-    db.create_token("t2", "u1", "hash2", future).await.unwrap();
+    let (db, future) = setup_two_tokens().await;
     db.create_token("t3", "u1", "hash3", future).await.unwrap();
 
     // First rotation
@@ -157,12 +157,7 @@ async fn rotate_token_preserves_original_rotated_at() {
 
 #[tokio::test]
 async fn rotate_token_noop_on_revoked_token() {
-    let db = test_db().await;
-    create_test_user(&db).await;
-
-    let future = unix_timestamp() + 3600;
-    db.create_token("t1", "u1", "hash1", future).await.unwrap();
-    db.create_token("t2", "u1", "hash2", future).await.unwrap();
+    let (db, _future) = setup_two_tokens().await;
 
     // Hard-revoke first
     assert!(db.revoke_token("t1").await.unwrap());
@@ -193,12 +188,7 @@ async fn get_token_by_hash_returns_active_token() {
 
 #[tokio::test]
 async fn get_token_by_hash_returns_recently_rotated() {
-    let db = test_db().await;
-    create_test_user(&db).await;
-
-    let future = unix_timestamp() + 3600;
-    db.create_token("t1", "u1", "hash1", future).await.unwrap();
-    db.create_token("t2", "u1", "hash2", future).await.unwrap();
+    let (db, _future) = setup_two_tokens().await;
 
     // Rotate t1 → t2 (rotated_at = now)
     db.rotate_token("t1", "t2").await.unwrap();
@@ -211,12 +201,7 @@ async fn get_token_by_hash_returns_recently_rotated() {
 
 #[tokio::test]
 async fn get_token_by_hash_excludes_old_rotated() {
-    let db = test_db().await;
-    create_test_user(&db).await;
-
-    let future = unix_timestamp() + 3600;
-    db.create_token("t1", "u1", "hash1", future).await.unwrap();
-    db.create_token("t2", "u1", "hash2", future).await.unwrap();
+    let (db, _future) = setup_two_tokens().await;
 
     // Rotate t1, then manually backdate rotated_at to simulate expired grace
     db.rotate_token("t1", "t2").await.unwrap();

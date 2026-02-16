@@ -13,23 +13,25 @@ use crate::server::test_helpers::{
     test_claims, test_claims_u2, test_db_with_owner, test_db_with_two_users,
 };
 use crate::server::tunnel_svc::TunnelServiceImpl;
+use crate::storage::RelayDatabase;
 
-/// Build a `TunnelServiceImpl` backed by an in-memory DB that already
-/// contains user "u1" (alice) and machine "m1" owned by "u1".
-async fn setup() -> TunnelServiceImpl {
-    let db = test_db_with_owner().await;
+/// Build a `TunnelServiceImpl` from the given database.
+fn build_service(db: RelayDatabase) -> TunnelServiceImpl {
     let registry = Arc::new(ConnectionRegistry::new());
     let buffer = Arc::new(BufferManager::new(db.clone(), Arc::clone(&registry)));
     TunnelServiceImpl::new(registry, db, buffer)
 }
 
+/// Build a `TunnelServiceImpl` backed by an in-memory DB that already
+/// contains user "u1" (alice) and machine "m1" owned by "u1".
+async fn setup() -> TunnelServiceImpl {
+    build_service(test_db_with_owner().await)
+}
+
 /// Build a `TunnelServiceImpl` backed by an in-memory DB that also contains
 /// a second user "u2" (eve) who does NOT own machine "m1".
 async fn setup_with_second_user() -> TunnelServiceImpl {
-    let db = test_db_with_two_users().await;
-    let registry = Arc::new(ConnectionRegistry::new());
-    let buffer = Arc::new(BufferManager::new(db.clone(), Arc::clone(&registry)));
-    TunnelServiceImpl::new(registry, db, buffer)
+    build_service(test_db_with_two_users().await)
 }
 
 /// Attach `test_claims()` (sub = "u1") to a request.

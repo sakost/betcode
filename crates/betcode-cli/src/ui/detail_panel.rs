@@ -41,6 +41,25 @@ pub fn format_status_line(status: ToolCallStatus, duration_ms: Option<u32>) -> S
     }
 }
 
+/// Render a scrollable paragraph with a bordered, titled block.
+fn render_scrollable_paragraph(
+    frame: &mut Frame<'_>,
+    area: Rect,
+    lines: Vec<Line<'_>>,
+    title: &str,
+    scroll_offset: u16,
+) {
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title(title)
+        .title_style(Style::default().fg(Color::Yellow));
+    let para = Paragraph::new(lines)
+        .block(block)
+        .wrap(Wrap { trim: false })
+        .scroll((scroll_offset, 0));
+    frame.render_widget(para, area);
+}
+
 /// Render the detail panel showing the selected tool call's full information.
 ///
 /// If no tool call is selected, displays a placeholder message with navigation hints.
@@ -67,16 +86,13 @@ pub fn draw_detail_panel(frame: &mut Frame<'_>, app: &App, area: Rect) {
                 let owned: String = line.to_owned();
                 lines.push(Line::from(owned));
             }
-            let block = Block::default()
-                .borders(Borders::ALL)
-                .title("Compaction Summary")
-                .title_style(Style::default().fg(Color::Yellow));
-            let scroll = app.detail_panel.scroll_offset;
-            let para = Paragraph::new(lines)
-                .block(block)
-                .wrap(Wrap { trim: false })
-                .scroll((scroll, 0));
-            frame.render_widget(para, area);
+            render_scrollable_paragraph(
+                frame,
+                area,
+                lines,
+                "Compaction Summary",
+                app.detail_panel.scroll_offset,
+            );
             return;
         }
 
@@ -115,18 +131,7 @@ pub fn draw_detail_panel(frame: &mut Frame<'_>, app: &App, area: Rect) {
         )));
     }
 
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .title(title)
-        .title_style(Style::default().fg(Color::Yellow));
-
-    let scroll = app.detail_panel.scroll_offset;
-    let para = Paragraph::new(lines)
-        .block(block)
-        .wrap(Wrap { trim: false })
-        .scroll((scroll, 0));
-
-    frame.render_widget(para, area);
+    render_scrollable_paragraph(frame, area, lines, &title, app.detail_panel.scroll_offset);
 }
 
 #[cfg(test)]
