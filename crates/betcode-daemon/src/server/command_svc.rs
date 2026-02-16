@@ -72,6 +72,7 @@ impl CommandService for CommandServiceImpl {
     #[allow(clippy::significant_drop_tightening)]
     async fn get_command_registry(
         &self,
+        // TODO(Task 6): use session_id with get_for_session() instead of get_all()
         _request: Request<GetCommandRegistryRequest>,
     ) -> Result<Response<GetCommandRegistryResponse>, Status> {
         let registry = self.registry.read().await;

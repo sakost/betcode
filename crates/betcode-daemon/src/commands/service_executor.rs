@@ -87,7 +87,7 @@ impl ServiceExecutor {
         );
         let plugin_entries = betcode_core::commands::discover_plugin_entries(&claude_dir);
         let plugin_count = plugin_entries.len();
-        registry.set_session_entries("daemon", plugin_entries);
+        registry.set_session_entries(super::DAEMON_PLUGIN_SESSION, plugin_entries);
 
         let mut msg = format!("Reloaded {count} commands, {plugin_count} plugin entries");
         if !result.warnings.is_empty() {

@@ -64,6 +64,7 @@ fn spawn_registry_fetch(
     };
     tokio::spawn(async move {
         let mut request = tonic::Request::new(betcode_proto::v1::GetCommandRegistryRequest {
+            // TODO(Task 7): pass actual session_id from app state
             session_id: String::new(),
         });
         crate::connection::attach_relay_metadata(
@@ -391,6 +392,7 @@ pub async fn run(
                     tonic::Request::new(betcode_proto::v1::ExecuteServiceCommandRequest {
                         command: exec.command.clone(),
                         args: exec.args,
+                        // TODO(Task 7): pass actual session_id from app state
                         session_id: String::new(),
                     });
                 crate::connection::attach_relay_metadata(

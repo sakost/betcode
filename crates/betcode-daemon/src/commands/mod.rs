@@ -5,6 +5,10 @@ use std::collections::HashMap;
 
 use betcode_core::commands::{CommandEntry, builtin_commands};
 
+/// Placeholder session ID used for daemon-wide plugin entries until
+/// `execute_reload_remote` receives proper session context.
+pub const DAEMON_PLUGIN_SESSION: &str = "__daemon_global__";
+
 /// Registry holding all available commands with a layered model.
 ///
 /// The base layer contains daemon-wide commands (builtins, Claude Code capabilities).
@@ -52,10 +56,12 @@ impl CommandRegistry {
         max_results: usize,
     ) -> Vec<CommandEntry> {
         let query_lower = query.to_lowercase();
-        self.get_for_session(session_id)
-            .into_iter()
+        self.base_entries
+            .iter()
+            .chain(self.session_layers.get(session_id).into_iter().flatten())
             .filter(|e| e.name.to_lowercase().contains(&query_lower))
             .take(max_results)
+            .cloned()
             .collect()
     }
 
@@ -223,7 +229,7 @@ mod tests {
 
         registry.set_session_entries("s1", vec![make_entry("my-mcp-tool", "mcp-server")]);
 
-        // Should find base "pwd" and session "my-mcp-tool" matching "m"
+        // Should find session "my-mcp-tool" matching "mcp"
         let results = registry.search_for_session("s1", "mcp", 10);
         assert!(results.iter().any(|e| e.name == "my-mcp-tool"));
 
