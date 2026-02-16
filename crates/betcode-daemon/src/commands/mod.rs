@@ -32,11 +32,11 @@ impl CommandRegistry {
 
     /// Return base entries merged with session-specific entries.
     pub fn get_for_session(&self, session_id: &str) -> Vec<CommandEntry> {
-        let mut entries = self.base_entries.clone();
-        if let Some(session_entries) = self.session_layers.get(session_id) {
-            entries.extend(session_entries.iter().cloned());
-        }
-        entries
+        self.base_entries
+            .iter()
+            .chain(self.session_layers.get(session_id).into_iter().flatten())
+            .cloned()
+            .collect()
     }
 
     /// Return a clone of all base entries (no session layer).

@@ -193,7 +193,7 @@ impl CommandService for CommandServiceImpl {
                     let exec = executor.read().await;
                     let cwd = exec.cwd().to_path_buf();
                     let mut reg = registry.write().await;
-                    let cmd_msg = match exec.execute_reload_remote(&mut reg, &session_id) {
+                    let cmd_msg = match exec.execute_reload_remote(&mut reg, &session_id).await {
                         Ok(msg) => msg,
                         Err(e) => {
                             let _ = tx.send(Ok(error_output(&e.to_string()))).await;

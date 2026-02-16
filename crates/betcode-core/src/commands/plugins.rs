@@ -2,6 +2,8 @@
 
 use std::path::Path;
 
+use tracing::debug;
+
 use super::{CommandCategory, CommandEntry, ExecutionMode};
 
 /// Discovers skills and commands from all enabled plugins.
@@ -92,6 +94,7 @@ fn read_enabled_plugins(claude_dir: &Path) -> Vec<String> {
         return Vec::new();
     };
     let Ok(json) = serde_json::from_str::<serde_json::Value>(&content) else {
+        debug!(path = %settings_path.display(), "Failed to parse settings.json as JSON");
         return Vec::new();
     };
 
@@ -113,6 +116,7 @@ fn read_installed_plugins(claude_dir: &Path) -> Vec<(String, std::path::PathBuf)
         return Vec::new();
     };
     let Ok(json) = serde_json::from_str::<serde_json::Value>(&content) else {
+        debug!(path = %installed_path.display(), "Failed to parse installed_plugins.json as JSON");
         return Vec::new();
     };
 

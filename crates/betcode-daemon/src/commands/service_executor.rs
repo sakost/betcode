@@ -61,7 +61,7 @@ impl ServiceExecutor {
     /// Clears existing CC-sourced and plugin commands, re-runs discovery, and adds
     /// the fresh commands back into the registry. Plugin entries are scoped to the
     /// given `session_id`.
-    pub fn execute_reload_remote(
+    pub async fn execute_reload_remote(
         &self,
         registry: &mut CommandRegistry,
         session_id: &str,
@@ -80,7 +80,14 @@ impl ServiceExecutor {
 
         // Re-discover plugin commands from the session's working directory
         let claude_dir = self.cwd.join(".claude");
-        let plugin_entries = betcode_core::commands::discover_plugin_entries(&claude_dir);
+        let plugin_entries = tokio::task::spawn_blocking(move || {
+            betcode_core::commands::discover_plugin_entries(&claude_dir)
+        })
+        .await
+        .unwrap_or_else(|err| {
+            tracing::warn!(error = %err, "Plugin discovery task failed");
+            Vec::new()
+        });
         let plugin_count = plugin_entries.len();
         registry.update_session_plugin_entries(session_id, plugin_entries);
 
@@ -196,8 +203,8 @@ mod tests {
         assert!(found_hello);
     }
 
-    #[test]
-    fn test_execute_reload_remote() {
+    #[tokio::test]
+    async fn test_execute_reload_remote() {
         let dir = TempDir::new().unwrap();
         // Create a user command file to be discovered
         let commands_dir = dir.path().join(".claude").join("commands");
@@ -209,6 +216,7 @@ mod tests {
 
         let msg = executor
             .execute_reload_remote(&mut registry, "test-session")
+            .await
             .unwrap();
         assert!(msg.contains("Reloaded"));
 

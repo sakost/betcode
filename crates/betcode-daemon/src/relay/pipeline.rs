@@ -403,8 +403,14 @@ fn spawn_stdout_pipeline(ctx: StdoutPipelineContext) {
                 // Discover plugins/skills from the session's cwd
                 if let Some(info) = bridge.session_info() {
                     let claude_dir = std::path::Path::new(&info.working_directory).join(".claude");
-                    let plugin_entries =
-                        betcode_core::commands::discover_plugin_entries(&claude_dir);
+                    let plugin_entries = tokio::task::spawn_blocking(move || {
+                        betcode_core::commands::discover_plugin_entries(&claude_dir)
+                    })
+                    .await
+                    .unwrap_or_else(|err| {
+                        warn!(error = %err, "Plugin discovery task failed");
+                        Vec::new()
+                    });
                     session_entries.extend(plugin_entries);
                 }
 
