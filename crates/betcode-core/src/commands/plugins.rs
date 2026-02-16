@@ -65,7 +65,7 @@ pub fn discover_plugin_entries(claude_dir: &Path) -> Vec<CommandEntry> {
                         CommandEntry::new(
                             &full_name,
                             &format!("Plugin command: {cmd_name}"),
-                            CommandCategory::ClaudeCode,
+                            CommandCategory::Plugin,
                             ExecutionMode::Passthrough,
                             plugin_id,
                         )
@@ -233,7 +233,7 @@ mod tests {
         let entries = discover_plugin_entries(dir.path());
         let cmd_entries: Vec<_> = entries
             .iter()
-            .filter(|e| e.category == CommandCategory::ClaudeCode)
+            .filter(|e| e.category == CommandCategory::Plugin)
             .collect();
 
         assert_eq!(cmd_entries.len(), 1);
@@ -255,6 +255,24 @@ mod tests {
     #[allow(clippy::unwrap_used)]
     fn test_handles_missing_files_gracefully() {
         let dir = TempDir::new().unwrap();
+        let entries = discover_plugin_entries(dir.path());
+        assert!(entries.is_empty());
+    }
+
+    #[test]
+    #[allow(clippy::unwrap_used)]
+    fn test_handles_malformed_json_gracefully() {
+        let dir = TempDir::new().unwrap();
+        fs::write(dir.path().join("settings.json"), "not valid json{{{").unwrap();
+        let entries = discover_plugin_entries(dir.path());
+        assert!(entries.is_empty());
+    }
+
+    #[test]
+    #[allow(clippy::unwrap_used)]
+    fn test_handles_missing_enabled_plugins_key() {
+        let dir = TempDir::new().unwrap();
+        fs::write(dir.path().join("settings.json"), r#"{"other": "data"}"#).unwrap();
         let entries = discover_plugin_entries(dir.path());
         assert!(entries.is_empty());
     }

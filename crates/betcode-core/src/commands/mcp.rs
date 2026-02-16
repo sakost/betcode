@@ -98,4 +98,12 @@ mod tests {
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].name, "server:tool");
     }
+
+    #[test]
+    fn test_nested_double_underscores_in_tool_name() {
+        let tools = vec![make_tool("mcp__server__sub__command", Some("Nested"))];
+        let entries = mcp_tools_to_entries(&tools);
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].name, "server:sub__command");
+    }
 }
