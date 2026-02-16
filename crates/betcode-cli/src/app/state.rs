@@ -163,8 +163,6 @@ pub enum ClientCommand {
     Clear,
     /// /model <name> — update model in status bar.
     ModelSwitch(String),
-    /// /fast — toggle fast mode indicator.
-    FastToggle,
 }
 
 /// TUI application state.
@@ -449,9 +447,6 @@ impl App {
             }
             ClientCommand::ModelSwitch(model) => {
                 self.model = model;
-            }
-            ClientCommand::FastToggle => {
-                // Toggle fast mode indicator — no-op for now
             }
         }
     }

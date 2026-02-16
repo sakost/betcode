@@ -390,6 +390,7 @@ fn spawn_stdout_pipeline(ctx: StdoutPipelineContext) {
                 bridge = EventBridge::with_start_sequence(latest_seq);
             }
 
+            // Capture the SystemInit flag before `convert` consumes `msg`.
             let is_system_init = matches!(msg, ndjson::Message::SystemInit(_));
             let events = bridge.convert(msg);
 

@@ -403,7 +403,6 @@ async fn handle_input_key(
                                 "model" => {
                                     args.first().map(|m| ClientCommand::ModelSwitch(m.clone()))
                                 }
-                                "fast" => Some(ClientCommand::FastToggle),
                                 _ => None,
                             };
                             app.pending_client_command = client_cmd;
