@@ -10,6 +10,7 @@
 pub mod commands;
 pub mod completion;
 pub mod gitlab;
+pub mod orchestration;
 pub mod permission;
 pub mod plugin;
 pub mod relay;
