@@ -20,6 +20,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         "betcode/v1/commands.proto",
         "betcode/v1/plugin.proto",
         "betcode/v1/notification.proto",
+        "betcode/v1/subagent.proto",
     ];
 
     let proto_paths: Vec<_> = protos.iter().map(|p| format!("{proto_root}/{p}")).collect();

@@ -163,3 +163,31 @@ pub const METHOD_GET_VERSION: &str = "VersionService/GetVersion";
 
 /// `VersionService/NegotiateCapabilities`
 pub const METHOD_NEGOTIATE_CAPABILITIES: &str = "VersionService/NegotiateCapabilities";
+
+// ---------------------------------------------------------------------------
+// SubagentService
+// ---------------------------------------------------------------------------
+
+/// `SubagentService/SpawnSubagent`
+pub const METHOD_SPAWN_SUBAGENT: &str = "SubagentService/SpawnSubagent";
+
+/// `SubagentService/WatchSubagent`
+pub const METHOD_WATCH_SUBAGENT: &str = "SubagentService/WatchSubagent";
+
+/// `SubagentService/SendToSubagent`
+pub const METHOD_SEND_TO_SUBAGENT: &str = "SubagentService/SendToSubagent";
+
+/// `SubagentService/CancelSubagent`
+pub const METHOD_CANCEL_SUBAGENT: &str = "SubagentService/CancelSubagent";
+
+/// `SubagentService/ListSubagents`
+pub const METHOD_LIST_SUBAGENTS: &str = "SubagentService/ListSubagents";
+
+/// `SubagentService/CreateOrchestration`
+pub const METHOD_CREATE_ORCHESTRATION: &str = "SubagentService/CreateOrchestration";
+
+/// `SubagentService/WatchOrchestration`
+pub const METHOD_WATCH_ORCHESTRATION: &str = "SubagentService/WatchOrchestration";
+
+/// `SubagentService/RevokeAutoApprove`
+pub const METHOD_REVOKE_AUTO_APPROVE: &str = "SubagentService/RevokeAutoApprove";
