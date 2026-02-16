@@ -368,8 +368,11 @@ async fn handle_input_key(
                             // Service commands (cd, pwd, exit-daemon, etc.)
                             // executed on the daemon via CommandService.
                             if let Some(cmd_tx) = &app.service_command_tx {
-                                let _ =
-                                    cmd_tx.try_send(super::ServiceCommandExec { command, args });
+                                let _ = cmd_tx.try_send(super::ServiceCommandExec {
+                                    command,
+                                    args,
+                                    session_id: app.session_id.clone().unwrap_or_default(),
+                                });
                             }
                         }
                         _ => {

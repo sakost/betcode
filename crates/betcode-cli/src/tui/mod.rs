@@ -40,6 +40,7 @@ struct CompletionResponse {
 pub struct ServiceCommandExec {
     pub command: String,
     pub args: Vec<String>,
+    pub session_id: String,
 }
 
 /// Terminal events forwarded from the UI reader thread.
@@ -57,6 +58,7 @@ fn spawn_registry_fetch(
     >,
     auth_token: Option<String>,
     machine_id: Option<String>,
+    session_id: Option<String>,
     tx: tokio::sync::mpsc::Sender<Vec<CachedCommand>>,
 ) {
     let Some(mut client) = cmd_client else {
@@ -64,8 +66,7 @@ fn spawn_registry_fetch(
     };
     tokio::spawn(async move {
         let mut request = tonic::Request::new(betcode_proto::v1::GetCommandRegistryRequest {
-            // TODO(Task 7): pass actual session_id from app state
-            session_id: String::new(),
+            session_id: session_id.unwrap_or_default(),
         });
         crate::connection::attach_relay_metadata(
             &mut request,
@@ -236,6 +237,7 @@ pub async fn run(
         registry_cmd_client.clone(),
         registry_auth_token.clone(),
         registry_machine_id.clone(),
+        Some(sid.clone()),
         cmd_registry_tx.clone(),
     );
 
@@ -392,8 +394,7 @@ pub async fn run(
                     tonic::Request::new(betcode_proto::v1::ExecuteServiceCommandRequest {
                         command: exec.command.clone(),
                         args: exec.args,
-                        // TODO(Task 7): pass actual session_id from app state
-                        session_id: String::new(),
+                        session_id: exec.session_id,
                     });
                 crate::connection::attach_relay_metadata(
                     &mut request,
@@ -469,6 +470,7 @@ pub async fn run(
                                 registry_cmd_client.clone(),
                                 registry_auth_token.clone(),
                                 registry_machine_id.clone(),
+                                app.session_id.clone(),
                                 cmd_registry_tx.clone(),
                             );
                         }

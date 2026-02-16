@@ -1102,6 +1102,7 @@ impl DaemonConnection {
     /// Fetch the full command registry from the daemon.
     pub async fn get_command_registry(
         &mut self,
+        session_id: &str,
     ) -> Result<GetCommandRegistryResponse, ConnectionError> {
         let auth_token = self.config.auth_token.clone();
         let machine_id = self.config.machine_id.clone();
@@ -1111,8 +1112,7 @@ impl DaemonConnection {
             .ok_or(ConnectionError::NotConnected)?;
 
         let mut request = tonic::Request::new(betcode_proto::v1::GetCommandRegistryRequest {
-            // TODO(Task 7): pass actual session_id from app state
-            session_id: String::new(),
+            session_id: session_id.to_string(),
         });
         apply_relay_meta(&mut request, &auth_token, &machine_id);
         let response = client
@@ -1180,6 +1180,7 @@ impl DaemonConnection {
         &mut self,
         command: &str,
         args: Vec<String>,
+        session_id: &str,
     ) -> Result<tonic::Streaming<ServiceCommandOutput>, ConnectionError> {
         let auth_token = self.config.auth_token.clone();
         let machine_id = self.config.machine_id.clone();
@@ -1191,8 +1192,7 @@ impl DaemonConnection {
         let mut request = tonic::Request::new(ExecuteServiceCommandRequest {
             command: command.to_string(),
             args,
-            // TODO(Task 7): pass actual session_id from app state
-            session_id: String::new(),
+            session_id: session_id.to_string(),
         });
         apply_relay_meta(&mut request, &auth_token, &machine_id);
         let response = client
