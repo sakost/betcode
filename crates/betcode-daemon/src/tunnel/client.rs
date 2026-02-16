@@ -25,7 +25,7 @@ use super::handler::TunnelRequestHandler;
 use crate::relay::SessionRelay;
 use crate::server::{
     CommandServiceImpl, ConfigServiceImpl, GitLabServiceImpl, GitRepoServiceImpl,
-    VersionServiceImpl, WorktreeServiceImpl,
+    SubagentServiceImpl, VersionServiceImpl, WorktreeServiceImpl,
 };
 use crate::session::SessionMultiplexer;
 use crate::storage::Database;
@@ -50,6 +50,8 @@ pub struct TunnelClient {
     config_service: Option<Arc<ConfigServiceImpl>>,
     /// Optional `VersionServiceImpl` for handling version RPCs through the tunnel.
     version_service: Option<Arc<VersionServiceImpl>>,
+    /// Optional `SubagentServiceImpl` for handling subagent RPCs through the tunnel.
+    subagent_service: Option<Arc<SubagentServiceImpl>>,
 }
 
 impl TunnelClient {
@@ -76,6 +78,7 @@ impl TunnelClient {
             worktree_service: None,
             config_service: None,
             version_service: None,
+            subagent_service: None,
         })
     }
 
@@ -107,6 +110,11 @@ impl TunnelClient {
     /// Set the `VersionService` implementation for handling version RPCs through the tunnel.
     pub fn set_version_service(&mut self, service: Arc<VersionServiceImpl>) {
         self.version_service = Some(service);
+    }
+
+    /// Set the `SubagentService` implementation for handling subagent RPCs through the tunnel.
+    pub fn set_subagent_service(&mut self, service: Arc<SubagentServiceImpl>) {
+        self.subagent_service = Some(service);
     }
 
     /// Apply mTLS client identity to the TLS config if cert paths are configured
@@ -292,6 +300,9 @@ impl TunnelClient {
         }
         if let Some(version_svc) = &self.version_service {
             handler.set_version_service(Arc::clone(version_svc));
+        }
+        if let Some(subagent_svc) = &self.subagent_service {
+            handler.set_subagent_service(Arc::clone(subagent_svc));
         }
         let handler = Arc::new(handler);
 

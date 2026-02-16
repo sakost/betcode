@@ -9,6 +9,7 @@ pub mod gitlab_proxy;
 pub mod grpc_util;
 pub mod interceptor;
 pub mod machine_svc;
+pub mod subagent_proxy;
 pub mod tunnel_svc;
 pub mod worktree_proxy;
 
@@ -30,5 +31,6 @@ pub use git_repo_proxy::GitRepoProxyService;
 pub use gitlab_proxy::GitLabProxyService;
 pub use interceptor::jwt_interceptor;
 pub use machine_svc::MachineServiceImpl;
+pub use subagent_proxy::SubagentProxyService;
 pub use tunnel_svc::TunnelServiceImpl;
 pub use worktree_proxy::WorktreeProxyService;

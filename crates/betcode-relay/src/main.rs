@@ -18,6 +18,7 @@ use betcode_proto::v1::config_service_server::ConfigServiceServer;
 use betcode_proto::v1::git_lab_service_server::GitLabServiceServer;
 use betcode_proto::v1::git_repo_service_server::GitRepoServiceServer;
 use betcode_proto::v1::machine_service_server::MachineServiceServer;
+use betcode_proto::v1::subagent_service_server::SubagentServiceServer;
 use betcode_proto::v1::tunnel_service_server::TunnelServiceServer;
 use betcode_proto::v1::worktree_service_server::WorktreeServiceServer;
 
@@ -27,8 +28,8 @@ use betcode_relay::registry::ConnectionRegistry;
 use betcode_relay::router::RequestRouter;
 use betcode_relay::server::{
     AgentProxyService, AuthServiceImpl, CommandProxyService, ConfigProxyService,
-    GitLabProxyService, GitRepoProxyService, MachineServiceImpl, TunnelServiceImpl,
-    WorktreeProxyService,
+    GitLabProxyService, GitRepoProxyService, MachineServiceImpl, SubagentProxyService,
+    TunnelServiceImpl, WorktreeProxyService,
 };
 use betcode_relay::storage::RelayDatabase;
 use betcode_relay::tls::TlsMode;
@@ -182,6 +183,7 @@ async fn main() -> anyhow::Result<()> {
     let git_repo_proxy = GitRepoProxyService::new(Arc::clone(&router), db.clone());
     let config_proxy = ConfigProxyService::new(Arc::clone(&router), db.clone());
     let gitlab_proxy = GitLabProxyService::new(Arc::clone(&router), db.clone());
+    let subagent_proxy = SubagentProxyService::new(Arc::clone(&router), db.clone());
 
     // Build notification service (only with push-notifications feature)
     #[cfg(feature = "push-notifications")]
@@ -294,6 +296,10 @@ async fn main() -> anyhow::Result<()> {
         ))
         .add_service(GitLabServiceServer::with_interceptor(
             gitlab_proxy,
+            jwt_check.clone(),
+        ))
+        .add_service(SubagentServiceServer::with_interceptor(
+            subagent_proxy,
             jwt_check.clone(),
         ));
 
