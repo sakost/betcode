@@ -312,6 +312,18 @@ mod tests {
     }
 
     #[test]
+    fn remove_session_is_idempotent() {
+        let mut registry = CommandRegistry::new();
+        let base_count = registry.get_all().len();
+
+        registry.set_session_entries("s1", vec![make_entry("tool-a", "src-a")]);
+        registry.remove_session("s1");
+        registry.remove_session("s1"); // second call is no-op
+
+        assert_eq!(registry.get_for_session("s1").len(), base_count);
+    }
+
+    #[test]
     fn search_for_session_searches_both_layers() {
         let mut registry = CommandRegistry::new();
 

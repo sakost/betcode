@@ -277,6 +277,16 @@ impl SessionRelay {
 
         match self.subprocess_manager.terminate(&process_id).await {
             Ok(()) => {
+                // Clean up session layer from command registry (defense-in-depth;
+                // the pipeline also cleans up, but this closes the timing gap).
+                {
+                    let mut registry = self.command_registry.write().await;
+                    registry.remove_session(session_id);
+                }
+                debug!(
+                    session_id,
+                    "Cleared command registry session layer on cancel"
+                );
                 self.sessions.write().await.remove(session_id);
                 // Update DB status so the pipeline cleanup doesn't override
                 if let Err(e) = self
