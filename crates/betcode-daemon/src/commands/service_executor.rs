@@ -75,9 +75,15 @@ impl ServiceExecutor {
 
         // Re-discover plugin commands from ~/.claude/
         registry.clear_plugin_sources();
-        let claude_dir = dirs::home_dir()
-            .map(|h| h.join(".claude"))
-            .unwrap_or_default();
+        let claude_dir = dirs::home_dir().map_or_else(
+            || {
+                tracing::warn!(
+                    "Could not determine home directory; plugin discovery will be skipped"
+                );
+                PathBuf::new()
+            },
+            |h| h.join(".claude"),
+        );
         let plugin_entries = betcode_core::commands::discover_plugin_entries(&claude_dir);
         let plugin_count = plugin_entries.len();
         for entry in plugin_entries {

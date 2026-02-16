@@ -1,7 +1,7 @@
 pub mod cc_discovery;
 pub mod service_executor;
 
-use betcode_core::commands::{CommandEntry, builtin_commands};
+use betcode_core::commands::{CommandCategory, CommandEntry, builtin_commands};
 
 /// Registry holding all available commands.
 pub struct CommandRegistry {
@@ -42,9 +42,11 @@ impl CommandRegistry {
         self.entries.retain(|e| e.source != source);
     }
 
-    /// Remove all entries originating from plugins (source contains `@`).
+    /// Remove all entries originating from plugins.
     pub fn clear_plugin_sources(&mut self) {
-        self.entries.retain(|e| !e.source.contains('@'));
+        self.entries.retain(|e| {
+            e.category != CommandCategory::Skill && e.category != CommandCategory::Plugin
+        });
     }
 }
 
@@ -95,5 +97,53 @@ mod tests {
         registry.clear_source("built-in");
         let after_clear = registry.get_all().len();
         assert_eq!(after_clear, 0);
+    }
+
+    #[test]
+    fn test_clear_plugin_sources_removes_skill_and_plugin_entries() {
+        let mut registry = CommandRegistry::new();
+
+        // Add entries with various categories
+        registry.add(CommandEntry::new(
+            "my-skill",
+            "A skill entry",
+            CommandCategory::Skill,
+            ExecutionMode::Passthrough,
+            "plugin@marketplace",
+        ));
+        registry.add(CommandEntry::new(
+            "my-plugin-cmd",
+            "A plugin command",
+            CommandCategory::Plugin,
+            ExecutionMode::Passthrough,
+            "plugin@marketplace",
+        ));
+        registry.add(CommandEntry::new(
+            "my-cc-cmd",
+            "A Claude Code command",
+            CommandCategory::ClaudeCode,
+            ExecutionMode::Passthrough,
+            "claude-code",
+        ));
+        registry.add(CommandEntry::new(
+            "my-service-cmd",
+            "A service command",
+            CommandCategory::Service,
+            ExecutionMode::Local,
+            "built-in",
+        ));
+
+        let before = registry.get_all().len();
+        registry.clear_plugin_sources();
+        let after = registry.get_all();
+
+        // Skill and Plugin entries should be removed
+        assert_eq!(after.len(), before - 2);
+        assert!(!after.iter().any(|e| e.name == "my-skill"));
+        assert!(!after.iter().any(|e| e.name == "my-plugin-cmd"));
+
+        // ClaudeCode and Service entries should remain
+        assert!(after.iter().any(|e| e.name == "my-cc-cmd"));
+        assert!(after.iter().any(|e| e.name == "my-service-cmd"));
     }
 }

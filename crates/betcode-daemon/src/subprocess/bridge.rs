@@ -445,7 +445,12 @@ fn truncate_str(s: &str, max: usize) -> String {
     if s.len() <= max {
         s.to_string()
     } else {
-        format!("{}...", &s[..max])
+        let boundary = s
+            .char_indices()
+            .take_while(|(i, _)| *i <= max)
+            .last()
+            .map_or(0, |(i, _)| i);
+        format!("{}...", &s[..boundary])
     }
 }
 
@@ -1046,5 +1051,71 @@ mod tests {
             &events[1].event,
             Some(proto::agent_event::Event::StatusChange(_))
         ));
+    }
+
+    #[test]
+    fn truncate_str_handles_multibyte_utf8() {
+        // ASCII
+        assert_eq!(truncate_str("hello world", 5), "hello...");
+        assert_eq!(truncate_str("short", 10), "short");
+        // Multi-byte: "café" is 5 bytes (c=1, a=1, f=1, é=2)
+        assert_eq!(truncate_str("café latte", 4), "caf...");
+        // Empty
+        assert_eq!(truncate_str("", 5), "");
+        // Exactly at boundary
+        assert_eq!(truncate_str("abc", 3), "abc");
+    }
+
+    #[test]
+    fn system_init_with_mcp_tools_populates_mcp_entries() {
+        use betcode_core::commands::CommandCategory;
+        use betcode_core::ndjson::ToolSchema;
+
+        let mut bridge = EventBridge::new();
+        let init = SystemInit {
+            session_id: "mcp-test".to_string(),
+            model: "claude-sonnet-4".to_string(),
+            cwd: "/tmp".into(),
+            tools: vec![
+                ToolSchema {
+                    name: "mcp__my-server__list_items".to_string(),
+                    description: Some("List all items".to_string()),
+                    input_schema: None,
+                },
+                ToolSchema {
+                    name: "mcp__my-server__get_item".to_string(),
+                    description: None,
+                    input_schema: None,
+                },
+                // Non-MCP tool -- should be ignored
+                ToolSchema {
+                    name: "Bash".to_string(),
+                    description: Some("Run bash commands".to_string()),
+                    input_schema: None,
+                },
+            ],
+            api_version: None,
+        };
+
+        let events = bridge.convert(Message::SystemInit(init));
+        assert_eq!(events.len(), 1, "system_init should produce one event");
+
+        let entries = bridge.mcp_entries();
+        assert_eq!(
+            entries.len(),
+            2,
+            "should have 2 MCP entries (Bash excluded)"
+        );
+
+        // First entry: my-server:list_items
+        assert_eq!(entries[0].name, "my-server:list_items");
+        assert_eq!(entries[0].category, CommandCategory::Mcp);
+        assert_eq!(entries[0].group.as_deref(), Some("my-server"));
+        assert_eq!(entries[0].description, "List all items");
+
+        // Second entry: my-server:get_item (no description -> fallback)
+        assert_eq!(entries[1].name, "my-server:get_item");
+        assert_eq!(entries[1].category, CommandCategory::Mcp);
+        assert_eq!(entries[1].group.as_deref(), Some("my-server"));
     }
 }
