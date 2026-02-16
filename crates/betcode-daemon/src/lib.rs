@@ -28,6 +28,9 @@ pub mod worktree;
 pub mod testutil {
     use std::sync::Arc;
 
+    use tokio::sync::RwLock;
+
+    use crate::commands::CommandRegistry;
     use crate::relay::SessionRelay;
     use crate::session::SessionMultiplexer;
     use crate::storage::Database;
@@ -50,10 +53,12 @@ pub mod testutil {
         let db = Database::open_in_memory().await.unwrap();
         let subprocess_mgr = Arc::new(SubprocessManager::new(5));
         let multiplexer = Arc::new(SessionMultiplexer::with_defaults());
+        let command_registry = Arc::new(RwLock::new(CommandRegistry::new()));
         let relay = Arc::new(SessionRelay::new(
             subprocess_mgr,
             Arc::clone(&multiplexer),
             db.clone(),
+            command_registry,
         ));
         TestComponents {
             db,

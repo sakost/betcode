@@ -38,6 +38,8 @@ async fn get_command_registry_routes_to_machine() {
                 execution_mode: 1, // EXECUTION_MODE_LOCAL
                 source: "test".into(),
                 args_schema: None,
+                group: String::new(),
+                display_name: String::new(),
             }],
         },
     );

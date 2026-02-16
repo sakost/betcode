@@ -1,4 +1,5 @@
 use super::*;
+use crate::commands::CommandRegistry;
 use crate::subprocess::SubprocessManager;
 
 // ---------------------------------------------------------------------------
@@ -83,7 +84,13 @@ impl HandlerTestBuilder {
         let db = Database::open_in_memory().await.unwrap();
         let sub = Arc::new(SubprocessManager::new(self.max_processes));
         let mux = Arc::new(SessionMultiplexer::with_defaults());
-        let relay = Arc::new(SessionRelay::new(sub, Arc::clone(&mux), db.clone()));
+        let command_registry = Arc::new(RwLock::new(CommandRegistry::new()));
+        let relay = Arc::new(SessionRelay::new(
+            sub,
+            Arc::clone(&mux),
+            db.clone(),
+            command_registry,
+        ));
         let (outbound_tx, outbound_rx) = mpsc::channel(128);
 
         let mut client_crypto = None;

@@ -41,6 +41,11 @@ impl CommandRegistry {
     pub fn clear_source(&mut self, source: &str) {
         self.entries.retain(|e| e.source != source);
     }
+
+    /// Remove all entries originating from plugins (source contains `@`).
+    pub fn clear_plugin_sources(&mut self) {
+        self.entries.retain(|e| !e.source.contains('@'));
+    }
 }
 
 impl Default for CommandRegistry {

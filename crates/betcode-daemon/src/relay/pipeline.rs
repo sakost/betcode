@@ -17,6 +17,7 @@ use tracing::{debug, info, warn};
 use betcode_core::ndjson;
 use betcode_proto::v1::AgentEvent;
 
+use crate::commands::CommandRegistry;
 use crate::session::SessionMultiplexer;
 use crate::storage::Database;
 use crate::subprocess::{EventBridge, SpawnConfig, SubprocessManager};
@@ -30,6 +31,8 @@ pub struct SessionRelay {
     db: Database,
     /// Maps `session_id` → `RelayHandle` for active sessions.
     sessions: Arc<RwLock<HashMap<String, RelayHandle>>>,
+    /// Shared command registry for merging MCP tool entries.
+    command_registry: Arc<RwLock<CommandRegistry>>,
 }
 
 impl SessionRelay {
@@ -38,12 +41,14 @@ impl SessionRelay {
         subprocess_manager: Arc<SubprocessManager>,
         multiplexer: Arc<SessionMultiplexer>,
         db: Database,
+        command_registry: Arc<RwLock<CommandRegistry>>,
     ) -> Self {
         Self {
             subprocess_manager,
             multiplexer,
             db,
             sessions: Arc::new(RwLock::new(HashMap::new())),
+            command_registry,
         }
     }
 
@@ -117,6 +122,7 @@ impl SessionRelay {
             pending_permissions,
             session_grants,
             stdin_tx: process_handle.stdin_tx.clone(),
+            command_registry: Arc::clone(&self.command_registry),
         });
 
         // Store the relay handle
@@ -325,6 +331,7 @@ struct StdoutPipelineContext {
     pending_permissions: Arc<tokio::sync::RwLock<HashMap<String, super::types::PendingPermission>>>,
     session_grants: Arc<tokio::sync::RwLock<HashMap<String, bool>>>,
     stdin_tx: tokio::sync::mpsc::Sender<String>,
+    command_registry: Arc<RwLock<CommandRegistry>>,
 }
 
 /// Spawn the stdout → NDJSON parser → `EventBridge` → forwarder pipeline.
@@ -342,6 +349,7 @@ fn spawn_stdout_pipeline(ctx: StdoutPipelineContext) {
         pending_permissions,
         session_grants,
         stdin_tx,
+        command_registry,
     } = ctx;
     tokio::spawn(async move {
         let sid = session_id.clone();
@@ -372,7 +380,26 @@ fn spawn_stdout_pipeline(ctx: StdoutPipelineContext) {
                 bridge = EventBridge::with_start_sequence(latest_seq);
             }
 
+            let is_system_init = matches!(msg, ndjson::Message::SystemInit(_));
             let events = bridge.convert(msg);
+
+            // After processing a SystemInit, merge MCP tool entries into the
+            // shared command registry so they appear in completions and search.
+            if is_system_init && !bridge.mcp_entries().is_empty() {
+                let count = bridge.mcp_entries().len();
+                {
+                    let mut registry = command_registry.write().await;
+                    registry.clear_source("mcp");
+                    for entry in bridge.mcp_entries() {
+                        registry.add(entry.clone());
+                    }
+                }
+                debug!(
+                    session_id = %sid,
+                    count,
+                    "Merged MCP tool entries into command registry"
+                );
+            }
 
             for event in &events {
                 // Transfer pending question inputs from bridge → shared map
@@ -658,6 +685,11 @@ fn build_question_response_json(
 mod tests {
     use super::*;
 
+    /// Create a default `Arc<RwLock<CommandRegistry>>` for tests.
+    fn test_command_registry() -> Arc<RwLock<CommandRegistry>> {
+        Arc::new(RwLock::new(CommandRegistry::new()))
+    }
+
     /// Create a minimal `RelayHandle` for tests. The `stdin_tx` end is connected
     /// to the returned `mpsc::Receiver`.
     fn test_relay_handle() -> (RelayHandle, tokio::sync::mpsc::Receiver<String>) {
@@ -681,7 +713,7 @@ mod tests {
         let db = Database::open_in_memory().await.unwrap();
         let subprocess_mgr = Arc::new(SubprocessManager::new(5));
         let multiplexer = Arc::new(SessionMultiplexer::with_defaults());
-        let relay = SessionRelay::new(subprocess_mgr, multiplexer, db);
+        let relay = SessionRelay::new(subprocess_mgr, multiplexer, db, test_command_registry());
         assert!(!relay.is_active("test-session").await);
     }
 
@@ -690,7 +722,7 @@ mod tests {
         let db = Database::open_in_memory().await.unwrap();
         let subprocess_mgr = Arc::new(SubprocessManager::new(5));
         let multiplexer = Arc::new(SessionMultiplexer::with_defaults());
-        let relay = SessionRelay::new(subprocess_mgr, multiplexer, db);
+        let relay = SessionRelay::new(subprocess_mgr, multiplexer, db, test_command_registry());
         assert!(relay.get_handle("nonexistent").await.is_none());
     }
 
@@ -699,7 +731,7 @@ mod tests {
         let db = Database::open_in_memory().await.unwrap();
         let subprocess_mgr = Arc::new(SubprocessManager::new(5));
         let multiplexer = Arc::new(SessionMultiplexer::with_defaults());
-        let relay = SessionRelay::new(subprocess_mgr, multiplexer, db);
+        let relay = SessionRelay::new(subprocess_mgr, multiplexer, db, test_command_registry());
         let result = relay.send_user_message("nonexistent", "hello", None).await;
         assert!(matches!(result, Err(RelayError::SessionNotFound { .. })));
     }
@@ -709,7 +741,7 @@ mod tests {
         let db = Database::open_in_memory().await.unwrap();
         let subprocess_mgr = Arc::new(SubprocessManager::new(5));
         let multiplexer = Arc::new(SessionMultiplexer::with_defaults());
-        let relay = SessionRelay::new(subprocess_mgr, multiplexer, db);
+        let relay = SessionRelay::new(subprocess_mgr, multiplexer, db, test_command_registry());
         let result = relay
             .send_permission_response("nonexistent", "req-1", true, &serde_json::json!({}))
             .await;
@@ -721,7 +753,7 @@ mod tests {
         let db = Database::open_in_memory().await.unwrap();
         let subprocess_mgr = Arc::new(SubprocessManager::new(5));
         let multiplexer = Arc::new(SessionMultiplexer::with_defaults());
-        let relay = SessionRelay::new(subprocess_mgr, multiplexer, db);
+        let relay = SessionRelay::new(subprocess_mgr, multiplexer, db, test_command_registry());
         let result = relay.cancel_session("nonexistent").await.unwrap();
         assert!(!result);
     }
@@ -731,7 +763,7 @@ mod tests {
         let db = Database::open_in_memory().await.unwrap();
         let subprocess_mgr = Arc::new(SubprocessManager::new(5));
         let multiplexer = Arc::new(SessionMultiplexer::with_defaults());
-        let relay = SessionRelay::new(subprocess_mgr, multiplexer, db);
+        let relay = SessionRelay::new(subprocess_mgr, multiplexer, db, test_command_registry());
         let answers: HashMap<String, String> =
             [("Which database?".to_string(), "SQLite".to_string())]
                 .into_iter()

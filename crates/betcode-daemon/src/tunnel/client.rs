@@ -440,7 +440,15 @@ mod tests {
         let db = Database::open_in_memory().await.unwrap();
         let sub = Arc::new(SubprocessManager::new(5));
         let mux = Arc::new(SessionMultiplexer::with_defaults());
-        let relay = Arc::new(SessionRelay::new(sub, Arc::clone(&mux), db.clone()));
+        let command_registry = Arc::new(tokio::sync::RwLock::new(
+            crate::commands::CommandRegistry::new(),
+        ));
+        let relay = Arc::new(SessionRelay::new(
+            sub,
+            Arc::clone(&mux),
+            db.clone(),
+            command_registry,
+        ));
         let client = TunnelClient::new(config, relay, mux, db).unwrap();
         assert_eq!(client.config.machine_id, "m1");
         assert_eq!(client.identity.public_bytes().len(), 32);
