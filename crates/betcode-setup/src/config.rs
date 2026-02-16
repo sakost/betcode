@@ -87,7 +87,7 @@ pub struct DaemonSetupConfig {
     pub max_processes: usize,
     pub max_sessions: usize,
     pub relay_url: Option<String>,
-    pub machine_id: Option<String>,
+    pub machine_id: String,
     pub machine_name: String,
     pub relay_username: Option<String>,
     pub relay_password: Option<String>,

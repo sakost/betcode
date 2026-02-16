@@ -427,6 +427,7 @@ dependencies = [
  "tempfile",
  "tracing",
  "tracing-subscriber",
+ "uuid",
 ]
 
 [[package]]

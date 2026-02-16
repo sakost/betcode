@@ -69,9 +69,7 @@ pub fn env_file(config: &DaemonSetupConfig) -> String {
     if let Some(ref url) = config.relay_url {
         lines.push(format!("BETCODE_RELAY_URL={url}"));
     }
-    if let Some(ref id) = config.machine_id {
-        lines.push(format!("BETCODE_MACHINE_ID={id}"));
-    }
+    lines.push(format!("BETCODE_MACHINE_ID={}", config.machine_id));
     if let Some(ref user) = config.relay_username {
         lines.push(format!("BETCODE_RELAY_USERNAME={user}"));
     }
@@ -156,6 +154,7 @@ mod tests {
         assert!(content.contains("BETCODE_MAX_PROCESSES=5"));
         assert!(content.contains("BETCODE_MAX_SESSIONS=10"));
         assert!(content.contains("BETCODE_LOG_JSON=true"));
+        assert!(content.contains("BETCODE_MACHINE_ID=test-machine-id"));
     }
 
     #[test]

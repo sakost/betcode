@@ -13,7 +13,7 @@ use super::templates;
 pub const SYSTEM_UNIT_PATH: &str = "/etc/systemd/system/betcode-daemon.service";
 
 /// System-level environment file path.
-const SYSTEM_ENV_PATH: &str = "/etc/betcode/daemon.env";
+pub(super) const SYSTEM_ENV_PATH: &str = "/etc/betcode/daemon.env";
 
 /// Returns the path to the user-level systemd unit file.
 ///

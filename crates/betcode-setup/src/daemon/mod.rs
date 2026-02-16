@@ -10,6 +10,31 @@ use dialoguer::Confirm;
 
 use crate::config::{DaemonMode, DaemonSetupConfig};
 
+/// Try to load the machine ID from an existing daemon env file during updates.
+fn load_existing_machine_id(is_update: bool, mode: DaemonMode) -> Option<String> {
+    if !is_update {
+        return None;
+    }
+    let path = match mode {
+        DaemonMode::System => PathBuf::from(systemd::SYSTEM_ENV_PATH),
+        DaemonMode::User => systemd::user_env_path().ok()?,
+    };
+    let content = std::fs::read_to_string(path).ok()?;
+    parse_daemon_env_machine_id(&content)
+}
+
+/// Extract `BETCODE_MACHINE_ID` from env file content.
+fn parse_daemon_env_machine_id(env_content: &str) -> Option<String> {
+    for line in env_content.lines() {
+        if let Some(val) = line.strip_prefix("BETCODE_MACHINE_ID=")
+            && !val.is_empty()
+        {
+            return Some(val.to_string());
+        }
+    }
+    None
+}
+
 /// Arguments for the `daemon` subcommand.
 #[derive(Debug, Args)]
 pub struct DaemonArgs {
@@ -129,6 +154,11 @@ pub fn run(args: DaemonArgs, non_interactive: bool) -> Result<()> {
         prompt_enable_service(non_interactive)?
     };
 
+    let machine_id = args
+        .machine_id
+        .or_else(|| load_existing_machine_id(is_update, args.mode))
+        .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+
     let config = DaemonSetupConfig {
         mode: args.mode,
         user: args.user,
@@ -137,7 +167,7 @@ pub fn run(args: DaemonArgs, non_interactive: bool) -> Result<()> {
         max_processes: args.max_processes,
         max_sessions: args.max_sessions,
         relay_url: args.relay_url,
-        machine_id: args.machine_id,
+        machine_id,
         machine_name: args.machine_name,
         relay_username: args.relay_username,
         relay_password: args.relay_password,
@@ -230,7 +260,7 @@ pub(crate) fn make_test_daemon_config(mode: DaemonMode) -> DaemonSetupConfig {
         max_processes: 5,
         max_sessions: 10,
         relay_url: None,
-        machine_id: None,
+        machine_id: "test-machine-id".into(),
         machine_name: "betcode-daemon".into(),
         relay_username: None,
         relay_password: None,
@@ -266,6 +296,28 @@ mod tests {
     fn default_db_path_system() {
         let path = default_db_path(DaemonMode::System).expect("should resolve");
         assert_eq!(path, PathBuf::from("/var/lib/betcode/daemon.db"));
+    }
+
+    #[test]
+    fn parse_daemon_env_machine_id_extracts_value() {
+        let env =
+            "BETCODE_ADDR=127.0.0.1:50051\nBETCODE_MACHINE_ID=abc-123\nBETCODE_LOG_JSON=true\n";
+        assert_eq!(
+            parse_daemon_env_machine_id(env),
+            Some("abc-123".to_string())
+        );
+    }
+
+    #[test]
+    fn parse_daemon_env_machine_id_returns_none_when_missing() {
+        let env = "BETCODE_ADDR=127.0.0.1:50051\nBETCODE_LOG_JSON=true\n";
+        assert_eq!(parse_daemon_env_machine_id(env), None);
+    }
+
+    #[test]
+    fn parse_daemon_env_machine_id_ignores_empty_value() {
+        let env = "BETCODE_MACHINE_ID=\nBETCODE_LOG_JSON=true\n";
+        assert_eq!(parse_daemon_env_machine_id(env), None);
     }
 
     #[test]
