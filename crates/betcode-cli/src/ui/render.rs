@@ -225,6 +225,28 @@ fn draw_messages(frame: &mut Frame<'_>, app: &mut App, area: Rect) {
             lines.push(Line::from(""));
         }
 
+        // Compaction divider: render as a dim horizontal rule with centered text.
+        if msg.role == MessageRole::CompactionDivider {
+            let label = &msg.content;
+            let inner_w = area.width.saturating_sub(4) as usize; // borders + padding
+            let dash = "\u{2504}"; // ┄
+            let label_len = label.len();
+            let side = inner_w.saturating_sub(label_len + 2) / 2;
+            let divider_text = format!(
+                "{} {} {}",
+                dash.repeat(side.max(1)),
+                label,
+                dash.repeat(side.max(1))
+            );
+            lines.push(Line::from(Span::styled(
+                divider_text,
+                Style::default()
+                    .fg(Color::DarkGray)
+                    .add_modifier(Modifier::DIM),
+            )));
+            continue;
+        }
+
         // For Tool role messages, look up the corresponding ToolCallEntry and
         // render with format_tool_status_line + color instead of raw text.
         if msg.role == MessageRole::Tool
@@ -244,7 +266,7 @@ fn draw_messages(frame: &mut Frame<'_>, app: &mut App, area: Rect) {
             MessageRole::User => ("You: ", Color::Green),
             MessageRole::Assistant => ("Claude: ", Color::Blue),
             MessageRole::System => ("System: ", Color::Yellow),
-            MessageRole::Tool => ("", Color::DarkGray),
+            MessageRole::Tool | MessageRole::CompactionDivider => ("", Color::DarkGray),
         };
         let prefix_style = Style::default().fg(color).add_modifier(Modifier::BOLD);
         let content_lines: Vec<&str> = msg.content.split('\n').collect();

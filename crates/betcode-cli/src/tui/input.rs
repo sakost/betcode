@@ -3,7 +3,7 @@
 use crossterm::event::KeyCode;
 use tokio::sync::mpsc;
 
-use crate::app::{App, AppMode, MessageRole};
+use crate::app::{App, AppMode, ClientCommand, MessageRole};
 use betcode_proto::v1::AgentRequest;
 
 use super::TermEvent;
@@ -409,6 +409,18 @@ async fn handle_input_key(
                             }
                         }
                         _ => {
+                            // Check for dual-dispatch commands that need
+                            // client-side effects after Claude processes them.
+                            let client_cmd = match command.as_str() {
+                                "compact" => Some(ClientCommand::Compact),
+                                "model" => {
+                                    args.first().map(|m| ClientCommand::ModelSwitch(m.clone()))
+                                }
+                                "fast" => Some(ClientCommand::FastToggle),
+                                _ => None,
+                            };
+                            app.pending_client_command = client_cmd;
+
                             // Claude Code / Plugin / unknown commands:
                             // forward as user message to the agent stream
                             // (the Claude subprocess handles them).

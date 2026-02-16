@@ -47,6 +47,7 @@ pub enum MessageRole {
     Assistant,
     System,
     Tool,
+    CompactionDivider,
 }
 
 /// Pending permission request shown as dialog.
@@ -153,6 +154,17 @@ pub struct ToolCallEntry {
     pub message_index: usize,
 }
 
+/// Commands that need client-side effects after Claude processes them.
+#[derive(Debug, Clone)]
+pub enum ClientCommand {
+    /// /compact — clear old messages, insert compaction divider.
+    Compact,
+    /// /model <name> — update model in status bar.
+    ModelSwitch(String),
+    /// /fast — toggle fast mode indicator.
+    FastToggle,
+}
+
 /// TUI application state.
 #[allow(clippy::struct_excessive_bools)]
 pub struct App {
@@ -195,6 +207,12 @@ pub struct App {
     pub completion_request_tx: Option<tokio::sync::mpsc::Sender<CompletionRequest>>,
     /// Sender for slash-command execution requests.
     pub service_command_tx: Option<tokio::sync::mpsc::Sender<crate::tui::ServiceCommandExec>>,
+    /// Pending dual-dispatch command awaiting `TurnComplete` to apply.
+    pub pending_client_command: Option<ClientCommand>,
+    /// Compaction summary text shown in detail panel on the divider.
+    pub compaction_summary: Option<String>,
+    /// Index of the compaction divider message in `messages`, if any.
+    pub compaction_divider_index: Option<usize>,
 }
 
 /// A request for async completion data from the daemon.
@@ -244,6 +262,9 @@ impl App {
             command_cache: CommandCache::new(),
             completion_request_tx: None,
             service_command_tx: None,
+            pending_client_command: None,
+            compaction_summary: None,
+            compaction_divider_index: None,
         }
     }
 
@@ -414,6 +435,55 @@ impl App {
         }
     }
 
+    /// Execute a pending dual-dispatch client command after `TurnComplete`.
+    fn execute_pending_client_command(&mut self) {
+        let Some(cmd) = self.pending_client_command.take() else {
+            return;
+        };
+        match cmd {
+            ClientCommand::Compact => {
+                self.apply_compaction();
+            }
+            ClientCommand::ModelSwitch(model) => {
+                self.model = model;
+            }
+            ClientCommand::FastToggle => {
+                // Toggle fast mode indicator — no-op for now
+            }
+        }
+    }
+
+    /// Apply compaction effect on the conversation.
+    ///
+    /// Captures the last assistant message as a summary, clears the message
+    /// list, and inserts a compaction divider. The summary is stored for the
+    /// detail panel to display when the divider is selected.
+    fn apply_compaction(&mut self) {
+        // Capture the last assistant message as the compaction summary
+        let summary = self
+            .messages
+            .iter()
+            .rev()
+            .find(|m| m.role == MessageRole::Assistant)
+            .map_or_else(|| "Context compacted.".to_string(), |m| m.content.clone());
+
+        // Clear all messages (removes previous divider too if present)
+        self.messages.clear();
+        self.tool_calls.clear();
+
+        // Insert the compaction divider
+        self.messages.push(DisplayMessage {
+            role: MessageRole::CompactionDivider,
+            content: "[context compacted]".to_string(),
+            streaming: false,
+            is_tool_result: false,
+            agent_label: None,
+        });
+        self.compaction_divider_index = Some(0);
+        self.compaction_summary = Some(summary);
+        self.scroll_to_bottom();
+    }
+
     pub fn add_system_message(&mut self, role: MessageRole, content: String) {
         self.messages.push(DisplayMessage {
             role,
@@ -562,6 +632,7 @@ impl App {
             Some(Event::TurnComplete(_)) => {
                 self.finish_streaming();
                 self.agent_busy = false;
+                self.execute_pending_client_command();
             }
             Some(Event::Error(err)) => {
                 let msg = format!("[Error: {} - {}]", err.code, err.message);

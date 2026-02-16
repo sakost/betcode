@@ -44,6 +44,7 @@ pub fn format_status_line(status: ToolCallStatus, duration_ms: Option<u32>) -> S
 /// Render the detail panel showing the selected tool call's full information.
 ///
 /// If no tool call is selected, displays a placeholder message with navigation hints.
+/// If a compaction summary is available and no tool is selected, shows the summary.
 /// Otherwise shows the tool name/description as the block title, a colored status
 /// line, a separator, and the tool output (or a "Waiting..." placeholder).
 pub fn draw_detail_panel(frame: &mut Frame<'_>, app: &App, area: Rect) {
@@ -53,6 +54,32 @@ pub fn draw_detail_panel(frame: &mut Frame<'_>, app: &App, area: Rect) {
         .and_then(|i| app.tool_calls.get(i));
 
     let Some(entry) = entry else {
+        // Show compaction summary if available and no tool call is selected
+        if let Some(ref summary) = app.compaction_summary {
+            let mut lines: Vec<Line<'_>> = vec![
+                Line::from(Span::styled(
+                    "Context was compacted. Summary:",
+                    Style::default().fg(Color::Yellow),
+                )),
+                Line::from("\u{2500}".repeat(area.width.saturating_sub(2) as usize)),
+            ];
+            for line in summary.lines() {
+                let owned: String = line.to_owned();
+                lines.push(Line::from(owned));
+            }
+            let block = Block::default()
+                .borders(Borders::ALL)
+                .title("Compaction Summary")
+                .title_style(Style::default().fg(Color::Yellow));
+            let scroll = app.detail_panel.scroll_offset;
+            let para = Paragraph::new(lines)
+                .block(block)
+                .wrap(Wrap { trim: false })
+                .scroll((scroll, 0));
+            frame.render_widget(para, area);
+            return;
+        }
+
         let block = Block::default().borders(Borders::ALL).title("Detail");
         let para = Paragraph::new("No tool call selected.\nUse Ctrl+Up/Down to navigate.")
             .block(block)
