@@ -275,7 +275,7 @@ mod tests {
         for mid in machines {
             db.create_machine(mid, mid, "u1", "{}").await.unwrap();
         }
-        Arc::new(BufferManager::new(db, Arc::clone(registry)))
+        Arc::new(BufferManager::new(db, Arc::clone(registry), 3600, 1000))
     }
 
     /// Create a registry with a connected machine, a buffer, and a router.

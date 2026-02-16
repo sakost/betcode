@@ -17,18 +17,29 @@ pub struct BufferManager {
     registry: Arc<ConnectionRegistry>,
     /// Default TTL for buffered messages in seconds.
     default_ttl_secs: i64,
+    /// Maximum number of buffered messages per machine.
+    max_per_machine: usize,
 }
 
 impl BufferManager {
-    pub const fn new(db: RelayDatabase, registry: Arc<ConnectionRegistry>) -> Self {
+    pub const fn new(
+        db: RelayDatabase,
+        registry: Arc<ConnectionRegistry>,
+        ttl_secs: i64,
+        max_per_machine: usize,
+    ) -> Self {
         Self {
             db,
             registry,
-            default_ttl_secs: 3600, // 1 hour default
+            default_ttl_secs: ttl_secs,
+            max_per_machine,
         }
     }
 
     /// Buffer a request for an offline machine.
+    ///
+    /// Returns `BufferError::CapExceeded` if the machine already has
+    /// `max_per_machine` messages buffered.
     pub async fn buffer_request(
         &self,
         machine_id: &str,
@@ -37,6 +48,25 @@ impl BufferManager {
         data: &[u8],
         metadata_json: &str,
     ) -> Result<i64, BufferError> {
+        let current = self
+            .db
+            .count_buffered_messages(machine_id)
+            .await
+            .map_err(|e| BufferError::Storage(e.to_string()))?;
+
+        if usize::try_from(current).unwrap_or(usize::MAX) >= self.max_per_machine {
+            warn!(
+                machine_id = %machine_id,
+                current,
+                cap = self.max_per_machine,
+                "Buffer cap reached for machine, rejecting request"
+            );
+            return Err(BufferError::CapExceeded {
+                machine_id: machine_id.to_string(),
+                cap: self.max_per_machine,
+            });
+        }
+
         let id = self
             .db
             .buffer_message(&BufferMessageParams {
@@ -168,16 +198,31 @@ pub enum BufferError {
 
     #[error("Machine offline: {0}")]
     MachineOffline(String),
+
+    #[error("Buffer cap exceeded for machine {machine_id} (cap: {cap})")]
+    CapExceeded { machine_id: String, cap: usize },
 }
 
 #[cfg(test)]
 #[allow(clippy::panic, clippy::expect_used, clippy::unwrap_used)]
 mod tests {
+    use std::time::Duration;
+
     use super::*;
     use betcode_proto::v1::FrameType;
     use tokio::sync::mpsc;
 
+    const DEFAULT_TEST_TTL: i64 = 3600;
+    const DEFAULT_TEST_CAP: usize = 1000;
+
     async fn setup() -> (BufferManager, Arc<ConnectionRegistry>) {
+        setup_with_config(DEFAULT_TEST_TTL, DEFAULT_TEST_CAP).await
+    }
+
+    async fn setup_with_config(
+        ttl_secs: i64,
+        max_per_machine: usize,
+    ) -> (BufferManager, Arc<ConnectionRegistry>) {
         let db = RelayDatabase::open_in_memory().await.unwrap();
         // Create user and machine to satisfy foreign key constraints
         db.create_user("u1", "alice", "alice@example.com", "hash")
@@ -187,7 +232,7 @@ mod tests {
             .await
             .unwrap();
         let registry = Arc::new(ConnectionRegistry::new());
-        let manager = BufferManager::new(db, Arc::clone(&registry));
+        let manager = BufferManager::new(db, Arc::clone(&registry), ttl_secs, max_per_machine);
         (manager, registry)
     }
 
@@ -265,6 +310,79 @@ mod tests {
         let removed = manager.cleanup_expired().await.unwrap();
         assert_eq!(removed, 1);
         assert_eq!(manager.buffered_count("m1").await.unwrap(), 0);
+    }
+
+    #[tokio::test]
+    async fn buffer_respects_cap() {
+        let (manager, _registry) = setup_with_config(3600, 2).await;
+
+        // First two should succeed
+        manager
+            .buffer_request("m1", "req-1", "Test", b"a", "{}")
+            .await
+            .unwrap();
+        manager
+            .buffer_request("m1", "req-2", "Test", b"b", "{}")
+            .await
+            .unwrap();
+
+        // Third should be rejected
+        let result = manager
+            .buffer_request("m1", "req-3", "Test", b"c", "{}")
+            .await;
+        assert!(matches!(result, Err(BufferError::CapExceeded { .. })));
+        assert_eq!(manager.buffered_count("m1").await.unwrap(), 2);
+    }
+
+    #[tokio::test]
+    async fn buffer_uses_configured_ttl() {
+        // Use a very short TTL (1 second)
+        let (manager, _registry) = setup_with_config(1, 1000).await;
+
+        manager
+            .buffer_request("m1", "req-1", "Test", b"data", "{}")
+            .await
+            .unwrap();
+
+        // Wait for the TTL to expire
+        tokio::time::sleep(Duration::from_secs(2)).await;
+
+        let removed = manager.cleanup_expired().await.unwrap();
+        assert_eq!(removed, 1);
+        assert_eq!(manager.buffered_count("m1").await.unwrap(), 0);
+    }
+
+    #[tokio::test]
+    async fn cleanup_removes_only_expired() {
+        let (manager, _registry) = setup_with_config(3600, 1000).await;
+
+        // Buffer a message with a long TTL (via the manager)
+        manager
+            .buffer_request("m1", "req-live", "Test", b"alive", "{}")
+            .await
+            .unwrap();
+
+        // Insert an already-expired message directly via DB
+        manager
+            .db
+            .buffer_message(&BufferMessageParams {
+                machine_id: "m1",
+                request_id: "req-expired",
+                method: "Test",
+                payload: b"dead",
+                metadata: "{}",
+                priority: 0,
+                ttl_secs: -1,
+            })
+            .await
+            .unwrap();
+
+        assert_eq!(manager.buffered_count("m1").await.unwrap(), 2);
+
+        let removed = manager.cleanup_expired().await.unwrap();
+        assert_eq!(removed, 1);
+        // Only the live message remains
+        assert_eq!(manager.buffered_count("m1").await.unwrap(), 1);
     }
 
     #[tokio::test]

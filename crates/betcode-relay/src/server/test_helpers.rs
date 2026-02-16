@@ -103,7 +103,12 @@ pub async fn setup_router_with_machine(
         .await
         .unwrap();
     db.create_machine(mid, mid, "u1", "{}").await.unwrap();
-    let buffer = Arc::new(BufferManager::new(db.clone(), Arc::clone(&registry)));
+    let buffer = Arc::new(BufferManager::new(
+        db.clone(),
+        Arc::clone(&registry),
+        3600,
+        1000,
+    ));
     let router = Arc::new(RequestRouter::new(registry, buffer, Duration::from_secs(5)));
     (router, rx, db)
 }
@@ -122,7 +127,12 @@ pub async fn setup_offline_router() -> (Arc<RequestRouter>, RelayDatabase) {
     db.create_machine("m-off", "m-off", "u1", "{}")
         .await
         .unwrap();
-    let buffer = Arc::new(BufferManager::new(db.clone(), Arc::clone(&registry)));
+    let buffer = Arc::new(BufferManager::new(
+        db.clone(),
+        Arc::clone(&registry),
+        3600,
+        1000,
+    ));
     let router = Arc::new(RequestRouter::new(registry, buffer, Duration::from_secs(5)));
     (router, db)
 }

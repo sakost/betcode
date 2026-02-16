@@ -80,6 +80,14 @@ struct Args {
     #[arg(long, requires = "tls_cert")]
     tls_key: Option<PathBuf>,
 
+    /// TTL for buffered messages in seconds.
+    #[arg(long, default_value_t = 86400)]
+    buffer_ttl: i64,
+
+    /// Maximum buffered messages per machine.
+    #[arg(long, default_value_t = 1000)]
+    buffer_cap: usize,
+
     /// Output logs as JSON (for structured log aggregation).
     #[arg(long)]
     log_json: bool,
@@ -116,7 +124,12 @@ async fn main() -> anyhow::Result<()> {
     ));
 
     let registry = Arc::new(ConnectionRegistry::new());
-    let buffer = Arc::new(BufferManager::new(db.clone(), Arc::clone(&registry)));
+    let buffer = Arc::new(BufferManager::new(
+        db.clone(),
+        Arc::clone(&registry),
+        args.buffer_ttl,
+        args.buffer_cap,
+    ));
     let router = Arc::new(RequestRouter::new(
         Arc::clone(&registry),
         Arc::clone(&buffer),

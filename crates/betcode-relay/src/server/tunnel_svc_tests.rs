@@ -18,7 +18,12 @@ use crate::storage::RelayDatabase;
 /// Build a `TunnelServiceImpl` from the given database.
 fn build_service(db: RelayDatabase) -> TunnelServiceImpl {
     let registry = Arc::new(ConnectionRegistry::new());
-    let buffer = Arc::new(BufferManager::new(db.clone(), Arc::clone(&registry)));
+    let buffer = Arc::new(BufferManager::new(
+        db.clone(),
+        Arc::clone(&registry),
+        3600,
+        1000,
+    ));
     TunnelServiceImpl::new(registry, db, buffer)
 }
 
