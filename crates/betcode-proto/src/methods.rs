@@ -150,3 +150,13 @@ pub const METHOD_LIST_MCP_SERVERS: &str = "ConfigService/ListMcpServers";
 
 /// `ConfigService/GetPermissions`
 pub const METHOD_GET_PERMISSIONS: &str = "ConfigService/GetPermissions";
+
+// ---------------------------------------------------------------------------
+// VersionService
+// ---------------------------------------------------------------------------
+
+/// `VersionService/GetVersion`
+pub const METHOD_GET_VERSION: &str = "VersionService/GetVersion";
+
+/// `VersionService/NegotiateCapabilities`
+pub const METHOD_NEGOTIATE_CAPABILITIES: &str = "VersionService/NegotiateCapabilities";

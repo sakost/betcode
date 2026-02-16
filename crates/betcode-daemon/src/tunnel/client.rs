@@ -25,7 +25,7 @@ use super::handler::TunnelRequestHandler;
 use crate::relay::SessionRelay;
 use crate::server::{
     CommandServiceImpl, ConfigServiceImpl, GitLabServiceImpl, GitRepoServiceImpl,
-    WorktreeServiceImpl,
+    VersionServiceImpl, WorktreeServiceImpl,
 };
 use crate::session::SessionMultiplexer;
 use crate::storage::Database;
@@ -48,6 +48,8 @@ pub struct TunnelClient {
     worktree_service: Option<Arc<WorktreeServiceImpl>>,
     /// Optional `ConfigServiceImpl` for handling config RPCs through the tunnel.
     config_service: Option<Arc<ConfigServiceImpl>>,
+    /// Optional `VersionServiceImpl` for handling version RPCs through the tunnel.
+    version_service: Option<Arc<VersionServiceImpl>>,
 }
 
 impl TunnelClient {
@@ -73,6 +75,7 @@ impl TunnelClient {
             repo_service: None,
             worktree_service: None,
             config_service: None,
+            version_service: None,
         })
     }
 
@@ -99,6 +102,11 @@ impl TunnelClient {
     /// Set the `ConfigService` implementation for handling config RPCs through the tunnel.
     pub fn set_config_service(&mut self, service: Arc<ConfigServiceImpl>) {
         self.config_service = Some(service);
+    }
+
+    /// Set the `VersionService` implementation for handling version RPCs through the tunnel.
+    pub fn set_version_service(&mut self, service: Arc<VersionServiceImpl>) {
+        self.version_service = Some(service);
     }
 
     /// Load or generate the X25519 identity keypair.
@@ -227,6 +235,9 @@ impl TunnelClient {
         }
         if let Some(config_svc) = &self.config_service {
             handler.set_config_service(Arc::clone(config_svc));
+        }
+        if let Some(version_svc) = &self.version_service {
+            handler.set_version_service(Arc::clone(version_svc));
         }
         let handler = Arc::new(handler);
 

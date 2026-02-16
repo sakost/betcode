@@ -71,6 +71,9 @@ crossterm = "0.29.0"
 # systemd integration
 sd-notify = "0.4"
 
+# Versioning
+semver = "1"
+
 # Command system
 nucleo-matcher = "0.3"
 regex = "1"

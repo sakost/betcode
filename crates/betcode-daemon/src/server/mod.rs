@@ -11,6 +11,7 @@ mod gitlab_svc;
 mod handler;
 mod health;
 mod repo_svc;
+mod version_svc;
 mod worktree_svc;
 
 #[cfg(test)]
@@ -23,6 +24,7 @@ pub use config_svc::ConfigServiceImpl;
 pub use gitlab_svc::GitLabServiceImpl;
 pub use health::HealthServiceImpl;
 pub use repo_svc::GitRepoServiceImpl;
+pub use version_svc::VersionServiceImpl;
 pub use worktree_svc::WorktreeServiceImpl;
 
 use std::net::SocketAddr;
@@ -40,6 +42,7 @@ use betcode_proto::v1::command_service_server::CommandServiceServer;
 use betcode_proto::v1::config_service_server::ConfigServiceServer;
 use betcode_proto::v1::git_repo_service_server::GitRepoServiceServer;
 use betcode_proto::v1::health_server::HealthServer;
+use betcode_proto::v1::version_service_server::VersionServiceServer;
 use betcode_proto::v1::worktree_service_server::WorktreeServiceServer;
 
 use crate::commands::CommandRegistry;
@@ -76,6 +79,7 @@ pub struct GrpcServer {
     command_service: CommandServiceImpl,
     config_service: ConfigServiceImpl,
     repo_service: GitRepoServiceImpl,
+    version_service: VersionServiceImpl,
     worktree_service: WorktreeServiceImpl,
 }
 
@@ -141,6 +145,8 @@ impl GrpcServer {
         );
 
         let config_service = ConfigServiceImpl::new(config.clone());
+        let version_service =
+            VersionServiceImpl::new(config.clone(), std::collections::HashMap::new());
 
         let worktree_manager = WorktreeManager::new(db.clone(), worktree_base_dir);
         let repo_service = GitRepoServiceImpl::new(db.clone(), worktree_manager.clone());
@@ -155,6 +161,7 @@ impl GrpcServer {
             command_service,
             config_service,
             repo_service,
+            version_service,
             worktree_service,
         }
     }
@@ -187,6 +194,7 @@ impl GrpcServer {
             .add_service(GitRepoServiceServer::new(self.repo_service))
             .add_service(HealthServer::new(health_service.clone()))
             .add_service(BetCodeHealthServer::new(health_service))
+            .add_service(VersionServiceServer::new(self.version_service))
             .add_service(WorktreeServiceServer::new(self.worktree_service))
     }
 
@@ -253,6 +261,11 @@ impl GrpcServer {
     /// Get a clone of the `GitRepoServiceImpl` that shares state with the gRPC server.
     pub fn repo_service_impl(&self) -> GitRepoServiceImpl {
         self.repo_service.clone()
+    }
+
+    /// Get a clone of the `VersionServiceImpl` that shares state with the gRPC server.
+    pub fn version_service_impl(&self) -> VersionServiceImpl {
+        self.version_service.clone()
     }
 
     /// Get a clone of the `WorktreeServiceImpl` that shares state with the gRPC server.
