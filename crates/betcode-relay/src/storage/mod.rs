@@ -6,6 +6,7 @@ mod db;
 mod models;
 mod queries;
 mod queries_buffer;
+mod queries_certs;
 mod queries_notifications;
 
 #[cfg(test)]

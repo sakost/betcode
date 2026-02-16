@@ -34,6 +34,7 @@ jsonwebtoken = { version = "10.3.0", features = ["rust_crypto"] }
 argon2 = "0.5.3"
 sha2 = "0.10.9"
 rcgen.workspace = true
+x509-parser = "0.17"
 
 [features]
 push-notifications = ["dep:reqwest"]

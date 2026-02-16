@@ -24,7 +24,7 @@ fn build_service(db: RelayDatabase) -> TunnelServiceImpl {
         3600,
         1000,
     ));
-    TunnelServiceImpl::new(registry, db, buffer)
+    TunnelServiceImpl::new(registry, db, buffer, false)
 }
 
 /// Build a `TunnelServiceImpl` backed by an in-memory DB that already

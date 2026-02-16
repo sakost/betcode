@@ -80,6 +80,12 @@ struct Args {
     #[arg(long, requires = "tls_cert")]
     tls_key: Option<PathBuf>,
 
+    /// Path to CA certificate (PEM) for validating daemon client certificates
+    /// (mutual TLS). When provided, tunnel connections must present a valid
+    /// client certificate signed by this CA.
+    #[arg(long)]
+    mtls_ca_cert: Option<PathBuf>,
+
     /// TTL for buffered messages in seconds.
     #[arg(long, default_value_t = 86400)]
     buffer_ttl: i64,
@@ -158,9 +164,17 @@ async fn main() -> anyhow::Result<()> {
         Duration::from_secs(args.request_timeout),
     ));
 
+    // mTLS is enabled when a client CA cert path is provided
+    let mtls_enabled = args.mtls_ca_cert.is_some();
+
     // Build services
     let auth = AuthServiceImpl::new(db.clone(), Arc::clone(&jwt), args.refresh_grace_period);
-    let tunnel = TunnelServiceImpl::new(Arc::clone(&registry), db.clone(), Arc::clone(&buffer));
+    let tunnel = TunnelServiceImpl::new(
+        Arc::clone(&registry),
+        db.clone(),
+        Arc::clone(&buffer),
+        mtls_enabled,
+    );
     let machine = MachineServiceImpl::new(db.clone());
     let agent_proxy = AgentProxyService::new(Arc::clone(&router), db.clone());
     let command_proxy = CommandProxyService::new(Arc::clone(&router), db.clone());
@@ -199,7 +213,18 @@ async fn main() -> anyhow::Result<()> {
         TlsMode::Disabled
     };
 
-    let tls_config = tls_mode.to_server_tls_config()?;
+    let mut tls_config = tls_mode.to_server_tls_config()?;
+
+    // Apply mutual TLS if a client CA cert is provided
+    if let (Some(tls), Some(ca_path)) = (tls_config.take(), &args.mtls_ca_cert) {
+        let ca_pem = std::fs::read_to_string(ca_path).map_err(|e| {
+            anyhow::anyhow!("Failed to read mTLS CA cert {}: {e}", ca_path.display())
+        })?;
+        tls_config = Some(betcode_relay::tls::apply_mtls(tls, &ca_pem));
+        info!(ca = %ca_path.display(), "Mutual TLS enabled for tunnel connections");
+    } else if mtls_enabled {
+        warn!("--mtls-ca-cert specified but TLS is disabled; mTLS will have no effect");
+    }
 
     let mut builder = Server::builder()
         .http2_keepalive_interval(Some(Duration::from_secs(30)))
