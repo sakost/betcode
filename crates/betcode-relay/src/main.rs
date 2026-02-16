@@ -91,6 +91,18 @@ struct Args {
     /// Output logs as JSON (for structured log aggregation).
     #[arg(long)]
     log_json: bool,
+
+    /// OpenTelemetry OTLP endpoint for traces and metrics export
+    /// (e.g. `http://localhost:4317`). Requires the `metrics` feature.
+    #[cfg(feature = "metrics")]
+    #[arg(long, env = "BETCODE_METRICS_ENDPOINT")]
+    metrics_endpoint: Option<String>,
+
+    /// Path to FCM service account credentials JSON file.
+    /// Required when the `push-notifications` feature is enabled.
+    #[cfg(feature = "push-notifications")]
+    #[arg(long, env = "BETCODE_FCM_CREDENTIALS_PATH")]
+    fcm_credentials_path: PathBuf,
 }
 
 #[tokio::main]
@@ -98,7 +110,17 @@ struct Args {
 async fn main() -> anyhow::Result<()> {
     let args = Args::parse();
 
-    betcode_core::tracing_init::init_tracing("betcode_relay=info", args.log_json);
+    #[cfg(feature = "metrics")]
+    let metrics_endpoint = args.metrics_endpoint.as_deref();
+    #[cfg(not(feature = "metrics"))]
+    let metrics_endpoint: Option<&str> = None;
+
+    // Hold the guard so the OTel pipeline stays alive for the process lifetime.
+    let _metrics_guard = betcode_core::tracing_init::init_tracing_with_metrics(
+        "betcode_relay=info",
+        args.log_json,
+        metrics_endpoint,
+    );
 
     info!(
         version = env!("CARGO_PKG_VERSION"),
@@ -146,6 +168,18 @@ async fn main() -> anyhow::Result<()> {
     let git_repo_proxy = GitRepoProxyService::new(Arc::clone(&router), db.clone());
     let config_proxy = ConfigProxyService::new(Arc::clone(&router), db.clone());
     let gitlab_proxy = GitLabProxyService::new(Arc::clone(&router), db.clone());
+
+    // Build notification service (only with push-notifications feature)
+    #[cfg(feature = "push-notifications")]
+    let notification_svc = {
+        use betcode_relay::notifications::{FcmClient, NotificationServiceImpl};
+        let fcm = FcmClient::from_credentials_file(&args.fcm_credentials_path)?;
+        info!(
+            project_id = %fcm.project_id(),
+            "FCM push notifications enabled"
+        );
+        NotificationServiceImpl::new(db.clone(), fcm)
+    };
 
     let jwt_check = betcode_relay::server::jwt_interceptor(Arc::clone(&jwt));
 
@@ -235,8 +269,18 @@ async fn main() -> anyhow::Result<()> {
         ))
         .add_service(GitLabServiceServer::with_interceptor(
             gitlab_proxy,
-            jwt_check,
+            jwt_check.clone(),
         ));
+
+    // Conditionally add notification service when push-notifications feature is enabled
+    #[cfg(feature = "push-notifications")]
+    let grpc_router = {
+        use betcode_proto::v1::notification_service_server::NotificationServiceServer;
+        grpc_router.add_service(NotificationServiceServer::with_interceptor(
+            notification_svc,
+            jwt_check,
+        ))
+    };
 
     tokio::select! {
         result = grpc_router.serve(args.addr) => {

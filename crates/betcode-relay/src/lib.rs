@@ -9,6 +9,8 @@
 
 pub mod auth;
 pub mod buffer;
+#[cfg(feature = "push-notifications")]
+pub mod notifications;
 pub mod registry;
 pub mod router;
 pub mod server;
