@@ -159,6 +159,8 @@ pub struct ToolCallEntry {
 pub enum ClientCommand {
     /// /compact — clear old messages, insert compaction divider.
     Compact,
+    /// /clear — clear all messages and tool calls.
+    Clear,
     /// /model <name> — update model in status bar.
     ModelSwitch(String),
     /// /fast — toggle fast mode indicator.
@@ -440,6 +442,10 @@ impl App {
         match cmd {
             ClientCommand::Compact => {
                 self.apply_compaction();
+            }
+            ClientCommand::Clear => {
+                self.messages.clear();
+                self.tool_calls.clear();
             }
             ClientCommand::ModelSwitch(model) => {
                 self.model = model;
@@ -1821,6 +1827,44 @@ mod tests {
         assert_eq!(
             app.model, "claude-opus-4",
             "model should be updated after TurnComplete"
+        );
+    }
+
+    #[test]
+    fn clear_removes_messages_and_tool_calls() {
+        use betcode_proto::v1::agent_event::Event;
+        let mut app = App::new();
+
+        app.add_user_message("Hello".to_string());
+        app.handle_event(make_event(Event::TextDelta(betcode_proto::v1::TextDelta {
+            text: "Hi".to_string(),
+            is_complete: true,
+        })));
+        app.handle_event(make_event(Event::ToolCallStart(
+            betcode_proto::v1::ToolCallStart {
+                tool_id: "t1".to_string(),
+                tool_name: "Bash".to_string(),
+                input: None,
+                description: "ls".to_string(),
+            },
+        )));
+        assert!(!app.messages.is_empty());
+        assert!(!app.tool_calls.is_empty());
+
+        app.pending_client_command = Some(ClientCommand::Clear);
+        app.handle_event(make_event(Event::TurnComplete(
+            betcode_proto::v1::TurnComplete {
+                stop_reason: "end_turn".to_string(),
+            },
+        )));
+
+        assert!(
+            app.messages.is_empty(),
+            "messages should be empty after clear"
+        );
+        assert!(
+            app.tool_calls.is_empty(),
+            "tool_calls should be empty after clear"
         );
     }
 

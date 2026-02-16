@@ -219,39 +219,6 @@ fn replace_token(app: &mut App, replacement: &str) {
     app.cursor_pos = token_start + replacement.len();
 }
 
-/// Clear the conversation: wipe TUI messages and start a fresh session.
-async fn clear_session(app: &mut App, tx: &mpsc::Sender<AgentRequest>) {
-    app.messages.clear();
-    app.agent_busy = false;
-
-    // Generate a new session ID and send a StartConversation to reset context.
-    let new_sid = uuid::Uuid::new_v4().to_string();
-    let wd = std::env::current_dir()
-        .map(|p| p.to_string_lossy().to_string())
-        .unwrap_or_default();
-    let model = app.model.clone();
-
-    let send_result = tx
-        .send(crate::connection::start_conversation_request(
-            new_sid.clone(),
-            wd,
-            model,
-        ))
-        .await;
-
-    if send_result.is_err() {
-        app.add_system_message(
-            MessageRole::System,
-            "Failed to reset session — agent stream closed.".to_string(),
-        );
-    } else {
-        app.session_id = Some(new_sid.clone());
-        app.status = format!("Connected | Session: {}", &new_sid[..8.min(new_sid.len())]);
-        app.add_system_message(MessageRole::System, "Conversation cleared.".to_string());
-    }
-    app.scroll_to_bottom();
-}
-
 /// Display help message listing all available commands.
 fn show_help(app: &mut App) {
     let mut lines = Vec::new();
@@ -397,9 +364,6 @@ async fn handle_input_key(
                         "help" => {
                             show_help(app);
                         }
-                        "clear" => {
-                            clear_session(app, tx).await;
-                        }
                         _ if is_service => {
                             // Service commands (cd, pwd, exit-daemon, etc.)
                             // executed on the daemon via CommandService.
@@ -413,6 +377,7 @@ async fn handle_input_key(
                             // client-side effects after Claude processes them.
                             let client_cmd = match command.as_str() {
                                 "compact" => Some(ClientCommand::Compact),
+                                "clear" => Some(ClientCommand::Clear),
                                 "model" => {
                                     args.first().map(|m| ClientCommand::ModelSwitch(m.clone()))
                                 }
