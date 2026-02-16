@@ -82,6 +82,33 @@ impl CommandRegistry {
         self.session_layers.insert(session_id.to_string(), entries);
     }
 
+    /// Update only the non-MCP entries in a session layer, preserving MCP tool entries.
+    ///
+    /// This is used by `reload-remote` to refresh plugins and skills without
+    /// losing MCP tool entries that were set during `system_init`.
+    pub fn update_session_plugin_entries(
+        &mut self,
+        session_id: &str,
+        plugin_entries: Vec<CommandEntry>,
+    ) {
+        use betcode_core::commands::CommandCategory;
+
+        let mut combined = self
+            .session_layers
+            .get(session_id)
+            .map(|existing| {
+                existing
+                    .iter()
+                    .filter(|e| e.category == CommandCategory::Mcp)
+                    .cloned()
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+
+        combined.extend(plugin_entries);
+        self.session_layers.insert(session_id.to_string(), combined);
+    }
+
     /// Remove the session layer for the given session ID.
     pub fn remove_session(&mut self, session_id: &str) {
         self.session_layers.remove(session_id);
@@ -217,6 +244,71 @@ mod tests {
         let entries = registry.get_for_session("s1");
         assert!(!entries.iter().any(|e| e.name == "old-tool"));
         assert!(entries.iter().any(|e| e.name == "new-tool"));
+    }
+
+    #[test]
+    fn update_session_plugin_entries_preserves_mcp() {
+        let mut registry = CommandRegistry::new();
+
+        // Set initial session layer with MCP + plugin entries
+        let mcp_entry = CommandEntry::new(
+            "mcp-tool",
+            "An MCP tool",
+            CommandCategory::Mcp,
+            ExecutionMode::Passthrough,
+            "mcp-server",
+        );
+        let plugin_entry = CommandEntry::new(
+            "old-plugin",
+            "Old plugin",
+            CommandCategory::Plugin,
+            ExecutionMode::Passthrough,
+            "my-plugin",
+        );
+        registry.set_session_entries("s1", vec![mcp_entry, plugin_entry]);
+
+        // Update with new plugin entries — MCP should be preserved
+        let new_plugin = CommandEntry::new(
+            "new-plugin",
+            "New plugin",
+            CommandCategory::Plugin,
+            ExecutionMode::Passthrough,
+            "my-plugin",
+        );
+        registry.update_session_plugin_entries("s1", vec![new_plugin]);
+
+        let entries = registry.get_for_session("s1");
+        assert!(
+            entries.iter().any(|e| e.name == "mcp-tool"),
+            "MCP entry should be preserved"
+        );
+        assert!(
+            entries.iter().any(|e| e.name == "new-plugin"),
+            "New plugin should be present"
+        );
+        assert!(
+            !entries.iter().any(|e| e.name == "old-plugin"),
+            "Old plugin should be replaced"
+        );
+    }
+
+    #[test]
+    fn update_session_plugin_entries_works_with_no_existing_session() {
+        let mut registry = CommandRegistry::new();
+        let base_count = registry.get_all().len();
+
+        let plugin = CommandEntry::new(
+            "my-plugin",
+            "A plugin",
+            CommandCategory::Plugin,
+            ExecutionMode::Passthrough,
+            "plugin-src",
+        );
+        registry.update_session_plugin_entries("s1", vec![plugin]);
+
+        let entries = registry.get_for_session("s1");
+        assert_eq!(entries.len(), base_count + 1);
+        assert!(entries.iter().any(|e| e.name == "my-plugin"));
     }
 
     #[test]

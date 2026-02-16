@@ -82,7 +82,7 @@ impl ServiceExecutor {
         let claude_dir = self.cwd.join(".claude");
         let plugin_entries = betcode_core::commands::discover_plugin_entries(&claude_dir);
         let plugin_count = plugin_entries.len();
-        registry.set_session_entries(session_id, plugin_entries);
+        registry.update_session_plugin_entries(session_id, plugin_entries);
 
         let mut msg = format!("Reloaded {count} commands, {plugin_count} plugin entries");
         if !result.warnings.is_empty() {
