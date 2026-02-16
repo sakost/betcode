@@ -1,3 +1,4 @@
+pub mod cert_provisioning;
 pub mod cli;
 pub mod cmd;
 pub mod config;

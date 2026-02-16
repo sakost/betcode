@@ -60,6 +60,16 @@ struct Args {
     #[arg(long, env = "BETCODE_RELAY_CUSTOM_CA_CERT")]
     relay_custom_ca_cert: Option<PathBuf>,
 
+    /// Path to PEM-encoded client certificate for mTLS with the relay.
+    /// If not specified, auto-discovered from `$HOME/.betcode/certs/client.pem`.
+    #[arg(long, env = "BETCODE_CLIENT_CERT")]
+    client_cert: Option<PathBuf>,
+
+    /// Path to PEM-encoded client private key for mTLS with the relay.
+    /// If not specified, auto-discovered from `$HOME/.betcode/certs/client-key.pem`.
+    #[arg(long, env = "BETCODE_CLIENT_KEY")]
+    client_key: Option<PathBuf>,
+
     /// Base directory for git worktrees
     #[arg(long, env = "BETCODE_WORKTREE_DIR")]
     worktree_dir: Option<PathBuf>,
@@ -156,6 +166,8 @@ async fn main() -> anyhow::Result<()> {
         tunnel_config
             .ca_cert_path
             .clone_from(&args.relay_custom_ca_cert);
+        tunnel_config.client_cert_path.clone_from(&args.client_cert);
+        tunnel_config.client_key_path.clone_from(&args.client_key);
 
         info!(
             relay_url = %relay_url,
@@ -185,6 +197,10 @@ async fn main() -> anyhow::Result<()> {
         drop(shutdown_rx);
         None
     };
+
+    // Spawn certificate expiry monitor (checks daily, rotates if < 30 days to expiry)
+    let cert_monitor_rx = shutdown_tx.subscribe();
+    let cert_monitor_handle = betcode_daemon::tunnel::spawn_cert_monitor(cert_monitor_rx);
 
     // Serve until shutdown signal
     #[cfg(unix)]
@@ -218,11 +234,12 @@ async fn main() -> anyhow::Result<()> {
         }
     }
 
-    // Signal tunnel client to shut down
+    // Signal tunnel client and cert monitor to shut down
     let _ = shutdown_tx.send(true);
     if let Some(handle) = tunnel_handle {
         let _ = handle.await;
     }
+    let _ = cert_monitor_handle.await;
 
     info!("Daemon stopped");
     Ok(())

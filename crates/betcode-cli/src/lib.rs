@@ -9,6 +9,7 @@ pub mod commands;
 pub mod completion;
 pub mod config;
 pub mod connection;
+pub mod daemon_cmd;
 pub mod gitlab_cmd;
 pub mod gitlab_fmt;
 pub mod headless;

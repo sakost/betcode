@@ -18,7 +18,7 @@ metrics = ["betcode-core/metrics"]
 [dependencies]
 betcode-proto = { workspace = true }
 betcode-core = { workspace = true }
-betcode-crypto = { workspace = true }
+betcode-crypto = { workspace = true, features = ["certs"] }
 tokio.workspace = true
 tonic = { workspace = true, features = ["tls-ring", "tls-native-roots", "tls-webpki-roots"] }
 tonic-health.workspace = true

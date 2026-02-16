@@ -14,7 +14,7 @@ path = "src/main.rs"
 [dependencies]
 betcode-proto = { workspace = true }
 betcode-core = { workspace = true }
-betcode-crypto = { workspace = true }
+betcode-crypto = { workspace = true, features = ["certs"] }
 prost.workspace = true
 tokio.workspace = true
 tonic = { workspace = true, features = ["tls-ring", "tls-native-roots", "tls-webpki-roots"] }
@@ -32,6 +32,9 @@ thiserror.workspace = true
 uuid = { version = "1.20.0", features = ["v4"] }
 dirs = "6"
 unicode-width = "0.2.2"
+
+[dev-dependencies]
+tempfile.workspace = true
 
 [lints]
 workspace = true
