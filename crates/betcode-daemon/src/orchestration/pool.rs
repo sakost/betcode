@@ -151,6 +151,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::significant_drop_tightening)]
     async fn try_acquire_succeeds_when_available() {
         let pool = SubprocessPool::new(2);
         let permit1 = pool.try_acquire();
@@ -164,6 +165,7 @@ mod tests {
         // Third should fail
         let permit3 = pool.try_acquire();
         assert!(permit3.is_none());
+        drop((permit1, permit2, permit3));
     }
 
     #[tokio::test]

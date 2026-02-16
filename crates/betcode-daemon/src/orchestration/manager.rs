@@ -1128,7 +1128,7 @@ mod tests {
             Some(betcode_proto::v1::subagent_event::Event::Output(out)) => {
                 assert_eq!(out.text, "Hello");
             }
-            other => panic!("Expected Output, got {:?}", other),
+            other => panic!("Expected Output, got {other:?}"),
         }
     }
 
@@ -1162,7 +1162,7 @@ mod tests {
                 assert_eq!(pr.request_id, "req-1");
                 assert_eq!(pr.tool_name, "Bash");
             }
-            other => panic!("Expected PermissionRequest, got {:?}", other),
+            other => panic!("Expected PermissionRequest, got {other:?}"),
         }
     }
 
