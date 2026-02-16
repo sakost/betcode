@@ -32,6 +32,8 @@ pub struct EventBridge {
     /// Stored when converting `control_request` → `PermissionRequest` so the relay
     /// can pass back the original `updatedInput` in the response.
     pending_permission_inputs: HashMap<String, serde_json::Value>,
+    /// MCP tool entries extracted from the last `system_init` message.
+    mcp_entries: Vec<betcode_core::commands::CommandEntry>,
 }
 
 impl Default for EventBridge {
@@ -57,6 +59,7 @@ impl EventBridge {
             session_info: None,
             pending_question_inputs: HashMap::new(),
             pending_permission_inputs: HashMap::new(),
+            mcp_entries: Vec::new(),
         }
     }
 
@@ -102,6 +105,7 @@ impl EventBridge {
         };
 
         self.session_info = Some(info.clone());
+        self.mcp_entries = betcode_core::commands::mcp_tools_to_entries(&init.tools);
 
         let mut event = self.next_event();
         event.event = Some(proto::agent_event::Event::SessionInfo(info));
@@ -359,6 +363,11 @@ impl EventBridge {
     /// Get the current session info.
     pub const fn session_info(&self) -> Option<&SessionInfo> {
         self.session_info.as_ref()
+    }
+
+    /// Returns MCP tool entries discovered from the most recent `system_init`.
+    pub fn mcp_entries(&self) -> &[betcode_core::commands::CommandEntry] {
+        &self.mcp_entries
     }
 
     /// Get the current sequence number.
