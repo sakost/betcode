@@ -301,6 +301,8 @@ fn core_entry_to_proto(
         execution_mode: core_exec_mode_to_proto(&entry.execution_mode) as i32,
         source: entry.source,
         args_schema: entry.args_schema,
+        group: entry.group.unwrap_or_default(),
+        display_name: entry.display_name.unwrap_or_default(),
     }
 }
 
@@ -317,6 +319,8 @@ const fn core_category_to_proto(
         betcode_core::commands::CommandCategory::Plugin => {
             betcode_proto::v1::CommandCategory::Plugin
         }
+        betcode_core::commands::CommandCategory::Skill => betcode_proto::v1::CommandCategory::Skill,
+        betcode_core::commands::CommandCategory::Mcp => betcode_proto::v1::CommandCategory::Mcp,
     }
 }
 

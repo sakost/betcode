@@ -56,9 +56,9 @@ impl ServiceExecutor {
         Ok(())
     }
 
-    /// Reloads the command registry by re-discovering Claude Code commands.
+    /// Reloads the command registry by re-discovering Claude Code commands and plugins.
     ///
-    /// Clears existing CC-sourced commands, re-runs discovery, and adds
+    /// Clears existing CC-sourced and plugin commands, re-runs discovery, and adds
     /// the fresh commands back into the registry.
     pub fn execute_reload_remote(&self, registry: &mut CommandRegistry) -> Result<String> {
         // Clear existing CC commands
@@ -73,7 +73,18 @@ impl ServiceExecutor {
             registry.add(cmd);
         }
 
-        let mut msg = format!("Reloaded {count} Claude Code commands");
+        // Re-discover plugin commands from ~/.claude/
+        registry.clear_plugin_sources();
+        let claude_dir = dirs::home_dir()
+            .map(|h| h.join(".claude"))
+            .unwrap_or_default();
+        let plugin_entries = betcode_core::commands::discover_plugin_entries(&claude_dir);
+        let plugin_count = plugin_entries.len();
+        for entry in plugin_entries {
+            registry.add(entry);
+        }
+
+        let mut msg = format!("Reloaded {count} commands, {plugin_count} plugin entries");
         if !result.warnings.is_empty() {
             use std::fmt::Write;
             let _ = write!(msg, " ({} warnings)", result.warnings.len());

@@ -96,11 +96,6 @@ impl GrpcServer {
 
         let subprocess_manager = Arc::new(subprocess_manager);
         let multiplexer = Arc::new(SessionMultiplexer::with_defaults());
-        let relay = Arc::new(SessionRelay::new(
-            Arc::clone(&subprocess_manager),
-            Arc::clone(&multiplexer),
-            db.clone(),
-        ));
 
         let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
         let mut registry = CommandRegistry::new();
@@ -111,7 +106,24 @@ impl GrpcServer {
             registry.add(cmd);
         }
 
+        // Discover plugin commands from ~/.claude/
+        let claude_dir = dirs::home_dir()
+            .map(|h| h.join(".claude"))
+            .unwrap_or_default();
+        let plugin_entries = betcode_core::commands::discover_plugin_entries(&claude_dir);
+        for entry in plugin_entries {
+            registry.add(entry);
+        }
+
         let command_registry = Arc::new(RwLock::new(registry));
+
+        let relay = Arc::new(SessionRelay::new(
+            Arc::clone(&subprocess_manager),
+            Arc::clone(&multiplexer),
+            db.clone(),
+            Arc::clone(&command_registry),
+        ));
+
         let file_index = Arc::new(RwLock::new(
             FileIndex::build(&cwd, 10_000)
                 .await
