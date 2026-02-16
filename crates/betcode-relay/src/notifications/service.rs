@@ -119,6 +119,18 @@ mod tests {
     use super::*;
     use crate::notifications::fcm::ServiceAccountCredentials;
 
+    fn register_req(
+        token: &str,
+        platform: DevicePlatform,
+        user_id: &str,
+    ) -> Request<RegisterDeviceRequest> {
+        Request::new(RegisterDeviceRequest {
+            device_token: token.to_string(),
+            platform: platform as i32,
+            user_id: user_id.to_string(),
+        })
+    }
+
     async fn test_service() -> NotificationServiceImpl {
         let db = RelayDatabase::open_in_memory().await.unwrap();
         let creds = ServiceAccountCredentials {
@@ -133,16 +145,18 @@ mod tests {
     #[tokio::test]
     async fn register_device_success() {
         let svc = test_service().await;
-        let req = Request::new(RegisterDeviceRequest {
-            device_token: "token-abc-123".to_string(),
-            platform: DevicePlatform::Android as i32,
-            user_id: "user-1".to_string(),
-        });
-
-        let resp = svc.register_device(req).await.unwrap();
+        let resp = svc
+            .register_device(register_req(
+                "token-abc-123",
+                DevicePlatform::Android,
+                "user-1",
+            ))
+            .await
+            .unwrap();
         assert!(resp.into_inner().success);
     }
 
+    // jscpd:ignore-start -- validation tests are intentionally repetitive
     #[tokio::test]
     async fn register_device_empty_token_fails() {
         let svc = test_service().await;
@@ -184,17 +198,15 @@ mod tests {
         assert_eq!(err.code(), tonic::Code::InvalidArgument);
         assert!(err.message().contains("Platform"));
     }
+    // jscpd:ignore-end
 
     #[tokio::test]
     async fn register_device_ios_platform_success() {
         let svc = test_service().await;
-        let req = Request::new(RegisterDeviceRequest {
-            device_token: "ios-token-456".to_string(),
-            platform: DevicePlatform::Ios as i32,
-            user_id: "user-2".to_string(),
-        });
-
-        let resp = svc.register_device(req).await.unwrap();
+        let resp = svc
+            .register_device(register_req("ios-token-456", DevicePlatform::Ios, "user-2"))
+            .await
+            .unwrap();
         assert!(resp.into_inner().success);
     }
 
@@ -203,12 +215,13 @@ mod tests {
         let svc = test_service().await;
 
         // First register
-        let req = Request::new(RegisterDeviceRequest {
-            device_token: "token-to-remove".to_string(),
-            platform: DevicePlatform::Android as i32,
-            user_id: "user-1".to_string(),
-        });
-        svc.register_device(req).await.unwrap();
+        svc.register_device(register_req(
+            "token-to-remove",
+            DevicePlatform::Android,
+            "user-1",
+        ))
+        .await
+        .unwrap();
 
         // Then unregister
         let req = Request::new(UnregisterDeviceRequest {
@@ -246,20 +259,19 @@ mod tests {
         let svc = test_service().await;
 
         // Register with user-1
-        let req = Request::new(RegisterDeviceRequest {
-            device_token: "shared-token".to_string(),
-            platform: DevicePlatform::Android as i32,
-            user_id: "user-1".to_string(),
-        });
-        svc.register_device(req).await.unwrap();
+        svc.register_device(register_req(
+            "shared-token",
+            DevicePlatform::Android,
+            "user-1",
+        ))
+        .await
+        .unwrap();
 
         // Re-register same token with user-2 (should upsert)
-        let req = Request::new(RegisterDeviceRequest {
-            device_token: "shared-token".to_string(),
-            platform: DevicePlatform::Ios as i32,
-            user_id: "user-2".to_string(),
-        });
-        let resp = svc.register_device(req).await.unwrap();
+        let resp = svc
+            .register_device(register_req("shared-token", DevicePlatform::Ios, "user-2"))
+            .await
+            .unwrap();
         assert!(resp.into_inner().success);
 
         // Unregister should succeed (token still exists)

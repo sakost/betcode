@@ -85,6 +85,7 @@ struct Args {
     metrics_endpoint: Option<String>,
 }
 
+// jscpd:ignore-start -- binary bootstrap is inherently similar across daemons
 #[tokio::main]
 #[allow(clippy::too_many_lines)]
 async fn main() -> anyhow::Result<()> {
@@ -101,6 +102,7 @@ async fn main() -> anyhow::Result<()> {
         args.log_json,
         metrics_endpoint,
     );
+    // jscpd:ignore-end
 
     info!(
         version = env!("CARGO_PKG_VERSION"),

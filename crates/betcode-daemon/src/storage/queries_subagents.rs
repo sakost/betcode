@@ -292,6 +292,28 @@ mod tests {
             .unwrap();
     }
 
+    /// Create an in-memory DB with a seeded parent session.
+    async fn db_with_parent() -> Database {
+        let db = Database::open_in_memory().await.unwrap();
+        seed_parent_session(&db).await;
+        db
+    }
+
+    /// Create a subagent with common defaults (for tests that only care
+    /// about status transitions or cascades, not specific field values).
+    async fn create_default_subagent(db: &Database, id: &str) {
+        db.create_subagent(id, "parent-1", "task", None, 10, false, "[]", None)
+            .await
+            .unwrap();
+    }
+
+    /// Create an orchestration with common defaults.
+    async fn create_default_orchestration(db: &Database, id: &str, strategy: &str) {
+        db.create_orchestration(id, "parent-1", strategy)
+            .await
+            .unwrap();
+    }
+
     // =========================================================================
     // Subagent tests
     // =========================================================================
@@ -368,15 +390,10 @@ mod tests {
 
     #[tokio::test]
     async fn list_subagents_for_session() {
-        let db = Database::open_in_memory().await.unwrap();
-        seed_parent_session(&db).await;
+        let db = db_with_parent().await;
 
-        db.create_subagent("sa-1", "parent-1", "task 1", None, 10, false, "[]", None)
-            .await
-            .unwrap();
-        db.create_subagent("sa-2", "parent-1", "task 2", None, 10, false, "[]", None)
-            .await
-            .unwrap();
+        create_default_subagent(&db, "sa-1").await;
+        create_default_subagent(&db, "sa-2").await;
 
         let all = db
             .list_subagents_for_session("parent-1", None)
@@ -387,15 +404,10 @@ mod tests {
 
     #[tokio::test]
     async fn list_subagents_with_status_filter() {
-        let db = Database::open_in_memory().await.unwrap();
-        seed_parent_session(&db).await;
+        let db = db_with_parent().await;
 
-        db.create_subagent("sa-1", "parent-1", "task 1", None, 10, false, "[]", None)
-            .await
-            .unwrap();
-        db.create_subagent("sa-2", "parent-1", "task 2", None, 10, false, "[]", None)
-            .await
-            .unwrap();
+        create_default_subagent(&db, "sa-1").await;
+        create_default_subagent(&db, "sa-2").await;
 
         // Mark one as running
         db.update_subagent_status("sa-1", "running", None, None)
@@ -419,12 +431,8 @@ mod tests {
 
     #[tokio::test]
     async fn update_subagent_status_to_running() {
-        let db = Database::open_in_memory().await.unwrap();
-        seed_parent_session(&db).await;
-
-        db.create_subagent("sa-1", "parent-1", "task", None, 10, false, "[]", None)
-            .await
-            .unwrap();
+        let db = db_with_parent().await;
+        create_default_subagent(&db, "sa-1").await;
 
         db.update_subagent_status("sa-1", "running", None, None)
             .await
@@ -438,12 +446,8 @@ mod tests {
 
     #[tokio::test]
     async fn update_subagent_status_to_completed() {
-        let db = Database::open_in_memory().await.unwrap();
-        seed_parent_session(&db).await;
-
-        db.create_subagent("sa-1", "parent-1", "task", None, 10, false, "[]", None)
-            .await
-            .unwrap();
+        let db = db_with_parent().await;
+        create_default_subagent(&db, "sa-1").await;
 
         db.update_subagent_status("sa-1", "running", None, None)
             .await
@@ -461,12 +465,8 @@ mod tests {
 
     #[tokio::test]
     async fn update_subagent_status_to_failed() {
-        let db = Database::open_in_memory().await.unwrap();
-        seed_parent_session(&db).await;
-
-        db.create_subagent("sa-1", "parent-1", "task", None, 10, false, "[]", None)
-            .await
-            .unwrap();
+        let db = db_with_parent().await;
+        create_default_subagent(&db, "sa-1").await;
 
         db.update_subagent_status("sa-1", "failed", Some(1), Some("Compilation error"))
             .await
@@ -481,12 +481,8 @@ mod tests {
 
     #[tokio::test]
     async fn update_subagent_status_to_cancelled() {
-        let db = Database::open_in_memory().await.unwrap();
-        seed_parent_session(&db).await;
-
-        db.create_subagent("sa-1", "parent-1", "task", None, 10, false, "[]", None)
-            .await
-            .unwrap();
+        let db = db_with_parent().await;
+        create_default_subagent(&db, "sa-1").await;
 
         db.update_subagent_status("sa-1", "cancelled", None, Some("User cancelled"))
             .await
@@ -499,12 +495,8 @@ mod tests {
 
     #[tokio::test]
     async fn subagents_cascade_on_session_delete() {
-        let db = Database::open_in_memory().await.unwrap();
-        seed_parent_session(&db).await;
-
-        db.create_subagent("sa-1", "parent-1", "task", None, 10, false, "[]", None)
-            .await
-            .unwrap();
+        let db = db_with_parent().await;
+        create_default_subagent(&db, "sa-1").await;
 
         // Delete parent session -> subagents cascade
         db.delete_session("parent-1").await.unwrap();
@@ -522,8 +514,7 @@ mod tests {
 
     #[tokio::test]
     async fn create_and_get_orchestration() {
-        let db = Database::open_in_memory().await.unwrap();
-        seed_parent_session(&db).await;
+        let db = db_with_parent().await;
 
         let orch = db
             .create_orchestration("orch-1", "parent-1", "parallel")
@@ -549,12 +540,8 @@ mod tests {
 
     #[tokio::test]
     async fn update_orchestration_status_to_running() {
-        let db = Database::open_in_memory().await.unwrap();
-        seed_parent_session(&db).await;
-
-        db.create_orchestration("orch-1", "parent-1", "dag")
-            .await
-            .unwrap();
+        let db = db_with_parent().await;
+        create_default_orchestration(&db, "orch-1", "dag").await;
 
         db.update_orchestration_status("orch-1", "running")
             .await
@@ -567,12 +554,8 @@ mod tests {
 
     #[tokio::test]
     async fn update_orchestration_status_to_completed() {
-        let db = Database::open_in_memory().await.unwrap();
-        seed_parent_session(&db).await;
-
-        db.create_orchestration("orch-1", "parent-1", "sequential")
-            .await
-            .unwrap();
+        let db = db_with_parent().await;
+        create_default_orchestration(&db, "orch-1", "sequential").await;
 
         db.update_orchestration_status("orch-1", "completed")
             .await
@@ -585,12 +568,8 @@ mod tests {
 
     #[tokio::test]
     async fn update_orchestration_status_to_failed() {
-        let db = Database::open_in_memory().await.unwrap();
-        seed_parent_session(&db).await;
-
-        db.create_orchestration("orch-1", "parent-1", "dag")
-            .await
-            .unwrap();
+        let db = db_with_parent().await;
+        create_default_orchestration(&db, "orch-1", "dag").await;
 
         db.update_orchestration_status("orch-1", "failed")
             .await
@@ -603,12 +582,8 @@ mod tests {
 
     #[tokio::test]
     async fn orchestrations_cascade_on_session_delete() {
-        let db = Database::open_in_memory().await.unwrap();
-        seed_parent_session(&db).await;
-
-        db.create_orchestration("orch-1", "parent-1", "parallel")
-            .await
-            .unwrap();
+        let db = db_with_parent().await;
+        create_default_orchestration(&db, "orch-1", "parallel").await;
 
         db.delete_session("parent-1").await.unwrap();
 
@@ -625,11 +600,8 @@ mod tests {
 
     #[tokio::test]
     async fn create_and_get_orchestration_step() {
-        let db = Database::open_in_memory().await.unwrap();
-        seed_parent_session(&db).await;
-        db.create_orchestration("orch-1", "parent-1", "dag")
-            .await
-            .unwrap();
+        let db = db_with_parent().await;
+        create_default_orchestration(&db, "orch-1", "dag").await;
 
         let step = db
             .create_orchestration_step("step-1", "orch-1", 0, "Analyze codebase", "[]")
@@ -647,11 +619,8 @@ mod tests {
 
     #[tokio::test]
     async fn get_steps_for_orchestration_ordered() {
-        let db = Database::open_in_memory().await.unwrap();
-        seed_parent_session(&db).await;
-        db.create_orchestration("orch-1", "parent-1", "sequential")
-            .await
-            .unwrap();
+        let db = db_with_parent().await;
+        create_default_orchestration(&db, "orch-1", "sequential").await;
 
         db.create_orchestration_step("step-b", "orch-1", 1, "Step B", "[]")
             .await
@@ -672,14 +641,9 @@ mod tests {
 
     #[tokio::test]
     async fn update_step_status_with_subagent() {
-        let db = Database::open_in_memory().await.unwrap();
-        seed_parent_session(&db).await;
-        db.create_orchestration("orch-1", "parent-1", "dag")
-            .await
-            .unwrap();
-        db.create_subagent("sa-1", "parent-1", "task", None, 10, false, "[]", None)
-            .await
-            .unwrap();
+        let db = db_with_parent().await;
+        create_default_orchestration(&db, "orch-1", "dag").await;
+        create_default_subagent(&db, "sa-1").await;
         db.create_orchestration_step("step-1", "orch-1", 0, "Run task", "[]")
             .await
             .unwrap();
@@ -695,11 +659,8 @@ mod tests {
 
     #[tokio::test]
     async fn update_step_status_without_subagent() {
-        let db = Database::open_in_memory().await.unwrap();
-        seed_parent_session(&db).await;
-        db.create_orchestration("orch-1", "parent-1", "dag")
-            .await
-            .unwrap();
+        let db = db_with_parent().await;
+        create_default_orchestration(&db, "orch-1", "dag").await;
         db.create_orchestration_step("step-1", "orch-1", 0, "Run task", "[]")
             .await
             .unwrap();
@@ -715,11 +676,8 @@ mod tests {
 
     #[tokio::test]
     async fn steps_cascade_on_orchestration_delete() {
-        let db = Database::open_in_memory().await.unwrap();
-        seed_parent_session(&db).await;
-        db.create_orchestration("orch-1", "parent-1", "parallel")
-            .await
-            .unwrap();
+        let db = db_with_parent().await;
+        create_default_orchestration(&db, "orch-1", "parallel").await;
         db.create_orchestration_step("step-1", "orch-1", 0, "Task", "[]")
             .await
             .unwrap();
@@ -736,11 +694,8 @@ mod tests {
 
     #[tokio::test]
     async fn step_depends_on_stores_json() {
-        let db = Database::open_in_memory().await.unwrap();
-        seed_parent_session(&db).await;
-        db.create_orchestration("orch-1", "parent-1", "dag")
-            .await
-            .unwrap();
+        let db = db_with_parent().await;
+        create_default_orchestration(&db, "orch-1", "dag").await;
 
         db.create_orchestration_step("step-a", "orch-1", 0, "First", "[]")
             .await
@@ -756,17 +711,11 @@ mod tests {
 
     #[tokio::test]
     async fn step_subagent_set_null_on_subagent_delete() {
-        let db = Database::open_in_memory().await.unwrap();
-        seed_parent_session(&db).await;
+        let db = db_with_parent().await;
 
-        // Create a second session to be the parent of a separate subagent
-        // so deleting sa-1 doesn't cascade from session deletion
-        db.create_subagent("sa-1", "parent-1", "task", None, 10, false, "[]", None)
-            .await
-            .unwrap();
-        db.create_orchestration("orch-1", "parent-1", "dag")
-            .await
-            .unwrap();
+        // Create subagent and orchestration for the FK relationship test
+        create_default_subagent(&db, "sa-1").await;
+        create_default_orchestration(&db, "orch-1", "dag").await;
         db.create_orchestration_step("step-1", "orch-1", 0, "Task", "[]")
             .await
             .unwrap();
@@ -792,8 +741,7 @@ mod tests {
 
     #[tokio::test]
     async fn list_subagents_empty_session() {
-        let db = Database::open_in_memory().await.unwrap();
-        seed_parent_session(&db).await;
+        let db = db_with_parent().await;
 
         let all = db
             .list_subagents_for_session("parent-1", None)
@@ -804,11 +752,8 @@ mod tests {
 
     #[tokio::test]
     async fn get_steps_for_empty_orchestration() {
-        let db = Database::open_in_memory().await.unwrap();
-        seed_parent_session(&db).await;
-        db.create_orchestration("orch-1", "parent-1", "parallel")
-            .await
-            .unwrap();
+        let db = db_with_parent().await;
+        create_default_orchestration(&db, "orch-1", "parallel").await;
 
         let steps = db.get_steps_for_orchestration("orch-1").await.unwrap();
         assert!(steps.is_empty());

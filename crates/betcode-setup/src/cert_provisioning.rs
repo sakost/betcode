@@ -6,25 +6,18 @@
 
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::time::SystemTime;
 
 use anyhow::{Context, Result};
 
-/// Default certificate directory under the user's home.
-const CERTS_SUBDIR: &str = ".betcode/certs";
+pub use betcode_crypto::certs::{CERTS_SUBDIR, CertMetadata, DEFAULT_VALIDITY_DAYS};
+use betcode_crypto::certs::{METADATA_FILENAME, read_metadata as crypto_read_metadata};
+
 /// Default client certificate filename.
 const CLIENT_CERT_FILENAME: &str = "client.pem";
 /// Default client key filename.
 const CLIENT_KEY_FILENAME: &str = "client-key.pem";
 /// Default CA certificate filename.
 const CA_CERT_FILENAME: &str = "ca.pem";
-/// Metadata file tracking cert generation time.
-const METADATA_FILENAME: &str = "cert-metadata.json";
-
-/// Default validity period for generated client certificates (365 days).
-/// `rcgen` defaults to ~4096 days, but we use a shorter window to encourage
-/// regular rotation.
-pub const DEFAULT_VALIDITY_DAYS: u64 = 365;
 
 /// Paths to the provisioned certificate files.
 #[derive(Debug, Clone)]
@@ -35,32 +28,6 @@ pub struct CertPaths {
     pub client_key: PathBuf,
     /// Path to the CA certificate PEM file.
     pub ca_cert: PathBuf,
-}
-
-/// Metadata stored alongside provisioned certificates.
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-pub struct CertMetadata {
-    /// Machine ID the certificate was issued for.
-    pub machine_id: String,
-    /// Unix timestamp (seconds) when the cert was generated.
-    pub generated_at_secs: u64,
-    /// Validity period in days from generation time.
-    pub validity_days: u64,
-}
-
-impl CertMetadata {
-    /// Returns `true` if the certificate expires within the given number of days.
-    pub fn expires_within_days(&self, days: u64) -> bool {
-        let now_secs = SystemTime::now()
-            .duration_since(SystemTime::UNIX_EPOCH)
-            .map(|d| d.as_secs())
-            .unwrap_or(0);
-        let expires_at_secs = self.generated_at_secs + self.validity_days * 86400;
-        let threshold_secs = days * 86400;
-
-        // If now + threshold >= expires_at, the cert expires within `days`
-        now_secs.saturating_add(threshold_secs) >= expires_at_secs
-    }
 }
 
 /// Resolve the default certificate directory (`$HOME/.betcode/certs/`).
@@ -103,14 +70,7 @@ pub fn provision_client_cert(certs_dir: &Path, machine_id: &str) -> Result<CertP
     write_pem_file(&paths.ca_cert, &bundle.ca_cert_pem, "CA certificate")?;
 
     // Write metadata for expiry tracking
-    let metadata = CertMetadata {
-        machine_id: machine_id.to_string(),
-        generated_at_secs: SystemTime::now()
-            .duration_since(SystemTime::UNIX_EPOCH)
-            .map(|d| d.as_secs())
-            .unwrap_or(0),
-        validity_days: DEFAULT_VALIDITY_DAYS,
-    };
+    let metadata = CertMetadata::now(machine_id.to_string(), DEFAULT_VALIDITY_DAYS);
     write_metadata(certs_dir, &metadata)?;
 
     // Restrict key file permissions on unix
@@ -146,9 +106,7 @@ fn write_metadata(certs_dir: &Path, metadata: &CertMetadata) -> Result<()> {
 ///
 /// Returns `None` if the file does not exist or cannot be parsed.
 pub fn read_metadata(certs_dir: &Path) -> Option<CertMetadata> {
-    let path = certs_dir.join(METADATA_FILENAME);
-    let content = fs::read_to_string(path).ok()?;
-    serde_json::from_str(&content).ok()
+    crypto_read_metadata(certs_dir)
 }
 
 /// Restrict file permissions to owner-only read/write (0600) on unix.
@@ -180,6 +138,7 @@ pub fn cert_paths_in(certs_dir: &Path) -> CertPaths {
 #[allow(clippy::panic, clippy::expect_used, clippy::unwrap_used)]
 mod tests {
     use super::*;
+    use std::time::SystemTime;
 
     #[test]
     fn provision_creates_cert_files() {

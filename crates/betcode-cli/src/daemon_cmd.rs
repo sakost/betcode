@@ -4,10 +4,13 @@
 //! rotation.
 
 use std::fs;
-use std::path::{Path, PathBuf};
-use std::time::SystemTime;
+use std::path::PathBuf;
 
 use anyhow::{Context, Result};
+
+use betcode_crypto::certs::{
+    CERTS_SUBDIR, CertMetadata, DEFAULT_VALIDITY_DAYS, read_metadata, write_metadata,
+};
 
 /// Daemon management subcommands.
 #[derive(clap::Subcommand, Debug)]
@@ -28,42 +31,11 @@ pub enum DaemonAction {
     },
 }
 
-/// Default cert directory name under home.
-const CERTS_SUBDIR: &str = ".betcode/certs";
-/// Metadata filename (must match `betcode-setup`'s `cert_provisioning`).
-const METADATA_FILENAME: &str = "cert-metadata.json";
-/// Default validity period for rotated certificates (365 days).
-const DEFAULT_VALIDITY_DAYS: u64 = 365;
-
-/// Certificate metadata (same format as betcode-setup and betcode-daemon).
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-struct CertMetadata {
-    machine_id: String,
-    generated_at_secs: u64,
-    validity_days: u64,
-}
-
 /// Resolve the default certificate directory.
 fn default_certs_dir() -> Result<PathBuf> {
     let home =
         dirs::home_dir().ok_or_else(|| anyhow::anyhow!("Cannot determine home directory"))?;
     Ok(home.join(CERTS_SUBDIR))
-}
-
-/// Read certificate metadata from the certs directory.
-fn read_metadata(certs_dir: &Path) -> Option<CertMetadata> {
-    let path = certs_dir.join(METADATA_FILENAME);
-    let content = fs::read_to_string(path).ok()?;
-    serde_json::from_str(&content).ok()
-}
-
-/// Write certificate metadata JSON file.
-fn write_metadata(certs_dir: &Path, metadata: &CertMetadata) -> Result<()> {
-    let path = certs_dir.join(METADATA_FILENAME);
-    let json = serde_json::to_string_pretty(metadata)
-        .context("Failed to serialize cert metadata to JSON")?;
-    fs::write(&path, json)
-        .with_context(|| format!("Failed to write cert metadata: {}", path.display()))
 }
 
 /// Execute the `daemon` subcommand.
@@ -118,24 +90,12 @@ fn run_rotate_cert(
     fs::write(certs_dir.join("ca.pem"), &bundle.ca_cert_pem)
         .context("Failed to write CA certificate")?;
 
-    // Restrict key file permissions on unix
     #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let perms = fs::Permissions::from_mode(0o600);
-        fs::set_permissions(certs_dir.join("client-key.pem"), perms)
-            .context("Failed to set key file permissions")?;
-    }
+    betcode_crypto::certs::restrict_key_permissions(&certs_dir.join("client-key.pem"))
+        .map_err(|e| anyhow::anyhow!("{e}"))?;
 
-    let metadata = CertMetadata {
-        machine_id,
-        generated_at_secs: SystemTime::now()
-            .duration_since(SystemTime::UNIX_EPOCH)
-            .map(|d| d.as_secs())
-            .unwrap_or(0),
-        validity_days: DEFAULT_VALIDITY_DAYS,
-    };
-    write_metadata(&certs_dir, &metadata)?;
+    let metadata = CertMetadata::now(machine_id, DEFAULT_VALIDITY_DAYS);
+    write_metadata(&certs_dir, &metadata).map_err(|e| anyhow::anyhow!("{e}"))?;
 
     println!();
     println!("Certificate rotated successfully.");
@@ -170,7 +130,7 @@ mod tests {
             generated_at_secs: 1000,
             validity_days: 365,
         };
-        write_metadata(&certs_dir, &meta).unwrap();
+        write_metadata(&certs_dir, &meta).expect("write metadata");
 
         run_rotate_cert(Some(certs_dir.clone()), None).unwrap();
 

@@ -103,21 +103,18 @@ fn init_tracing_inner(
     // Build the OpenTelemetry layer only when the pipeline initialised
     // successfully.  Using `Option<L>` is handled by tracing-subscriber
     // as a no-op when `None`.
+    let otel_layer = guard.as_ref().map(|_| {
+        let tracer = opentelemetry::global::tracer("betcode");
+        tracing_opentelemetry::OpenTelemetryLayer::new(tracer)
+    });
+
     if log_json {
-        let otel_layer = guard.as_ref().map(|_| {
-            let tracer = opentelemetry::global::tracer("betcode");
-            tracing_opentelemetry::OpenTelemetryLayer::new(tracer)
-        });
         tracing_subscriber::registry()
             .with(env_filter)
             .with(tracing_subscriber::fmt::layer().json())
             .with(otel_layer)
             .init();
     } else {
-        let otel_layer = guard.as_ref().map(|_| {
-            let tracer = opentelemetry::global::tracer("betcode");
-            tracing_opentelemetry::OpenTelemetryLayer::new(tracer)
-        });
         tracing_subscriber::registry()
             .with(env_filter)
             .with(tracing_subscriber::fmt::layer())

@@ -214,6 +214,15 @@ mod tests {
         VersionServiceImpl::new(ServerConfig::default(), HashMap::new())
     }
 
+    fn negotiate_request(version: &str, features: Vec<String>) -> Request<NegotiateRequest> {
+        Request::new(NegotiateRequest {
+            client_version: version.to_string(),
+            client_type: "cli".to_string(),
+            requested_features: features,
+            client_capabilities: HashMap::new(),
+        })
+    }
+
     #[tokio::test]
     async fn get_version_returns_server_version() {
         let svc = test_service();
@@ -268,17 +277,13 @@ mod tests {
     #[tokio::test]
     async fn negotiate_grants_supported_features() {
         let svc = test_service();
+        let features = vec![
+            "streaming".to_string(),
+            "worktrees".to_string(),
+            "nonexistent".to_string(),
+        ];
         let resp = svc
-            .negotiate_capabilities(Request::new(NegotiateRequest {
-                client_version: "0.1.0".to_string(),
-                client_type: "cli".to_string(),
-                requested_features: vec![
-                    "streaming".to_string(),
-                    "worktrees".to_string(),
-                    "nonexistent".to_string(),
-                ],
-                client_capabilities: HashMap::new(),
-            }))
+            .negotiate_capabilities(negotiate_request("0.1.0", features))
             .await
             .unwrap();
         let inner = resp.into_inner();
@@ -293,12 +298,10 @@ mod tests {
     async fn negotiate_warns_unsupported_features() {
         let svc = test_service();
         let resp = svc
-            .negotiate_capabilities(Request::new(NegotiateRequest {
-                client_version: "0.1.0".to_string(),
-                client_type: "cli".to_string(),
-                requested_features: vec!["nonexistent_feature".to_string()],
-                client_capabilities: HashMap::new(),
-            }))
+            .negotiate_capabilities(negotiate_request(
+                "0.1.0",
+                vec!["nonexistent_feature".to_string()],
+            ))
             .await
             .unwrap();
         let inner = resp.into_inner();
@@ -316,12 +319,7 @@ mod tests {
     async fn negotiate_warns_empty_client_version() {
         let svc = test_service();
         let resp = svc
-            .negotiate_capabilities(Request::new(NegotiateRequest {
-                client_version: String::new(),
-                client_type: "cli".to_string(),
-                requested_features: vec![],
-                client_capabilities: HashMap::new(),
-            }))
+            .negotiate_capabilities(negotiate_request("", vec![]))
             .await
             .unwrap();
         let inner = resp.into_inner();
@@ -339,12 +337,7 @@ mod tests {
     async fn negotiate_returns_capability_set() {
         let svc = test_service();
         let resp = svc
-            .negotiate_capabilities(Request::new(NegotiateRequest {
-                client_version: "0.1.0".to_string(),
-                client_type: "cli".to_string(),
-                requested_features: vec![],
-                client_capabilities: HashMap::new(),
-            }))
+            .negotiate_capabilities(negotiate_request("0.1.0", vec![]))
             .await
             .unwrap();
         let caps = resp.into_inner().capabilities.unwrap();
@@ -360,12 +353,7 @@ mod tests {
     async fn negotiate_subagents_disabled_when_flag_off() {
         let svc = test_service_no_flags();
         let resp = svc
-            .negotiate_capabilities(Request::new(NegotiateRequest {
-                client_version: "0.1.0".to_string(),
-                client_type: "cli".to_string(),
-                requested_features: vec![],
-                client_capabilities: HashMap::new(),
-            }))
+            .negotiate_capabilities(negotiate_request("0.1.0", vec![]))
             .await
             .unwrap();
         let caps = resp.into_inner().capabilities.unwrap();
@@ -377,12 +365,7 @@ mod tests {
     async fn negotiate_rejects_old_client_version() {
         let svc = test_service();
         let resp = svc
-            .negotiate_capabilities(Request::new(NegotiateRequest {
-                client_version: "0.0.9".to_string(),
-                client_type: "cli".to_string(),
-                requested_features: vec![],
-                client_capabilities: HashMap::new(),
-            }))
+            .negotiate_capabilities(negotiate_request("0.0.9", vec![]))
             .await
             .unwrap();
         let inner = resp.into_inner();
@@ -395,12 +378,7 @@ mod tests {
     async fn negotiate_accepts_exact_min_version() {
         let svc = test_service();
         let resp = svc
-            .negotiate_capabilities(Request::new(NegotiateRequest {
-                client_version: "0.1.0".to_string(),
-                client_type: "cli".to_string(),
-                requested_features: vec![],
-                client_capabilities: HashMap::new(),
-            }))
+            .negotiate_capabilities(negotiate_request("0.1.0", vec![]))
             .await
             .unwrap();
         let inner = resp.into_inner();
@@ -413,12 +391,7 @@ mod tests {
     async fn negotiate_accepts_newer_client() {
         let svc = test_service();
         let resp = svc
-            .negotiate_capabilities(Request::new(NegotiateRequest {
-                client_version: "1.0.0".to_string(),
-                client_type: "cli".to_string(),
-                requested_features: vec![],
-                client_capabilities: HashMap::new(),
-            }))
+            .negotiate_capabilities(negotiate_request("1.0.0", vec![]))
             .await
             .unwrap();
 

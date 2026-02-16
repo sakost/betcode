@@ -432,6 +432,7 @@ mod tests {
         SubagentServiceImpl::new(manager, db)
     }
 
+    // jscpd:ignore-start -- validation tests are intentionally repetitive
     #[tokio::test]
     async fn spawn_rejects_empty_parent() {
         let svc = test_service().await;
@@ -469,6 +470,7 @@ mod tests {
         let err = svc.spawn_subagent(req).await.unwrap_err();
         assert_eq!(err.code(), tonic::Code::InvalidArgument);
     }
+    // jscpd:ignore-end
 
     #[tokio::test]
     async fn list_subagents_rejects_empty_session() {
@@ -541,6 +543,7 @@ mod tests {
         assert_eq!(err.code(), tonic::Code::InvalidArgument);
     }
 
+    // jscpd:ignore-start -- validation tests are intentionally repetitive
     #[tokio::test]
     async fn create_orchestration_rejects_empty_session() {
         let svc = test_service().await;
@@ -564,6 +567,7 @@ mod tests {
         let err = svc.create_orchestration(req).await.unwrap_err();
         assert_eq!(err.code(), tonic::Code::InvalidArgument);
     }
+    // jscpd:ignore-end
 
     #[tokio::test]
     async fn watch_orchestration_rejects_empty_id() {

@@ -6,45 +6,19 @@
 
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::time::{Duration, SystemTime};
+use std::time::Duration;
 
 use tracing::{error, info, warn};
+
+use betcode_crypto::certs::{
+    CERTS_SUBDIR, CertMetadata, DEFAULT_VALIDITY_DAYS, read_metadata, write_metadata,
+};
 
 /// Number of days before expiry to trigger automatic renewal.
 const RENEWAL_THRESHOLD_DAYS: u64 = 30;
 
 /// Interval between expiry checks (24 hours).
 const CHECK_INTERVAL: Duration = Duration::from_secs(24 * 60 * 60);
-
-/// Default cert directory name under home.
-const CERTS_SUBDIR: &str = ".betcode/certs";
-/// Metadata filename (must match `betcode-setup`'s `cert_provisioning`).
-const METADATA_FILENAME: &str = "cert-metadata.json";
-/// Default validity period for rotated certificates (365 days).
-const DEFAULT_VALIDITY_DAYS: u64 = 365;
-
-/// Certificate metadata (mirrors `betcode_setup::cert_provisioning::CertMetadata`).
-///
-/// Duplicated here to avoid a build dependency on `betcode-setup` from
-/// the daemon. Both crates read/write the same JSON format.
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-struct CertMetadata {
-    machine_id: String,
-    generated_at_secs: u64,
-    validity_days: u64,
-}
-
-impl CertMetadata {
-    fn expires_within_days(&self, days: u64) -> bool {
-        let now_secs = SystemTime::now()
-            .duration_since(SystemTime::UNIX_EPOCH)
-            .map(|d| d.as_secs())
-            .unwrap_or(0);
-        let expires_at_secs = self.generated_at_secs + self.validity_days * 86400;
-        let threshold_secs = days * 86400;
-        now_secs.saturating_add(threshold_secs) >= expires_at_secs
-    }
-}
 
 /// Result of a certificate rotation attempt.
 #[derive(Debug)]
@@ -65,21 +39,6 @@ pub enum RotationResult {
 /// Resolve the default certs directory.
 fn default_certs_dir() -> Option<PathBuf> {
     dirs::home_dir().map(|h| h.join(CERTS_SUBDIR))
-}
-
-/// Read certificate metadata from the certs directory.
-fn read_metadata(certs_dir: &Path) -> Option<CertMetadata> {
-    let path = certs_dir.join(METADATA_FILENAME);
-    let content = fs::read_to_string(path).ok()?;
-    serde_json::from_str(&content).ok()
-}
-
-/// Write certificate metadata JSON file.
-fn write_metadata(certs_dir: &Path, metadata: &CertMetadata) -> Result<(), String> {
-    let path = certs_dir.join(METADATA_FILENAME);
-    let json = serde_json::to_string_pretty(metadata)
-        .map_err(|e| format!("Failed to serialize cert metadata: {e}"))?;
-    fs::write(&path, json).map_err(|e| format!("Failed to write {}: {e}", path.display()))
 }
 
 /// Perform certificate rotation for the given machine ID in the given certs directory.
@@ -106,23 +65,10 @@ fn rotate_cert_in_dir(certs_dir: &Path, machine_id: &str) -> Result<(), String> 
     fs::write(certs_dir.join("ca.pem"), &bundle.ca_cert_pem)
         .map_err(|e| format!("Failed to write CA cert: {e}"))?;
 
-    // Restrict key file permissions on unix
     #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let perms = fs::Permissions::from_mode(0o600);
-        fs::set_permissions(certs_dir.join("client-key.pem"), perms)
-            .map_err(|e| format!("Failed to set key permissions: {e}"))?;
-    }
+    betcode_crypto::certs::restrict_key_permissions(&certs_dir.join("client-key.pem"))?;
 
-    let metadata = CertMetadata {
-        machine_id: machine_id.to_string(),
-        generated_at_secs: SystemTime::now()
-            .duration_since(SystemTime::UNIX_EPOCH)
-            .map(|d| d.as_secs())
-            .unwrap_or(0),
-        validity_days: DEFAULT_VALIDITY_DAYS,
-    };
+    let metadata = CertMetadata::now(machine_id.to_string(), DEFAULT_VALIDITY_DAYS);
     write_metadata(certs_dir, &metadata)?;
 
     info!(
@@ -237,6 +183,7 @@ pub fn spawn_cert_monitor(
 )]
 mod tests {
     use super::*;
+    use std::time::SystemTime;
 
     fn make_test_metadata(generated_days_ago: u64, validity_days: u64) -> CertMetadata {
         let now_secs = SystemTime::now()
@@ -253,7 +200,11 @@ mod tests {
     fn write_test_metadata(certs_dir: &Path, meta: &CertMetadata) {
         fs::create_dir_all(certs_dir).unwrap();
         let json = serde_json::to_string_pretty(meta).unwrap();
-        fs::write(certs_dir.join(METADATA_FILENAME), json).unwrap();
+        fs::write(
+            certs_dir.join(betcode_crypto::certs::METADATA_FILENAME),
+            json,
+        )
+        .unwrap();
     }
 
     #[test]

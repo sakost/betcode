@@ -583,6 +583,19 @@ mod tests {
     use super::*;
     use betcode_proto::v1::*;
 
+    /// Add a test plugin to the service and return the plugin info.
+    async fn add_test_plugin(svc: &CommandServiceImpl) -> betcode_proto::v1::PluginInfo {
+        svc.add_plugin(tonic::Request::new(AddPluginRequest {
+            name: "test-plugin".to_string(),
+            socket_path: "/tmp/test.sock".to_string(),
+        }))
+        .await
+        .unwrap()
+        .into_inner()
+        .plugin
+        .unwrap()
+    }
+
     /// Execute a service command and return the first output event.
     async fn exec_first_output(
         svc: &CommandServiceImpl,
@@ -754,13 +767,7 @@ mod tests {
     #[tokio::test]
     async fn test_get_plugin_status_found() {
         let service = create_test_service().await;
-        service
-            .add_plugin(tonic::Request::new(AddPluginRequest {
-                name: "test-plugin".to_string(),
-                socket_path: "/tmp/test.sock".to_string(),
-            }))
-            .await
-            .unwrap();
+        add_test_plugin(&service).await;
 
         let resp = service
             .get_plugin_status(tonic::Request::new(GetPluginStatusRequest {
@@ -788,13 +795,7 @@ mod tests {
     #[tokio::test]
     async fn test_remove_plugin() {
         let service = create_test_service().await;
-        service
-            .add_plugin(tonic::Request::new(AddPluginRequest {
-                name: "test-plugin".to_string(),
-                socket_path: "/tmp/test.sock".to_string(),
-            }))
-            .await
-            .unwrap();
+        add_test_plugin(&service).await;
 
         let resp = service
             .remove_plugin(tonic::Request::new(RemovePluginRequest {
@@ -826,13 +827,7 @@ mod tests {
     #[tokio::test]
     async fn test_disable_and_enable_plugin() {
         let service = create_test_service().await;
-        service
-            .add_plugin(tonic::Request::new(AddPluginRequest {
-                name: "test-plugin".to_string(),
-                socket_path: "/tmp/test.sock".to_string(),
-            }))
-            .await
-            .unwrap();
+        add_test_plugin(&service).await;
 
         // Disable
         let resp = service

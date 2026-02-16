@@ -3,7 +3,7 @@
   "reporters": ["console", "json"],
   "output": "./jscpd-report",
   "pattern": "**/*.rs",
-  "ignore": ["**/target/**", "**/betcode-proto/src/lib.rs"],
+  "ignore": ["**/target/**", "**/betcode-proto/src/lib.rs", "**/.worktree/**"],
   "minLines": 6,
   "minTokens": 50
 }

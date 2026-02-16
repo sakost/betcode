@@ -5,10 +5,7 @@
 
 use std::path::Path;
 
-use rcgen::{
-    BasicConstraints, CertificateParams, DnType, ExtendedKeyUsagePurpose, IsCa, Issuer, KeyPair,
-    KeyUsagePurpose,
-};
+use rcgen::{CertificateParams, DnType, ExtendedKeyUsagePurpose, Issuer, KeyPair};
 use tracing::info;
 
 /// Generated certificate bundle (PEM-encoded).
@@ -21,42 +18,9 @@ pub struct CertBundle {
     pub server_key_pem: String,
 }
 
-/// CA material: params, key pair, and PEM cert.
-struct CaBundle {
-    params: CertificateParams,
-    key_pair: KeyPair,
-    cert_pem: String,
-}
-
-/// Generate a self-signed CA certificate and key pair.
-fn generate_ca() -> Result<CaBundle, CertError> {
-    let mut params = CertificateParams::default();
-    params.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
-    params
-        .distinguished_name
-        .push(DnType::CommonName, "BetCode Dev CA");
-    params
-        .distinguished_name
-        .push(DnType::OrganizationName, "BetCode Dev");
-    params.key_usages.push(KeyUsagePurpose::KeyCertSign);
-    params.key_usages.push(KeyUsagePurpose::CrlSign);
-
-    let key_pair = KeyPair::generate().map_err(|e| CertError::Generation(e.to_string()))?;
-    let ca_cert = params
-        .self_signed(&key_pair)
-        .map_err(|e| CertError::Generation(e.to_string()))?;
-
-    let cert_pem = ca_cert.pem();
-    Ok(CaBundle {
-        params,
-        key_pair,
-        cert_pem,
-    })
-}
-
 /// Generate a server certificate signed by the given CA.
 fn generate_server_cert(
-    ca: &CaBundle,
+    ca: &betcode_crypto::certs::CaBundle,
     server_names: &[&str],
 ) -> Result<(String, String), CertError> {
     let issuer = Issuer::from_params(&ca.params, &ca.key_pair);
@@ -86,11 +50,12 @@ fn generate_server_cert(
 
 /// Generate a full dev certificate bundle (CA + server).
 pub fn generate_dev_bundle(server_names: &[&str]) -> Result<CertBundle, CertError> {
-    let ca = generate_ca()?;
+    let ca = betcode_crypto::certs::generate_ca("BetCode Dev")
+        .map_err(|e| CertError::Generation(e.to_string()))?;
     let (server_cert_pem, server_key_pem) = generate_server_cert(&ca, server_names)?;
 
     Ok(CertBundle {
-        ca_cert_pem: ca.cert_pem,
+        ca_cert_pem: ca.ca_cert_pem,
         server_cert_pem,
         server_key_pem,
     })
@@ -138,15 +103,15 @@ mod tests {
     use super::*;
 
     #[test]
-    fn generate_ca_produces_valid_pem() {
-        let ca = generate_ca().unwrap();
-        assert!(ca.cert_pem.contains("BEGIN CERTIFICATE"));
-        assert!(ca.cert_pem.contains("END CERTIFICATE"));
+    fn generate_dev_bundle_produces_valid_pem() {
+        let bundle = generate_dev_bundle(&["localhost"]).unwrap();
+        assert!(bundle.ca_cert_pem.contains("BEGIN CERTIFICATE"));
+        assert!(bundle.ca_cert_pem.contains("END CERTIFICATE"));
     }
 
     #[test]
     fn generate_server_cert_signed_by_ca() {
-        let ca = generate_ca().unwrap();
+        let ca = betcode_crypto::certs::generate_ca("BetCode Dev Test").unwrap();
         let (cert_pem, key_pem) = generate_server_cert(&ca, &["localhost", "127.0.0.1"]).unwrap();
 
         assert!(cert_pem.contains("BEGIN CERTIFICATE"));
