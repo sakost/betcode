@@ -50,6 +50,7 @@ use crate::commands::service_executor::ServiceExecutor;
 use crate::completion::agent_lister::AgentLister;
 use crate::completion::file_index::FileIndex;
 use crate::gitlab::{GitLabClient, GitLabConfig};
+use crate::plugin::manager::PluginManager;
 use crate::relay::SessionRelay;
 use crate::session::SessionMultiplexer;
 use crate::storage::Database;
@@ -135,12 +136,14 @@ impl GrpcServer {
         }
         let agent_lister = Arc::new(RwLock::new(lister));
         let service_executor = Arc::new(RwLock::new(ServiceExecutor::new(cwd)));
+        let plugin_manager = Arc::new(RwLock::new(PluginManager::new()));
 
         let command_service = CommandServiceImpl::new(
             command_registry,
             file_index,
             agent_lister,
             service_executor,
+            plugin_manager,
             shutdown_tx,
         );
 

@@ -55,12 +55,16 @@ async fn test_full_command_flow() {
     let agent_lister = Arc::new(RwLock::new(AgentLister::new()));
     let service_executor = Arc::new(RwLock::new(ServiceExecutor::new(dir.path().to_path_buf())));
 
+    let plugin_manager = Arc::new(RwLock::new(
+        betcode_daemon::plugin::manager::PluginManager::new(),
+    ));
     let (shutdown_tx, _) = tokio::sync::watch::channel(false);
     let service = CommandServiceImpl::new(
         registry,
         file_index,
         agent_lister,
         service_executor,
+        plugin_manager,
         shutdown_tx,
     );
 
