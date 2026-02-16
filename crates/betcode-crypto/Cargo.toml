@@ -10,6 +10,7 @@ publish.workspace = true
 [features]
 default = []
 test-utils = []
+certs = ["dep:rcgen"]
 
 [dependencies]
 x25519-dalek = { version = "2.0", features = ["static_secrets"] }
@@ -23,6 +24,7 @@ serde_json.workspace = true
 hex = "0.4"
 zeroize = { version = "1", features = ["derive"] }
 subtle = "2.6.1"
+rcgen = { workspace = true, optional = true }
 
 [lints]
 workspace = true

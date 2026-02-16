@@ -56,6 +56,12 @@ anyhow = "1"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 
+# OpenTelemetry (optional, behind `metrics` feature)
+opentelemetry = "0.31"
+opentelemetry_sdk = { version = "0.31", features = ["rt-tokio"] }
+opentelemetry-otlp = { version = "0.31", features = ["grpc-tonic"] }
+tracing-opentelemetry = "0.32"
+
 # Interactive prompts
 dialoguer = "0.12"
 rand = "0.10"
@@ -73,6 +79,9 @@ sd-notify = "0.4"
 
 # Versioning
 semver = "1"
+
+# Certificate generation
+rcgen = "0.14"
 
 # Command system
 nucleo-matcher = "0.3"
