@@ -262,11 +262,16 @@ fn draw_messages(frame: &mut Frame<'_>, app: &mut App, area: Rect) {
             continue;
         }
 
+        #[allow(clippy::match_same_arms)]
+        // CompactionDivider is unreachable (handled by `continue` above)
         let (prefix, color) = match msg.role {
             MessageRole::User => ("You: ", Color::Green),
             MessageRole::Assistant => ("Claude: ", Color::Blue),
             MessageRole::System => ("System: ", Color::Yellow),
-            MessageRole::Tool | MessageRole::CompactionDivider => ("", Color::DarkGray),
+            MessageRole::Tool => ("", Color::DarkGray),
+            // CompactionDivider is already handled by the `continue` above;
+            // this arm exists only for match exhaustiveness.
+            MessageRole::CompactionDivider => ("", Color::DarkGray),
         };
         let prefix_style = Style::default().fg(color).add_modifier(Modifier::BOLD);
         let content_lines: Vec<&str> = msg.content.split('\n').collect();

@@ -211,8 +211,6 @@ pub struct App {
     pub pending_client_command: Option<ClientCommand>,
     /// Compaction summary text shown in detail panel on the divider.
     pub compaction_summary: Option<String>,
-    /// Index of the compaction divider message in `messages`, if any.
-    pub compaction_divider_index: Option<usize>,
 }
 
 /// A request for async completion data from the daemon.
@@ -264,7 +262,6 @@ impl App {
             service_command_tx: None,
             pending_client_command: None,
             compaction_summary: None,
-            compaction_divider_index: None,
         }
     }
 
@@ -479,7 +476,6 @@ impl App {
             is_tool_result: false,
             agent_label: None,
         });
-        self.compaction_divider_index = Some(0);
         self.compaction_summary = Some(summary);
         self.scroll_to_bottom();
     }
@@ -1729,6 +1725,104 @@ mod tests {
     // =========================================================================
     // Agent identity (agent_label) tests
     // =========================================================================
+
+    // =========================================================================
+    // Compaction / ClientCommand tests
+    // =========================================================================
+
+    #[test]
+    fn compaction_clears_messages_and_inserts_divider() {
+        use betcode_proto::v1::agent_event::Event;
+        let mut app = App::new();
+
+        // Add a user message and an assistant reply
+        app.add_user_message("Hello".to_string());
+        app.handle_event(make_event(Event::TextDelta(betcode_proto::v1::TextDelta {
+            text: "Hi there!".to_string(),
+            is_complete: true,
+        })));
+        // Add a tool call so we can verify it gets cleared
+        app.handle_event(make_event(Event::ToolCallStart(
+            betcode_proto::v1::ToolCallStart {
+                tool_id: "t1".to_string(),
+                tool_name: "Bash".to_string(),
+                input: None,
+                description: "ls".to_string(),
+            },
+        )));
+        assert_eq!(app.messages.len(), 3);
+        assert_eq!(app.tool_calls.len(), 1);
+
+        // Set pending compact, then send TurnComplete to trigger it
+        app.pending_client_command = Some(ClientCommand::Compact);
+        app.handle_event(make_event(Event::TurnComplete(
+            betcode_proto::v1::TurnComplete {
+                stop_reason: "end_turn".to_string(),
+            },
+        )));
+
+        assert_eq!(app.messages.len(), 1, "should have only the divider");
+        assert_eq!(
+            app.messages[0].role,
+            MessageRole::CompactionDivider,
+            "divider should have CompactionDivider role"
+        );
+        assert!(
+            app.compaction_summary.is_some(),
+            "compaction_summary should be set"
+        );
+        assert_eq!(
+            app.compaction_summary.as_deref(),
+            Some("Hi there!"),
+            "summary should be the last assistant message"
+        );
+        assert!(
+            app.tool_calls.is_empty(),
+            "tool_calls should be cleared after compaction"
+        );
+    }
+
+    #[test]
+    fn compaction_with_no_assistant_uses_fallback() {
+        use betcode_proto::v1::agent_event::Event;
+        let mut app = App::new();
+
+        // Only user messages, no assistant messages
+        app.add_user_message("Hello".to_string());
+        app.add_user_message("Another message".to_string());
+
+        app.pending_client_command = Some(ClientCommand::Compact);
+        app.handle_event(make_event(Event::TurnComplete(
+            betcode_proto::v1::TurnComplete {
+                stop_reason: "end_turn".to_string(),
+            },
+        )));
+
+        assert_eq!(
+            app.compaction_summary.as_deref(),
+            Some("Context compacted."),
+            "should use fallback summary when no assistant messages"
+        );
+    }
+
+    #[test]
+    fn model_switch_updates_model_on_turn_complete() {
+        use betcode_proto::v1::agent_event::Event;
+        let mut app = App::new();
+        app.model = "claude-sonnet-4".to_string();
+
+        app.pending_client_command = Some(ClientCommand::ModelSwitch("claude-opus-4".to_string()));
+        app.handle_event(make_event(Event::TurnComplete(
+            betcode_proto::v1::TurnComplete {
+                stop_reason: "end_turn".to_string(),
+            },
+        )));
+
+        assert_eq!(
+            app.model, "claude-opus-4",
+            "model should be updated after TurnComplete"
+        );
+    }
 
     #[test]
     fn messages_tagged_with_agent_context() {
