@@ -7,9 +7,12 @@ Self-hosted gRPC relay server for remote access to BetCode daemons.
 The relay enables remote access to BetCode daemons from mobile clients or other machines:
 
 - gRPC traffic routing via reverse tunnels
-- JWT authentication for clients
-- mTLS authentication for daemons
-- Message buffering for offline daemons (SQLite, configurable TTL)
+- JWT authentication for clients (with token refresh)
+- mTLS authentication for daemons (with cert rotation support)
+- Message buffering for offline daemons (SQLite, configurable TTL and capacity)
+- Certificate validation and revocation checking
+- Push notifications (FCM, feature-gated behind `push-notifications`)
+- Opt-in metrics (OpenTelemetry OTLP, feature-gated behind `metrics`)
 
 ## Architecture Docs
 
