@@ -11,6 +11,10 @@ publish.workspace = true
 name = "betcode-daemon"
 path = "src/main.rs"
 
+[features]
+default = []
+metrics = ["betcode-core/metrics"]
+
 [dependencies]
 betcode-proto = { workspace = true }
 betcode-core = { workspace = true }

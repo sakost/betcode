@@ -67,6 +67,12 @@ struct Args {
     /// Output logs as JSON (for structured log aggregation).
     #[arg(long, env = "BETCODE_LOG_JSON")]
     log_json: bool,
+
+    /// OpenTelemetry OTLP endpoint for traces and metrics export
+    /// (e.g. `http://localhost:4317`). Requires the `metrics` feature.
+    #[cfg(feature = "metrics")]
+    #[arg(long, env = "BETCODE_METRICS_ENDPOINT")]
+    metrics_endpoint: Option<String>,
 }
 
 #[tokio::main]
@@ -74,7 +80,17 @@ struct Args {
 async fn main() -> anyhow::Result<()> {
     let args = Args::parse();
 
-    betcode_core::tracing_init::init_tracing("betcode_daemon=info", args.log_json);
+    #[cfg(feature = "metrics")]
+    let metrics_endpoint = args.metrics_endpoint.as_deref();
+    #[cfg(not(feature = "metrics"))]
+    let metrics_endpoint: Option<&str> = None;
+
+    // Hold the guard so the OTel pipeline stays alive for the process lifetime.
+    let _metrics_guard = betcode_core::tracing_init::init_tracing_with_metrics(
+        "betcode_daemon=info",
+        args.log_json,
+        metrics_endpoint,
+    );
 
     info!(
         version = env!("CARGO_PKG_VERSION"),
