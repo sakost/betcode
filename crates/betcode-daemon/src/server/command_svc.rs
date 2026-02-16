@@ -130,6 +130,7 @@ impl CommandService for CommandServiceImpl {
         let shutdown_tx = self.shutdown_tx.clone();
         let command = req.command;
         let args = req.args;
+        let session_id = req.session_id;
 
         tokio::spawn(async move {
             match command.as_str() {
@@ -192,7 +193,7 @@ impl CommandService for CommandServiceImpl {
                     let exec = executor.read().await;
                     let cwd = exec.cwd().to_path_buf();
                     let mut reg = registry.write().await;
-                    let cmd_msg = match exec.execute_reload_remote(&mut reg) {
+                    let cmd_msg = match exec.execute_reload_remote(&mut reg, &session_id) {
                         Ok(msg) => msg,
                         Err(e) => {
                             let _ = tx.send(Ok(error_output(&e.to_string()))).await;

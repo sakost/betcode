@@ -106,19 +106,6 @@ impl GrpcServer {
             registry.add(cmd);
         }
 
-        // Discover plugin commands from ~/.claude/
-        let claude_dir = dirs::home_dir().map_or_else(
-            || {
-                warn!("Could not determine home directory; plugin discovery will be skipped");
-                std::path::PathBuf::new()
-            },
-            |h| h.join(".claude"),
-        );
-        let plugin_entries = betcode_core::commands::discover_plugin_entries(&claude_dir);
-        for entry in plugin_entries {
-            registry.add(entry);
-        }
-
         let command_registry = Arc::new(RwLock::new(registry));
 
         let relay = Arc::new(SessionRelay::new(

@@ -59,8 +59,13 @@ impl ServiceExecutor {
     /// Reloads the command registry by re-discovering Claude Code commands and plugins.
     ///
     /// Clears existing CC-sourced and plugin commands, re-runs discovery, and adds
-    /// the fresh commands back into the registry.
-    pub fn execute_reload_remote(&self, registry: &mut CommandRegistry) -> Result<String> {
+    /// the fresh commands back into the registry. Plugin entries are scoped to the
+    /// given `session_id`.
+    pub fn execute_reload_remote(
+        &self,
+        registry: &mut CommandRegistry,
+        session_id: &str,
+    ) -> Result<String> {
         // Clear existing CC commands
         registry.clear_source("claude-code");
         registry.clear_source("user");
@@ -74,8 +79,6 @@ impl ServiceExecutor {
         }
 
         // Re-discover plugin commands from ~/.claude/
-        // TODO: replace "daemon" placeholder with actual session_id once
-        // execute_reload_remote receives session context (next batch).
         let claude_dir = dirs::home_dir().map_or_else(
             || {
                 tracing::warn!(
@@ -87,7 +90,7 @@ impl ServiceExecutor {
         );
         let plugin_entries = betcode_core::commands::discover_plugin_entries(&claude_dir);
         let plugin_count = plugin_entries.len();
-        registry.set_session_entries(super::DAEMON_PLUGIN_SESSION, plugin_entries);
+        registry.set_session_entries(session_id, plugin_entries);
 
         let mut msg = format!("Reloaded {count} commands, {plugin_count} plugin entries");
         if !result.warnings.is_empty() {
@@ -212,7 +215,9 @@ mod tests {
         let executor = ServiceExecutor::new(dir.path().to_path_buf());
         let mut registry = CommandRegistry::new();
 
-        let msg = executor.execute_reload_remote(&mut registry).unwrap();
+        let msg = executor
+            .execute_reload_remote(&mut registry, "test-session")
+            .unwrap();
         assert!(msg.contains("Reloaded"));
 
         // Should have CC commands + user commands + builtins

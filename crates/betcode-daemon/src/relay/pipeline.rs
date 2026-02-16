@@ -383,22 +383,33 @@ fn spawn_stdout_pipeline(ctx: StdoutPipelineContext) {
             let is_system_init = matches!(msg, ndjson::Message::SystemInit(_));
             let events = bridge.convert(msg);
 
-            // After processing a SystemInit, merge MCP tool entries into the
-            // shared command registry so they appear in completions and search.
-            if is_system_init && !bridge.mcp_entries().is_empty() {
-                let count = bridge.mcp_entries().len();
-                {
-                    let mut registry = command_registry.write().await;
-                    registry.clear_source("mcp");
-                    for entry in bridge.mcp_entries() {
-                        registry.add(entry.clone());
-                    }
+            // After processing a SystemInit, build the full session layer:
+            // MCP entries + plugin/skill entries discovered from the session's
+            // working directory.
+            if is_system_init {
+                let mut session_entries: Vec<betcode_core::commands::CommandEntry> =
+                    bridge.mcp_entries().to_vec();
+
+                // Discover plugins/skills from the session's cwd
+                if let Some(info) = bridge.session_info() {
+                    let claude_dir = std::path::Path::new(&info.working_directory).join(".claude");
+                    let plugin_entries =
+                        betcode_core::commands::discover_plugin_entries(&claude_dir);
+                    session_entries.extend(plugin_entries);
                 }
-                debug!(
-                    session_id = %sid,
-                    count,
-                    "Merged MCP tool entries into command registry"
-                );
+
+                if !session_entries.is_empty() {
+                    let count = session_entries.len();
+                    {
+                        let mut registry = command_registry.write().await;
+                        registry.set_session_entries(&sid, session_entries);
+                    }
+                    debug!(
+                        session_id = %sid,
+                        count,
+                        "Set session layer in command registry"
+                    );
+                }
             }
 
             for event in &events {
@@ -553,6 +564,13 @@ fn spawn_stdout_pipeline(ctx: StdoutPipelineContext) {
             };
             let _ = event_forwarder.send(error_event).await;
         }
+
+        // Clean up the session layer from the command registry
+        {
+            let mut registry = command_registry.write().await;
+            registry.remove_session(&sid);
+        }
+        debug!(session_id = %sid, "Removed session layer from command registry");
 
         // Only update DB status if the session is still in the active map
         // (cancel_session removes it and updates status itself)
