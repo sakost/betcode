@@ -1,11 +1,15 @@
 pub mod builtin;
 pub mod discovery;
 pub mod matcher;
+pub mod mcp;
+pub mod plugins;
 
 pub use builtin::builtin_commands;
 pub use discovery::{
     discover_agents, discover_user_commands, hardcoded_cc_commands, parse_help_output,
 };
+pub use mcp::mcp_tools_to_entries;
+pub use plugins::discover_plugin_entries;
 
 /// Category of a command, determining its origin and handling.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -16,6 +20,10 @@ pub enum CommandCategory {
     ClaudeCode,
     /// Commands provided by plugins.
     Plugin,
+    /// Skill commands (e.g. slash commands from skills).
+    Skill,
+    /// MCP tool commands.
+    Mcp,
 }
 
 /// How a command is executed.
@@ -38,6 +46,10 @@ pub struct CommandEntry {
     pub execution_mode: ExecutionMode,
     pub source: String,
     pub args_schema: Option<String>,
+    /// Logical group this command belongs to (e.g. MCP server name or skill namespace).
+    pub group: Option<String>,
+    /// Human-readable display name for the command.
+    pub display_name: Option<String>,
 }
 
 impl CommandEntry {
@@ -55,7 +67,23 @@ impl CommandEntry {
             execution_mode,
             source: source.to_string(),
             args_schema: None,
+            group: None,
+            display_name: None,
         }
+    }
+
+    /// Set the logical group for this command.
+    #[must_use]
+    pub fn with_group(mut self, group: &str) -> Self {
+        self.group = Some(group.to_string());
+        self
+    }
+
+    /// Set the human-readable display name for this command.
+    #[must_use]
+    pub fn with_display_name(mut self, display_name: &str) -> Self {
+        self.display_name = Some(display_name.to_string());
+        self
     }
 }
 
@@ -75,6 +103,42 @@ mod tests {
         assert_eq!(entry.name, "cd");
         assert_eq!(entry.category, CommandCategory::Service);
         assert_eq!(entry.execution_mode, ExecutionMode::Local);
+    }
+
+    #[test]
+    fn test_skill_command_entry() {
+        let entry = CommandEntry::new(
+            "superpowers:brainstorming",
+            "Brainstorming skill",
+            CommandCategory::Skill,
+            ExecutionMode::Passthrough,
+            "superpowers@superpowers-dev",
+        )
+        .with_group("superpowers")
+        .with_display_name("superpowers:brainstorming");
+
+        assert_eq!(entry.category, CommandCategory::Skill);
+        assert_eq!(entry.group.as_deref(), Some("superpowers"));
+        assert_eq!(
+            entry.display_name.as_deref(),
+            Some("superpowers:brainstorming")
+        );
+    }
+
+    #[test]
+    fn test_mcp_command_entry() {
+        let entry = CommandEntry::new(
+            "chrome-devtools:take_screenshot",
+            "Take a screenshot",
+            CommandCategory::Mcp,
+            ExecutionMode::Passthrough,
+            "mcp",
+        )
+        .with_group("chrome-devtools")
+        .with_display_name("chrome-devtools:take_screenshot");
+
+        assert_eq!(entry.category, CommandCategory::Mcp);
+        assert_eq!(entry.group.as_deref(), Some("chrome-devtools"));
     }
 
     #[test]
