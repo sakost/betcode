@@ -27,7 +27,7 @@ use tracing::error;
 
 use crate::app::App;
 use crate::app::{CompletionFetchKind, CompletionRequest};
-use crate::commands::cache::CachedCommand;
+use crate::commands::cache::{CachedCommand, CachedCommandCategory};
 use crate::connection::DaemonConnection;
 use crate::ui;
 
@@ -79,15 +79,11 @@ fn spawn_registry_fetch(
                     .into_inner()
                     .commands
                     .into_iter()
-                    .map(|c| {
-                        let category = betcode_proto::v1::CommandCategory::try_from(c.category)
-                            .map_or_else(|_| "Unknown".to_string(), |cat| format!("{cat:?}"));
-                        CachedCommand {
-                            name: c.name,
-                            description: c.description,
-                            category,
-                            source: c.source,
-                        }
+                    .map(|c| CachedCommand {
+                        name: c.name,
+                        description: c.description,
+                        category: CachedCommandCategory::from_proto(c.category),
+                        source: c.source,
                     })
                     .collect();
                 let _ = tx.send(cached).await;

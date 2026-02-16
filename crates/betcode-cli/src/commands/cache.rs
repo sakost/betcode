@@ -5,12 +5,47 @@
 
 use betcode_core::commands::matcher::fuzzy_match;
 
+/// Category of a cached command, derived from the proto `CommandCategory`.
+///
+/// This is the CLI-side representation of command categories. It mirrors the
+/// proto enum but adds an `Unknown` variant for unrecognised values.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CachedCommandCategory {
+    /// Built-in service commands (cd, pwd, exit, etc.).
+    Service,
+    /// Commands forwarded to Claude Code.
+    ClaudeCode,
+    /// Skill commands (slash commands from skill plugins).
+    Skill,
+    /// MCP tool commands.
+    Mcp,
+    /// Commands provided by third-party plugins.
+    Plugin,
+    /// Unrecognised or unspecified category.
+    Unknown,
+}
+
+impl CachedCommandCategory {
+    /// Convert from the proto `CommandCategory` integer value.
+    pub fn from_proto(value: i32) -> Self {
+        use betcode_proto::v1::CommandCategory;
+        match CommandCategory::try_from(value) {
+            Ok(CommandCategory::Service) => Self::Service,
+            Ok(CommandCategory::ClaudeCode) => Self::ClaudeCode,
+            Ok(CommandCategory::Skill) => Self::Skill,
+            Ok(CommandCategory::Mcp) => Self::Mcp,
+            Ok(CommandCategory::Plugin) => Self::Plugin,
+            Ok(CommandCategory::Unspecified) | Err(_) => Self::Unknown,
+        }
+    }
+}
+
 /// A cached command entry for completion.
 #[derive(Debug, Clone)]
 pub struct CachedCommand {
     pub name: String,
     pub description: String,
-    pub category: String,
+    pub category: CachedCommandCategory,
     pub source: String,
 }
 
@@ -69,25 +104,25 @@ mod tests {
             CachedCommand {
                 name: "cd".to_string(),
                 description: "Change directory".to_string(),
-                category: "service".to_string(),
+                category: CachedCommandCategory::Service,
                 source: "builtin".to_string(),
             },
             CachedCommand {
                 name: "pwd".to_string(),
                 description: "Print working directory".to_string(),
-                category: "service".to_string(),
+                category: CachedCommandCategory::Service,
                 source: "builtin".to_string(),
             },
             CachedCommand {
                 name: "reload-remote".to_string(),
                 description: "Re-discover all commands".to_string(),
-                category: "service".to_string(),
+                category: CachedCommandCategory::Service,
                 source: "builtin".to_string(),
             },
             CachedCommand {
                 name: "help".to_string(),
                 description: "Show help".to_string(),
-                category: "cc".to_string(),
+                category: CachedCommandCategory::ClaudeCode,
                 source: "claude-code".to_string(),
             },
         ]
@@ -108,7 +143,7 @@ mod tests {
         cache.load(vec![CachedCommand {
             name: "only".to_string(),
             description: String::new(),
-            category: String::new(),
+            category: CachedCommandCategory::Unknown,
             source: String::new(),
         }]);
         assert_eq!(cache.search("", 10).len(), 1);
@@ -140,5 +175,49 @@ mod tests {
 
         let results = cache.search("", 2);
         assert_eq!(results.len(), 2);
+    }
+
+    #[test]
+    fn from_proto_maps_all_known_categories() {
+        assert_eq!(
+            CachedCommandCategory::from_proto(1),
+            CachedCommandCategory::Service
+        );
+        assert_eq!(
+            CachedCommandCategory::from_proto(2),
+            CachedCommandCategory::ClaudeCode
+        );
+        assert_eq!(
+            CachedCommandCategory::from_proto(3),
+            CachedCommandCategory::Plugin
+        );
+        assert_eq!(
+            CachedCommandCategory::from_proto(4),
+            CachedCommandCategory::Skill
+        );
+        assert_eq!(
+            CachedCommandCategory::from_proto(5),
+            CachedCommandCategory::Mcp
+        );
+    }
+
+    #[test]
+    fn from_proto_unspecified_is_unknown() {
+        assert_eq!(
+            CachedCommandCategory::from_proto(0),
+            CachedCommandCategory::Unknown
+        );
+    }
+
+    #[test]
+    fn from_proto_invalid_is_unknown() {
+        assert_eq!(
+            CachedCommandCategory::from_proto(99),
+            CachedCommandCategory::Unknown
+        );
+        assert_eq!(
+            CachedCommandCategory::from_proto(-1),
+            CachedCommandCategory::Unknown
+        );
     }
 }

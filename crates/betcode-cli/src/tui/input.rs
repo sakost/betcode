@@ -4,6 +4,7 @@ use crossterm::event::KeyCode;
 use tokio::sync::mpsc;
 
 use crate::app::{App, AppMode, ClientCommand, MessageRole};
+use crate::commands::cache::CachedCommandCategory;
 use betcode_proto::v1::AgentRequest;
 
 use super::TermEvent;
@@ -234,12 +235,14 @@ fn show_help(app: &mut App) {
 
     for cmd in app.command_cache.all() {
         let entry = format!("  /{:<20} {}", cmd.name, cmd.description);
-        match cmd.category.as_str() {
-            "Service" => service_cmds.push(entry),
-            "ClaudeCode" => cc_cmds.push(entry),
-            "Skill" => skill_cmds.push(entry),
-            "Mcp" => mcp_cmds.push(entry),
-            _ => plugin_cmds.push(entry),
+        match cmd.category {
+            CachedCommandCategory::Service => service_cmds.push(entry),
+            CachedCommandCategory::ClaudeCode => cc_cmds.push(entry),
+            CachedCommandCategory::Skill => skill_cmds.push(entry),
+            CachedCommandCategory::Mcp => mcp_cmds.push(entry),
+            CachedCommandCategory::Plugin | CachedCommandCategory::Unknown => {
+                plugin_cmds.push(entry);
+            }
         }
     }
 
@@ -371,7 +374,7 @@ async fn handle_input_key(
                     let is_service = app
                         .command_cache
                         .find_by_name(&command)
-                        .is_some_and(|c| c.category == "Service");
+                        .is_some_and(|c| c.category == CachedCommandCategory::Service);
 
                     match command.as_str() {
                         "exit" => {
@@ -640,38 +643,38 @@ mod tests {
 
     #[test]
     fn help_shows_skill_and_mcp_sections() {
-        use crate::commands::cache::CachedCommand;
+        use crate::commands::cache::{CachedCommand, CachedCommandCategory};
 
         let mut app = App::new();
         app.command_cache.load(vec![
             CachedCommand {
                 name: "cd".to_string(),
                 description: "Change directory".to_string(),
-                category: "Service".to_string(),
+                category: CachedCommandCategory::Service,
                 source: "builtin".to_string(),
             },
             CachedCommand {
                 name: "compact".to_string(),
                 description: "Compact context".to_string(),
-                category: "ClaudeCode".to_string(),
+                category: CachedCommandCategory::ClaudeCode,
                 source: "claude-code".to_string(),
             },
             CachedCommand {
                 name: "my-skill".to_string(),
                 description: "A skill command".to_string(),
-                category: "Skill".to_string(),
+                category: CachedCommandCategory::Skill,
                 source: "skill".to_string(),
             },
             CachedCommand {
                 name: "mcp-tool".to_string(),
                 description: "An MCP tool".to_string(),
-                category: "Mcp".to_string(),
+                category: CachedCommandCategory::Mcp,
                 source: "mcp".to_string(),
             },
             CachedCommand {
                 name: "custom-plugin".to_string(),
                 description: "A plugin command".to_string(),
-                category: "Plugin".to_string(),
+                category: CachedCommandCategory::Plugin,
                 source: "plugin".to_string(),
             },
         ]);
