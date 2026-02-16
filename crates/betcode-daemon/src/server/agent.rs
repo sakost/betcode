@@ -11,11 +11,12 @@ use tracing::{error, info, instrument, warn};
 
 use betcode_proto::v1::{
     AgentEvent, AgentRequest, CancelTurnRequest, CancelTurnResponse, ClearSessionGrantsRequest,
-    ClearSessionGrantsResponse, CompactSessionRequest, CompactSessionResponse, InputLockRequest,
-    InputLockResponse, KeyExchangeRequest, KeyExchangeResponse, ListSessionGrantsRequest,
-    ListSessionGrantsResponse, ListSessionsRequest, ListSessionsResponse, RenameSessionRequest,
-    RenameSessionResponse, ResumeSessionRequest, SessionSummary, SetSessionGrantRequest,
-    SetSessionGrantResponse, agent_service_server::AgentService,
+    ClearSessionGrantsResponse, CompactSessionRequest, CompactSessionResponse,
+    DeleteSessionRequest, DeleteSessionResponse, InputLockRequest, InputLockResponse,
+    KeyExchangeRequest, KeyExchangeResponse, ListSessionGrantsRequest, ListSessionGrantsResponse,
+    ListSessionsRequest, ListSessionsResponse, RenameSessionRequest, RenameSessionResponse,
+    ResumeSessionRequest, SessionSummary, SetSessionGrantRequest, SetSessionGrantResponse,
+    agent_service_server::AgentService,
 };
 
 use super::handler::{HandlerContext, handle_agent_request};
@@ -407,6 +408,34 @@ impl AgentService for AgentServiceImpl {
 
         Ok(Response::new(RenameSessionResponse {}))
     }
+
+    #[instrument(skip(self, request), fields(rpc = "DeleteSession"))]
+    async fn delete_session(
+        &self,
+        request: Request<DeleteSessionRequest>,
+    ) -> Result<Response<DeleteSessionResponse>, Status> {
+        let req = request.into_inner();
+
+        if req.session_id.is_empty() {
+            return Err(Status::invalid_argument("session_id must not be empty"));
+        }
+
+        // Cancel any active subprocess for this session (best-effort).
+        let _ = self.relay.cancel_session(&req.session_id).await;
+
+        // Delete session from DB (messages, grants, locks cascade).
+        let deleted = self
+            .db
+            .delete_session(&req.session_id)
+            .await
+            .map_err(|e| Status::internal(format!("Database error: {e}")))?;
+
+        if deleted {
+            info!(session_id = %req.session_id, "Session deleted");
+        }
+
+        Ok(Response::new(DeleteSessionResponse { deleted }))
+    }
 }
 
 /// Extract `client_id` from gRPC request metadata.
@@ -447,5 +476,54 @@ mod tests {
         });
         let err = service.exchange_keys(req).await.unwrap_err();
         assert_eq!(err.code(), tonic::Code::Unimplemented);
+    }
+
+    #[tokio::test]
+    async fn delete_session_removes_existing() {
+        let service = test_agent_service().await;
+
+        // Create a session
+        service
+            .db
+            .create_session("del-test", "claude-sonnet-4", "/tmp")
+            .await
+            .unwrap();
+
+        let resp = service
+            .delete_session(Request::new(DeleteSessionRequest {
+                session_id: "del-test".into(),
+            }))
+            .await
+            .unwrap();
+        assert!(resp.into_inner().deleted);
+
+        // Session should be gone
+        assert!(service.db.get_session("del-test").await.is_err());
+    }
+
+    #[tokio::test]
+    async fn delete_session_nonexistent_returns_false() {
+        let service = test_agent_service().await;
+
+        let resp = service
+            .delete_session(Request::new(DeleteSessionRequest {
+                session_id: "nonexistent".into(),
+            }))
+            .await
+            .unwrap();
+        assert!(!resp.into_inner().deleted);
+    }
+
+    #[tokio::test]
+    async fn delete_session_empty_id_returns_error() {
+        let service = test_agent_service().await;
+
+        let err = service
+            .delete_session(Request::new(DeleteSessionRequest {
+                session_id: String::new(),
+            }))
+            .await
+            .unwrap_err();
+        assert_eq!(err.code(), tonic::Code::InvalidArgument);
     }
 }

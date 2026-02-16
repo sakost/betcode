@@ -123,6 +123,17 @@ impl Database {
         Ok(())
     }
 
+    /// Delete a session and all associated data (messages, grants, locks cascade).
+    /// Returns `true` if the session existed, `false` otherwise.
+    pub async fn delete_session(&self, id: &str) -> Result<bool, DatabaseError> {
+        let result = sqlx::query("DELETE FROM sessions WHERE id = ?")
+            .bind(id)
+            .execute(self.pool())
+            .await?;
+
+        Ok(result.rows_affected() > 0)
+    }
+
     /// List sessions, optionally filtered.
     pub async fn list_sessions(
         &self,
@@ -838,5 +849,50 @@ mod tests {
         let db = Database::open_in_memory().await.unwrap();
         let result = db.update_session_name("nonexistent", "name").await;
         assert!(matches!(result, Err(DatabaseError::NotFound(_))));
+    }
+
+    #[tokio::test]
+    async fn delete_session_removes_session_and_messages() {
+        let db = Database::open_in_memory().await.unwrap();
+        db.create_session("s1", "claude-sonnet-4", "/tmp")
+            .await
+            .unwrap();
+        db.insert_message("s1", 1, "system", r#"{"type":"system"}"#)
+            .await
+            .unwrap();
+        db.insert_message("s1", 2, "stream_event", "payload")
+            .await
+            .unwrap();
+
+        assert!(db.delete_session("s1").await.unwrap());
+
+        // Session should be gone
+        assert!(db.get_session("s1").await.is_err());
+        // Messages should be gone (cascade)
+        let msgs = db.get_messages_from_sequence("s1", 0).await.unwrap();
+        assert!(msgs.is_empty());
+    }
+
+    #[tokio::test]
+    async fn delete_nonexistent_session_returns_false() {
+        let db = Database::open_in_memory().await.unwrap();
+        assert!(!db.delete_session("nonexistent").await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn delete_session_does_not_affect_other_sessions() {
+        let db = Database::open_in_memory().await.unwrap();
+        db.create_session("s1", "claude-sonnet-4", "/tmp")
+            .await
+            .unwrap();
+        db.create_session("s2", "claude-sonnet-4", "/tmp")
+            .await
+            .unwrap();
+
+        assert!(db.delete_session("s1").await.unwrap());
+
+        // s2 should still exist
+        let s2 = db.get_session("s2").await.unwrap();
+        assert_eq!(s2.id, "s2");
     }
 }

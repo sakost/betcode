@@ -41,6 +41,9 @@ pub const METHOD_SET_SESSION_GRANT: &str = "AgentService/SetSessionGrant";
 /// `AgentService/RenameSession`
 pub const METHOD_RENAME_SESSION: &str = "AgentService/RenameSession";
 
+/// `AgentService/DeleteSession`
+pub const METHOD_DELETE_SESSION: &str = "AgentService/DeleteSession";
+
 // ---------------------------------------------------------------------------
 // CommandService
 // ---------------------------------------------------------------------------

@@ -19,19 +19,19 @@ use betcode_proto::v1::worktree_service_server::WorktreeService as WorktreeServi
 use betcode_proto::v1::{
     AddPluginRequest, AgentRequest, CancelTurnRequest, CancelTurnResponse,
     ClearSessionGrantsRequest, ClearSessionGrantsResponse, CompactSessionRequest,
-    CompactSessionResponse, CreateWorktreeRequest, DisablePluginRequest, EnablePluginRequest,
-    EncryptedPayload, ExecuteServiceCommandRequest, FrameType, GetCommandRegistryRequest,
-    GetIssueRequest, GetMergeRequestRequest, GetPermissionsRequest, GetPipelineRequest,
-    GetPluginStatusRequest, GetRepoRequest, GetSettingsRequest, GetVersionRequest,
-    GetWorktreeRequest, InputLockRequest, InputLockResponse, KeyExchangeRequest,
-    KeyExchangeResponse, ListAgentsRequest, ListIssuesRequest, ListMcpServersRequest,
-    ListMergeRequestsRequest, ListPathRequest, ListPipelinesRequest, ListPluginsRequest,
-    ListReposRequest, ListSessionGrantsRequest, ListSessionGrantsResponse, ListSessionsRequest,
-    ListSessionsResponse, ListWorktreesRequest, NegotiateRequest, RegisterRepoRequest,
-    RemovePluginRequest, RemoveWorktreeRequest, RenameSessionRequest, RenameSessionResponse,
-    ResumeSessionRequest, ScanReposRequest, SessionSummary, SetSessionGrantRequest,
-    SetSessionGrantResponse, StreamPayload, TunnelError, TunnelErrorCode, TunnelFrame,
-    UnregisterRepoRequest, UpdateRepoRequest, UpdateSettingsRequest,
+    CompactSessionResponse, CreateWorktreeRequest, DeleteSessionRequest, DeleteSessionResponse,
+    DisablePluginRequest, EnablePluginRequest, EncryptedPayload, ExecuteServiceCommandRequest,
+    FrameType, GetCommandRegistryRequest, GetIssueRequest, GetMergeRequestRequest,
+    GetPermissionsRequest, GetPipelineRequest, GetPluginStatusRequest, GetRepoRequest,
+    GetSettingsRequest, GetVersionRequest, GetWorktreeRequest, InputLockRequest, InputLockResponse,
+    KeyExchangeRequest, KeyExchangeResponse, ListAgentsRequest, ListIssuesRequest,
+    ListMcpServersRequest, ListMergeRequestsRequest, ListPathRequest, ListPipelinesRequest,
+    ListPluginsRequest, ListReposRequest, ListSessionGrantsRequest, ListSessionGrantsResponse,
+    ListSessionsRequest, ListSessionsResponse, ListWorktreesRequest, NegotiateRequest,
+    RegisterRepoRequest, RemovePluginRequest, RemoveWorktreeRequest, RenameSessionRequest,
+    RenameSessionResponse, ResumeSessionRequest, ScanReposRequest, SessionSummary,
+    SetSessionGrantRequest, SetSessionGrantResponse, StreamPayload, TunnelError, TunnelErrorCode,
+    TunnelFrame, UnregisterRepoRequest, UpdateRepoRequest, UpdateSettingsRequest,
 };
 
 use betcode_crypto::{CryptoSession, IdentityKeyPair, KeyExchangeState};
@@ -48,17 +48,17 @@ use crate::storage::Database;
 // and any other in-crate consumers continue to see them at the same path.
 pub use betcode_proto::methods::{
     METHOD_ADD_PLUGIN, METHOD_CANCEL_TURN, METHOD_CLEAR_SESSION_GRANTS, METHOD_COMPACT_SESSION,
-    METHOD_CONVERSE, METHOD_CREATE_WORKTREE, METHOD_DISABLE_PLUGIN, METHOD_ENABLE_PLUGIN,
-    METHOD_EXCHANGE_KEYS, METHOD_EXECUTE_SERVICE_COMMAND, METHOD_GET_COMMAND_REGISTRY,
-    METHOD_GET_ISSUE, METHOD_GET_MERGE_REQUEST, METHOD_GET_PERMISSIONS, METHOD_GET_PIPELINE,
-    METHOD_GET_PLUGIN_STATUS, METHOD_GET_REPO, METHOD_GET_SETTINGS, METHOD_GET_VERSION,
-    METHOD_GET_WORKTREE, METHOD_LIST_AGENTS, METHOD_LIST_ISSUES, METHOD_LIST_MCP_SERVERS,
-    METHOD_LIST_MERGE_REQUESTS, METHOD_LIST_PATH, METHOD_LIST_PIPELINES, METHOD_LIST_PLUGINS,
-    METHOD_LIST_REPOS, METHOD_LIST_SESSION_GRANTS, METHOD_LIST_SESSIONS, METHOD_LIST_WORKTREES,
-    METHOD_NEGOTIATE_CAPABILITIES, METHOD_REGISTER_REPO, METHOD_REMOVE_PLUGIN,
-    METHOD_REMOVE_WORKTREE, METHOD_RENAME_SESSION, METHOD_REQUEST_INPUT_LOCK,
-    METHOD_RESUME_SESSION, METHOD_SCAN_REPOS, METHOD_SET_SESSION_GRANT, METHOD_UNREGISTER_REPO,
-    METHOD_UPDATE_REPO, METHOD_UPDATE_SETTINGS,
+    METHOD_CONVERSE, METHOD_CREATE_WORKTREE, METHOD_DELETE_SESSION, METHOD_DISABLE_PLUGIN,
+    METHOD_ENABLE_PLUGIN, METHOD_EXCHANGE_KEYS, METHOD_EXECUTE_SERVICE_COMMAND,
+    METHOD_GET_COMMAND_REGISTRY, METHOD_GET_ISSUE, METHOD_GET_MERGE_REQUEST,
+    METHOD_GET_PERMISSIONS, METHOD_GET_PIPELINE, METHOD_GET_PLUGIN_STATUS, METHOD_GET_REPO,
+    METHOD_GET_SETTINGS, METHOD_GET_VERSION, METHOD_GET_WORKTREE, METHOD_LIST_AGENTS,
+    METHOD_LIST_ISSUES, METHOD_LIST_MCP_SERVERS, METHOD_LIST_MERGE_REQUESTS, METHOD_LIST_PATH,
+    METHOD_LIST_PIPELINES, METHOD_LIST_PLUGINS, METHOD_LIST_REPOS, METHOD_LIST_SESSION_GRANTS,
+    METHOD_LIST_SESSIONS, METHOD_LIST_WORKTREES, METHOD_NEGOTIATE_CAPABILITIES,
+    METHOD_REGISTER_REPO, METHOD_REMOVE_PLUGIN, METHOD_REMOVE_WORKTREE, METHOD_RENAME_SESSION,
+    METHOD_REQUEST_INPUT_LOCK, METHOD_RESUME_SESSION, METHOD_SCAN_REPOS, METHOD_SET_SESSION_GRANT,
+    METHOD_UNREGISTER_REPO, METHOD_UPDATE_REPO, METHOD_UPDATE_SETTINGS,
 };
 
 /// Default maximum number of sessions returned by `ListSessions`.
@@ -468,6 +468,11 @@ impl TunnelRequestHandler {
                 self.handle_rename_session(&request_id, &data, relay_forwarded)
                     .await
             }
+            // Session delete RPC
+            METHOD_DELETE_SESSION => {
+                self.handle_delete_session(&request_id, &data, relay_forwarded)
+                    .await
+            }
             // VersionService RPCs
             METHOD_GET_VERSION | METHOD_NEGOTIATE_CAPABILITIES => {
                 self.dispatch_version_rpc(
@@ -862,6 +867,49 @@ impl TunnelRequestHandler {
                 request_id,
                 TunnelErrorCode::Internal,
                 &format!("RenameSession failed: {e}"),
+            )],
+        }
+    }
+
+    /// Handle a `DeleteSession` request: cancel active subprocess, delete from DB.
+    async fn handle_delete_session(
+        &self,
+        request_id: &str,
+        data: &[u8],
+        relay_forwarded: bool,
+    ) -> Vec<TunnelFrame> {
+        let req = match DeleteSessionRequest::decode(data) {
+            Ok(r) => r,
+            Err(e) => {
+                return vec![Self::error_response(
+                    request_id,
+                    TunnelErrorCode::Internal,
+                    &format!("Decode error: {e}"),
+                )];
+            }
+        };
+
+        // Cancel any active subprocess (best-effort).
+        let _ = self.relay.cancel_session(&req.session_id).await;
+
+        match self.db.delete_session(&req.session_id).await {
+            Ok(deleted) => {
+                if deleted {
+                    info!(session_id = %req.session_id, "Session deleted via tunnel");
+                }
+                vec![
+                    self.unary_response_frame(
+                        request_id,
+                        &DeleteSessionResponse { deleted },
+                        relay_forwarded,
+                    )
+                    .await,
+                ]
+            }
+            Err(e) => vec![Self::error_response(
+                request_id,
+                TunnelErrorCode::Internal,
+                &format!("DeleteSession failed: {e}"),
             )],
         }
     }

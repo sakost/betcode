@@ -131,12 +131,15 @@ impl HandlerTestBuilder {
             let service_executor = Arc::new(RwLock::new(ServiceExecutor::new(
                 std::env::temp_dir().to_path_buf(),
             )));
+            let plugin_manager =
+                Arc::new(RwLock::new(crate::plugin::manager::PluginManager::new()));
             let (shutdown_tx, _) = tokio::sync::watch::channel(false);
             let cmd_svc = CommandServiceImpl::new(
                 registry,
                 file_index,
                 agent_lister,
                 service_executor,
+                plugin_manager,
                 shutdown_tx,
             );
             handler.set_command_service(Arc::new(cmd_svc));
@@ -2245,9 +2248,8 @@ async fn command_all_plugin_methods_dispatch_without_service() {
 #[tokio::test]
 async fn command_plugin_methods_dispatch_with_service() {
     // When CommandService is configured, plugin RPCs should reach the service dispatch
-    // (not "Unknown method" or "CommandService not available"). The current implementation
-    // stubs return Status::unimplemented, which the dispatch_rpc! macro converts to an
-    // error frame with the service's status message.
+    // (not "Unknown method" or "CommandService not available"). With empty request data
+    // (default proto values), some RPCs succeed and some return validation/not-found errors.
     let HandlerTestOutput { handler: h, .. } = HandlerTestBuilder::new()
         .with_command_service()
         .build()
@@ -2264,19 +2266,21 @@ async fn command_plugin_methods_dispatch_with_service() {
         let r = h
             .handle_frame(req_frame("plugin-svc", method, vec![]))
             .await;
-        assert_eq!(r.len(), 1, "method: {method}");
-        assert_eq!(r[0].frame_type, FrameType::Error as i32, "method: {method}");
-        if let Some(betcode_proto::v1::tunnel_frame::Payload::Error(e)) = &r[0].payload {
-            assert!(
-                !e.message.contains("CommandService not available"),
-                "method {method} should reach service dispatch, not 'not available'. Got: {}",
-                e.message
-            );
-            assert!(
-                !e.message.contains("Unknown method"),
-                "method {method} should be recognized, not 'Unknown method'. Got: {}",
-                e.message
-            );
+        assert!(!r.is_empty(), "method: {method}");
+        // Verify the response does NOT contain infrastructure errors
+        for frame in &r {
+            if let Some(betcode_proto::v1::tunnel_frame::Payload::Error(e)) = &frame.payload {
+                assert!(
+                    !e.message.contains("CommandService not available"),
+                    "method {method} should reach service dispatch, not 'not available'. Got: {}",
+                    e.message
+                );
+                assert!(
+                    !e.message.contains("Unknown method"),
+                    "method {method} should be recognized, not 'Unknown method'. Got: {}",
+                    e.message
+                );
+            }
         }
     }
 }
@@ -2284,9 +2288,8 @@ async fn command_plugin_methods_dispatch_with_service() {
 #[tokio::test]
 async fn list_plugins_with_valid_request_dispatches_through_service() {
     // Send a properly encoded ListPluginsRequest to verify the full dispatch path:
-    // decode → service call → response frame. The service currently returns
-    // Status::unimplemented, but the key assertion is that it reaches the service
-    // (not "CommandService not available" or "Unknown method").
+    // decode → service call → response frame. The service returns a successful
+    // response with an empty plugin list.
     let HandlerTestOutput { handler: h, .. } = HandlerTestBuilder::new()
         .with_command_service()
         .build()
@@ -2296,17 +2299,7 @@ async fn list_plugins_with_valid_request_dispatches_through_service() {
         .handle_frame(req_frame("plugin-list", METHOD_LIST_PLUGINS, encode(&req)))
         .await;
     assert_eq!(r.len(), 1);
-    assert_eq!(r[0].frame_type, FrameType::Error as i32);
-    if let Some(betcode_proto::v1::tunnel_frame::Payload::Error(e)) = &r[0].payload {
-        // Should contain the service stub message, not infrastructure errors
-        assert!(
-            e.message.contains("Plugin management not yet available"),
-            "Expected service-level stub message, got: {}",
-            e.message
-        );
-    } else {
-        panic!("expected error payload");
-    }
+    assert_eq!(r[0].frame_type, FrameType::Response as i32);
 }
 
 // --- M-5: relay_forwarded output encryption bypass test ---
@@ -2557,5 +2550,60 @@ async fn set_session_grant_empty_tool_name_returns_invalid_argument() {
         );
     } else {
         panic!("expected error payload");
+    }
+}
+
+// --- DeleteSession tunnel handler tests ---
+
+#[tokio::test]
+async fn delete_session_via_tunnel_removes_existing() {
+    let HandlerTestOutput { handler: h, .. } = HandlerTestBuilder::new().build().await;
+
+    // Create a session in the DB
+    h.db()
+        .create_session("del-t1", "claude-sonnet-4", "/tmp")
+        .await
+        .unwrap();
+
+    let req = DeleteSessionRequest {
+        session_id: "del-t1".into(),
+    };
+    let r = h
+        .handle_frame(req_frame("ds1", METHOD_DELETE_SESSION, encode(&req)))
+        .await;
+    assert_eq!(r.len(), 1);
+    assert_eq!(r[0].frame_type, FrameType::Response as i32);
+    if let Some(betcode_proto::v1::tunnel_frame::Payload::StreamData(p)) = &r[0].payload {
+        let resp =
+            DeleteSessionResponse::decode(p.encrypted.as_ref().unwrap().ciphertext.as_slice())
+                .unwrap();
+        assert!(resp.deleted);
+    } else {
+        panic!("expected response payload");
+    }
+
+    // Session should be gone
+    assert!(h.db().get_session("del-t1").await.is_err());
+}
+
+#[tokio::test]
+async fn delete_session_via_tunnel_nonexistent_returns_false() {
+    let HandlerTestOutput { handler: h, .. } = HandlerTestBuilder::new().build().await;
+
+    let req = DeleteSessionRequest {
+        session_id: "nonexistent".into(),
+    };
+    let r = h
+        .handle_frame(req_frame("ds2", METHOD_DELETE_SESSION, encode(&req)))
+        .await;
+    assert_eq!(r.len(), 1);
+    assert_eq!(r[0].frame_type, FrameType::Response as i32);
+    if let Some(betcode_proto::v1::tunnel_frame::Payload::StreamData(p)) = &r[0].payload {
+        let resp =
+            DeleteSessionResponse::decode(p.encrypted.as_ref().unwrap().ciphertext.as_slice())
+                .unwrap();
+        assert!(!resp.deleted);
+    } else {
+        panic!("expected response payload");
     }
 }
