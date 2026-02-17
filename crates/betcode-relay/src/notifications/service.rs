@@ -3,6 +3,8 @@
 //! Provides device token registration and unregistration for push
 //! notifications. Device tokens are stored in the relay database.
 
+use std::collections::HashMap;
+
 use tonic::{Request, Response, Status};
 use tracing::{info, instrument, warn};
 
@@ -14,12 +16,11 @@ use betcode_proto::v1::{
 
 use crate::storage::RelayDatabase;
 
-use super::FcmClient;
+use super::{FcmClient, NotificationError};
 
 /// gRPC service for managing device token registrations.
 pub struct NotificationServiceImpl {
     db: RelayDatabase,
-    #[allow(dead_code)]
     fcm: FcmClient,
 }
 
@@ -27,6 +28,27 @@ impl NotificationServiceImpl {
     /// Create a new `NotificationServiceImpl`.
     pub const fn new(db: RelayDatabase, fcm: FcmClient) -> Self {
         Self { db, fcm }
+    }
+
+    /// Send a push notification to a device.
+    ///
+    /// Builds an FCM message from the given parameters and delegates to the
+    /// underlying [`FcmClient`].
+    ///
+    /// # Errors
+    ///
+    /// Returns [`NotificationError`] if the FCM request fails or the API
+    /// returns a non-success status.
+    #[instrument(skip(self, data), fields(device_token))]
+    pub async fn send_notification(
+        &self,
+        device_token: &str,
+        title: &str,
+        body: &str,
+        data: Option<HashMap<String, String>>,
+    ) -> Result<(), NotificationError> {
+        let msg = FcmClient::build_message(device_token, title, body, data);
+        self.fcm.send(&msg).await
     }
 }
 
@@ -252,6 +274,33 @@ mod tests {
         let err = svc.unregister_device(req).await.unwrap_err();
         assert_eq!(err.code(), tonic::Code::InvalidArgument);
         assert!(err.message().contains("device_token"));
+    }
+
+    #[tokio::test]
+    async fn send_notification_builds_and_delegates() {
+        // The actual HTTP call will fail because there is no real FCM server,
+        // but we can verify the method is callable and returns a request error
+        // (not a panic or compile error).
+        let svc = test_service().await;
+        let result = svc
+            .send_notification("device-tok", "Hello", "World", None)
+            .await;
+
+        // We expect an error because no real FCM endpoint is reachable in tests.
+        assert!(result.is_err(), "expected an error from unreachable FCM");
+    }
+
+    #[tokio::test]
+    async fn send_notification_with_data_builds_and_delegates() {
+        let svc = test_service().await;
+        let mut data = std::collections::HashMap::new();
+        data.insert("key".to_string(), "value".to_string());
+
+        let result = svc
+            .send_notification("device-tok", "Title", "Body", Some(data))
+            .await;
+
+        assert!(result.is_err(), "expected an error from unreachable FCM");
     }
 
     #[tokio::test]

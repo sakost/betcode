@@ -64,6 +64,9 @@ pub struct FcmNotification {
     pub body: String,
 }
 
+/// Environment variable name for the FCM access token.
+const FCM_ACCESS_TOKEN_ENV: &str = "BETCODE_FCM_ACCESS_TOKEN";
+
 /// Client for the FCM HTTP v1 API.
 ///
 /// Holds the HTTP client, service account credentials, and the resolved API
@@ -78,6 +81,26 @@ pub struct FcmClient {
 
     /// The fully-resolved FCM API URL for this project.
     api_url: String,
+
+    /// Bearer token for FCM API authentication, read from the
+    /// `BETCODE_FCM_ACCESS_TOKEN` environment variable at construction time.
+    /// When `None`, falls back to `credentials.private_key`.
+    access_token: Option<String>,
+}
+
+/// Read the FCM access token from the environment.
+///
+/// Logs a warning if the variable is not set, since the fallback to
+/// `credentials.private_key` is unlikely to work with the real FCM API.
+fn read_access_token_from_env() -> Option<String> {
+    let token = std::env::var(FCM_ACCESS_TOKEN_ENV).ok();
+    if token.is_none() {
+        warn!(
+            "Environment variable {FCM_ACCESS_TOKEN_ENV} is not set; \
+             falling back to credentials.private_key for FCM auth"
+        );
+    }
+    token
 }
 
 impl FcmClient {
@@ -102,9 +125,11 @@ impl FcmClient {
             })?;
 
         let api_url = FCM_API_URL_TEMPLATE.replace("{project_id}", &credentials.project_id);
+        let access_token = read_access_token_from_env();
 
         debug!(
             project_id = %credentials.project_id,
+            has_env_token = access_token.is_some(),
             "FCM client initialized"
         );
 
@@ -112,6 +137,7 @@ impl FcmClient {
             http: reqwest::Client::new(),
             credentials,
             api_url,
+            access_token,
         })
     }
 
@@ -119,11 +145,13 @@ impl FcmClient {
     /// client.
     pub fn from_credentials(credentials: ServiceAccountCredentials, http: reqwest::Client) -> Self {
         let api_url = FCM_API_URL_TEMPLATE.replace("{project_id}", &credentials.project_id);
+        let access_token = read_access_token_from_env();
 
         Self {
             http,
             credentials,
             api_url,
+            access_token,
         }
     }
 
@@ -148,6 +176,7 @@ impl FcmClient {
             http,
             credentials,
             api_url,
+            access_token: Some("test-access-token".to_string()),
         }
     }
 
@@ -178,10 +207,6 @@ impl FcmClient {
     /// Returns `NotificationError::Request` if the HTTP request fails, or
     /// `NotificationError::ApiError` if FCM returns a non-2xx status code.
     pub async fn send(&self, message: &FcmMessage) -> Result<(), NotificationError> {
-        // In production, you would construct a signed JWT from the service
-        // account credentials and exchange it for an OAuth2 access token.
-        // For this implementation we send the request structure; the actual
-        // auth token acquisition is left as a TODO for the production deployment.
         let response = self
             .http
             .post(&self.api_url)
@@ -211,14 +236,15 @@ impl FcmClient {
 
     /// Construct the Authorization header value.
     ///
-    /// In a full implementation this would be an `OAuth2` bearer token obtained
-    /// by signing a JWT with the service account's private key. For now this
-    /// returns a placeholder that would need to be replaced with a real token
-    /// exchange flow.
+    /// Uses the access token read from `BETCODE_FCM_ACCESS_TOKEN` at
+    /// construction time. If that variable was not set, falls back to
+    /// `credentials.private_key` for backward compatibility.
     fn auth_header(&self) -> String {
-        // Placeholder: in production, sign a JWT and exchange it for an
-        // access token via Google's OAuth2 token endpoint.
-        format!("Bearer {}", self.credentials.private_key)
+        let token = self
+            .access_token
+            .as_deref()
+            .unwrap_or(&self.credentials.private_key);
+        format!("Bearer {token}")
     }
 
     /// Returns the project ID from the loaded credentials.
@@ -303,5 +329,26 @@ mod tests {
             matches!(err, NotificationError::Credentials(_)),
             "expected Credentials error, got: {err}"
         );
+    }
+
+    #[test]
+    fn auth_header_uses_access_token_when_set() {
+        let client = FcmClient::for_testing(test_credentials());
+        // for_testing sets access_token to Some("test-access-token")
+        assert_eq!(client.auth_header(), "Bearer test-access-token");
+    }
+
+    #[test]
+    fn auth_header_falls_back_to_private_key() {
+        let _ = rustls::crypto::ring::default_provider().install_default();
+        let http = reqwest::Client::builder().build().expect("http client");
+        let creds = test_credentials();
+        let client = FcmClient {
+            http,
+            credentials: creds,
+            api_url: "https://example.com".to_string(),
+            access_token: None,
+        };
+        assert_eq!(client.auth_header(), "Bearer test-private-key");
     }
 }
