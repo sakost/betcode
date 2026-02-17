@@ -2,7 +2,7 @@
 
 use std::path::PathBuf;
 
-use tonic::transport::{Identity, ServerTlsConfig};
+use tonic::transport::{Certificate, Identity, ServerTlsConfig};
 use tracing::info;
 
 use super::certs::{CertError, generate_dev_bundle, write_dev_certs};
@@ -79,6 +79,16 @@ impl TlsMode {
     }
 }
 
+/// Apply mutual TLS client authentication to an existing `ServerTlsConfig`.
+///
+/// Uses optional client auth so that non-tunnel endpoints (like Auth) can
+/// work without a client certificate. The tunnel service enforces the
+/// certificate requirement at the application layer.
+pub fn apply_mtls(tls: ServerTlsConfig, client_ca_pem: &str) -> ServerTlsConfig {
+    let ca_cert = Certificate::from_pem(client_ca_pem);
+    tls.client_ca_root(ca_cert).client_auth_optional(true)
+}
+
 /// TLS configuration errors.
 #[derive(Debug, thiserror::Error)]
 pub enum TlsConfigError {
@@ -133,5 +143,22 @@ mod tests {
             key_path: PathBuf::from("/nonexistent/key.pem"),
         };
         assert!(mode.to_server_tls_config().is_err());
+    }
+
+    #[test]
+    fn apply_mtls_does_not_panic() {
+        let dir = std::env::temp_dir().join("betcode-mtls-test");
+        let _ = std::fs::remove_dir_all(&dir);
+
+        let mode = TlsMode::DevSelfSigned {
+            cert_dir: dir.clone(),
+        };
+        let tls = mode.to_server_tls_config().unwrap().unwrap();
+        let ca_pem = std::fs::read_to_string(dir.join("ca.pem")).unwrap();
+
+        // Should not panic
+        let _tls_with_mtls = super::apply_mtls(tls, &ca_pem);
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

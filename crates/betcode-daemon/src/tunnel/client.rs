@@ -7,7 +7,7 @@ use tokio::sync::mpsc;
 use tokio::time::sleep;
 use tokio_stream::StreamExt;
 use tokio_stream::wrappers::ReceiverStream;
-use tonic::transport::{Certificate, Channel, ClientTlsConfig};
+use tonic::transport::{Certificate, Channel, ClientTlsConfig, Identity};
 use tonic::{Request, Streaming};
 use tracing::{error, info, warn};
 
@@ -25,7 +25,7 @@ use super::handler::TunnelRequestHandler;
 use crate::relay::SessionRelay;
 use crate::server::{
     CommandServiceImpl, ConfigServiceImpl, GitLabServiceImpl, GitRepoServiceImpl,
-    WorktreeServiceImpl,
+    SubagentServiceImpl, VersionServiceImpl, WorktreeServiceImpl,
 };
 use crate::session::SessionMultiplexer;
 use crate::storage::Database;
@@ -48,6 +48,10 @@ pub struct TunnelClient {
     worktree_service: Option<Arc<WorktreeServiceImpl>>,
     /// Optional `ConfigServiceImpl` for handling config RPCs through the tunnel.
     config_service: Option<Arc<ConfigServiceImpl>>,
+    /// Optional `VersionServiceImpl` for handling version RPCs through the tunnel.
+    version_service: Option<Arc<VersionServiceImpl>>,
+    /// Optional `SubagentServiceImpl` for handling subagent RPCs through the tunnel.
+    subagent_service: Option<Arc<SubagentServiceImpl>>,
 }
 
 impl TunnelClient {
@@ -73,6 +77,8 @@ impl TunnelClient {
             repo_service: None,
             worktree_service: None,
             config_service: None,
+            version_service: None,
+            subagent_service: None,
         })
     }
 
@@ -99,6 +105,66 @@ impl TunnelClient {
     /// Set the `ConfigService` implementation for handling config RPCs through the tunnel.
     pub fn set_config_service(&mut self, service: Arc<ConfigServiceImpl>) {
         self.config_service = Some(service);
+    }
+
+    /// Set the `VersionService` implementation for handling version RPCs through the tunnel.
+    pub fn set_version_service(&mut self, service: Arc<VersionServiceImpl>) {
+        self.version_service = Some(service);
+    }
+
+    /// Set the `SubagentService` implementation for handling subagent RPCs through the tunnel.
+    pub fn set_subagent_service(&mut self, service: Arc<SubagentServiceImpl>) {
+        self.subagent_service = Some(service);
+    }
+
+    /// Apply mTLS client identity to the TLS config if cert paths are configured
+    /// or auto-discovered from `$HOME/.betcode/certs/`.
+    fn apply_client_identity(
+        &self,
+        tls_config: ClientTlsConfig,
+    ) -> Result<ClientTlsConfig, TunnelClientError> {
+        let (cert_path, key_path) = match (
+            &self.config.client_cert_path,
+            &self.config.client_key_path,
+        ) {
+            (Some(cert), Some(key)) => (cert.clone(), key.clone()),
+            _ => {
+                if let Some((cert, key)) = discover_client_certs() {
+                    info!(
+                        client_cert = %cert.display(),
+                        "Auto-discovered mTLS client certificate"
+                    );
+                    (cert, key)
+                } else {
+                    info!(
+                        "No mTLS client certificate configured or found; connecting without client identity"
+                    );
+                    return Ok(tls_config);
+                }
+            }
+        };
+
+        let cert_pem = std::fs::read_to_string(&cert_path).map_err(|e| {
+            TunnelClientError::Connection(format!(
+                "Failed to read client cert {}: {}. Run `betcode-setup daemon` to provision certificates.",
+                cert_path.display(),
+                e,
+            ))
+        })?;
+        let key_pem = std::fs::read_to_string(&key_path).map_err(|e| {
+            TunnelClientError::Connection(format!(
+                "Failed to read client key {}: {}. Run `betcode-setup daemon` to provision certificates.",
+                key_path.display(),
+                e,
+            ))
+        })?;
+
+        let identity = Identity::from_pem(cert_pem, key_pem);
+        info!(
+            client_cert = %cert_path.display(),
+            "mTLS client identity configured"
+        );
+        Ok(tls_config.identity(identity))
     }
 
     /// Load or generate the X25519 identity keypair.
@@ -185,6 +251,10 @@ impl TunnelClient {
                 tls_config = tls_config.ca_certificate(Certificate::from_pem(ca_pem));
                 info!(ca_cert = %ca_path.display(), "TLS configured with custom CA cert");
             }
+
+            // Configure mTLS client identity if cert + key are provided
+            tls_config = self.apply_client_identity(tls_config)?;
+
             endpoint = endpoint
                 .tls_config(tls_config)
                 .map_err(|e| TunnelClientError::Connection(e.to_string()))?;
@@ -227,6 +297,12 @@ impl TunnelClient {
         }
         if let Some(config_svc) = &self.config_service {
             handler.set_config_service(Arc::clone(config_svc));
+        }
+        if let Some(version_svc) = &self.version_service {
+            handler.set_version_service(Arc::clone(version_svc));
+        }
+        if let Some(subagent_svc) = &self.subagent_service {
+            handler.set_subagent_service(Arc::clone(subagent_svc));
         }
         let handler = Arc::new(handler);
 
@@ -402,6 +478,22 @@ impl TunnelClient {
                 }
             }
         }
+    }
+}
+
+/// Auto-discover mTLS client certificate files in `$HOME/.betcode/certs/`.
+///
+/// Returns `Some((cert_path, key_path))` if both files exist, `None` otherwise.
+fn discover_client_certs() -> Option<(std::path::PathBuf, std::path::PathBuf)> {
+    let home = dirs::home_dir()?;
+    let certs_dir = home.join(".betcode").join("certs");
+    let cert_path = certs_dir.join("client.pem");
+    let key_path = certs_dir.join("client-key.pem");
+
+    if cert_path.exists() && key_path.exists() {
+        Some((cert_path, key_path))
+    } else {
+        None
     }
 }
 

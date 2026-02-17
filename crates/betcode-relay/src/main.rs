@@ -18,6 +18,7 @@ use betcode_proto::v1::config_service_server::ConfigServiceServer;
 use betcode_proto::v1::git_lab_service_server::GitLabServiceServer;
 use betcode_proto::v1::git_repo_service_server::GitRepoServiceServer;
 use betcode_proto::v1::machine_service_server::MachineServiceServer;
+use betcode_proto::v1::subagent_service_server::SubagentServiceServer;
 use betcode_proto::v1::tunnel_service_server::TunnelServiceServer;
 use betcode_proto::v1::worktree_service_server::WorktreeServiceServer;
 
@@ -27,8 +28,8 @@ use betcode_relay::registry::ConnectionRegistry;
 use betcode_relay::router::RequestRouter;
 use betcode_relay::server::{
     AgentProxyService, AuthServiceImpl, CommandProxyService, ConfigProxyService,
-    GitLabProxyService, GitRepoProxyService, MachineServiceImpl, TunnelServiceImpl,
-    WorktreeProxyService,
+    GitLabProxyService, GitRepoProxyService, MachineServiceImpl, SubagentProxyService,
+    TunnelServiceImpl, WorktreeProxyService,
 };
 use betcode_relay::storage::RelayDatabase;
 use betcode_relay::tls::TlsMode;
@@ -80,9 +81,35 @@ struct Args {
     #[arg(long, requires = "tls_cert")]
     tls_key: Option<PathBuf>,
 
+    /// Path to CA certificate (PEM) for validating daemon client certificates
+    /// (mutual TLS). When provided, tunnel connections must present a valid
+    /// client certificate signed by this CA.
+    #[arg(long)]
+    mtls_ca_cert: Option<PathBuf>,
+
+    /// TTL for buffered messages in seconds.
+    #[arg(long, default_value_t = 86400)]
+    buffer_ttl: i64,
+
+    /// Maximum buffered messages per machine.
+    #[arg(long, default_value_t = 1000)]
+    buffer_cap: usize,
+
     /// Output logs as JSON (for structured log aggregation).
     #[arg(long)]
     log_json: bool,
+
+    /// OpenTelemetry OTLP endpoint for traces and metrics export
+    /// (e.g. `http://localhost:4317`). Requires the `metrics` feature.
+    #[cfg(feature = "metrics")]
+    #[arg(long, env = "BETCODE_METRICS_ENDPOINT")]
+    metrics_endpoint: Option<String>,
+
+    /// Path to FCM service account credentials JSON file.
+    /// Required when the `push-notifications` feature is enabled.
+    #[cfg(feature = "push-notifications")]
+    #[arg(long, env = "BETCODE_FCM_CREDENTIALS_PATH")]
+    fcm_credentials_path: PathBuf,
 }
 
 #[tokio::main]
@@ -90,7 +117,17 @@ struct Args {
 async fn main() -> anyhow::Result<()> {
     let args = Args::parse();
 
-    betcode_core::tracing_init::init_tracing("betcode_relay=info", args.log_json);
+    #[cfg(feature = "metrics")]
+    let metrics_endpoint = args.metrics_endpoint.as_deref();
+    #[cfg(not(feature = "metrics"))]
+    let metrics_endpoint: Option<&str> = None;
+
+    // Hold the guard so the OTel pipeline stays alive for the process lifetime.
+    let _metrics_guard = betcode_core::tracing_init::init_tracing_with_metrics(
+        "betcode_relay=info",
+        args.log_json,
+        metrics_endpoint,
+    );
 
     info!(
         version = env!("CARGO_PKG_VERSION"),
@@ -116,16 +153,29 @@ async fn main() -> anyhow::Result<()> {
     ));
 
     let registry = Arc::new(ConnectionRegistry::new());
-    let buffer = Arc::new(BufferManager::new(db.clone(), Arc::clone(&registry)));
+    let buffer = Arc::new(BufferManager::new(
+        db.clone(),
+        Arc::clone(&registry),
+        args.buffer_ttl,
+        args.buffer_cap,
+    ));
     let router = Arc::new(RequestRouter::new(
         Arc::clone(&registry),
         Arc::clone(&buffer),
         Duration::from_secs(args.request_timeout),
     ));
 
+    // mTLS is enabled when a client CA cert path is provided
+    let mtls_enabled = args.mtls_ca_cert.is_some();
+
     // Build services
     let auth = AuthServiceImpl::new(db.clone(), Arc::clone(&jwt), args.refresh_grace_period);
-    let tunnel = TunnelServiceImpl::new(Arc::clone(&registry), db.clone(), Arc::clone(&buffer));
+    let tunnel = TunnelServiceImpl::new(
+        Arc::clone(&registry),
+        db.clone(),
+        Arc::clone(&buffer),
+        mtls_enabled,
+    );
     let machine = MachineServiceImpl::new(db.clone());
     let agent_proxy = AgentProxyService::new(Arc::clone(&router), db.clone());
     let command_proxy = CommandProxyService::new(Arc::clone(&router), db.clone());
@@ -133,6 +183,19 @@ async fn main() -> anyhow::Result<()> {
     let git_repo_proxy = GitRepoProxyService::new(Arc::clone(&router), db.clone());
     let config_proxy = ConfigProxyService::new(Arc::clone(&router), db.clone());
     let gitlab_proxy = GitLabProxyService::new(Arc::clone(&router), db.clone());
+    let subagent_proxy = SubagentProxyService::new(Arc::clone(&router), db.clone());
+
+    // Build notification service (only with push-notifications feature)
+    #[cfg(feature = "push-notifications")]
+    let notification_svc = {
+        use betcode_relay::notifications::{FcmClient, NotificationServiceImpl};
+        let fcm = FcmClient::from_credentials_file(&args.fcm_credentials_path)?;
+        info!(
+            project_id = %fcm.project_id(),
+            "FCM push notifications enabled"
+        );
+        NotificationServiceImpl::new(db.clone(), fcm)
+    };
 
     let jwt_check = betcode_relay::server::jwt_interceptor(Arc::clone(&jwt));
 
@@ -152,7 +215,18 @@ async fn main() -> anyhow::Result<()> {
         TlsMode::Disabled
     };
 
-    let tls_config = tls_mode.to_server_tls_config()?;
+    let mut tls_config = tls_mode.to_server_tls_config()?;
+
+    // Apply mutual TLS if a client CA cert is provided
+    if let (Some(tls), Some(ca_path)) = (tls_config.take(), &args.mtls_ca_cert) {
+        let ca_pem = std::fs::read_to_string(ca_path).map_err(|e| {
+            anyhow::anyhow!("Failed to read mTLS CA cert {}: {e}", ca_path.display())
+        })?;
+        tls_config = Some(betcode_relay::tls::apply_mtls(tls, &ca_pem));
+        info!(ca = %ca_path.display(), "Mutual TLS enabled for tunnel connections");
+    } else if mtls_enabled {
+        warn!("--mtls-ca-cert specified but TLS is disabled; mTLS will have no effect");
+    }
 
     let mut builder = Server::builder()
         .http2_keepalive_interval(Some(Duration::from_secs(30)))
@@ -222,8 +296,22 @@ async fn main() -> anyhow::Result<()> {
         ))
         .add_service(GitLabServiceServer::with_interceptor(
             gitlab_proxy,
-            jwt_check,
+            jwt_check.clone(),
+        ))
+        .add_service(SubagentServiceServer::with_interceptor(
+            subagent_proxy,
+            jwt_check.clone(),
         ));
+
+    // Conditionally add notification service when push-notifications feature is enabled
+    #[cfg(feature = "push-notifications")]
+    let grpc_router = {
+        use betcode_proto::v1::notification_service_server::NotificationServiceServer;
+        grpc_router.add_service(NotificationServiceServer::with_interceptor(
+            notification_svc,
+            jwt_check,
+        ))
+    };
 
     tokio::select! {
         result = grpc_router.serve(args.addr) => {

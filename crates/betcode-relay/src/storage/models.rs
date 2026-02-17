@@ -62,3 +62,13 @@ pub struct Certificate {
     pub revoked: i64,
     pub created_at: i64,
 }
+
+/// A registered device token for push notifications.
+#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
+pub struct DeviceToken {
+    pub id: String,
+    pub user_id: String,
+    pub device_token: String,
+    pub platform: String,
+    pub created_at: i64,
+}

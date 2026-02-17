@@ -60,6 +60,16 @@ struct Args {
     #[arg(long, env = "BETCODE_RELAY_CUSTOM_CA_CERT")]
     relay_custom_ca_cert: Option<PathBuf>,
 
+    /// Path to PEM-encoded client certificate for mTLS with the relay.
+    /// If not specified, auto-discovered from `$HOME/.betcode/certs/client.pem`.
+    #[arg(long, env = "BETCODE_CLIENT_CERT")]
+    client_cert: Option<PathBuf>,
+
+    /// Path to PEM-encoded client private key for mTLS with the relay.
+    /// If not specified, auto-discovered from `$HOME/.betcode/certs/client-key.pem`.
+    #[arg(long, env = "BETCODE_CLIENT_KEY")]
+    client_key: Option<PathBuf>,
+
     /// Base directory for git worktrees
     #[arg(long, env = "BETCODE_WORKTREE_DIR")]
     worktree_dir: Option<PathBuf>,
@@ -67,14 +77,32 @@ struct Args {
     /// Output logs as JSON (for structured log aggregation).
     #[arg(long, env = "BETCODE_LOG_JSON")]
     log_json: bool,
+
+    /// OpenTelemetry OTLP endpoint for traces and metrics export
+    /// (e.g. `http://localhost:4317`). Requires the `metrics` feature.
+    #[cfg(feature = "metrics")]
+    #[arg(long, env = "BETCODE_METRICS_ENDPOINT")]
+    metrics_endpoint: Option<String>,
 }
 
+// jscpd:ignore-start -- binary bootstrap is inherently similar across daemons
 #[tokio::main]
 #[allow(clippy::too_many_lines)]
 async fn main() -> anyhow::Result<()> {
     let args = Args::parse();
 
-    betcode_core::tracing_init::init_tracing("betcode_daemon=info", args.log_json);
+    #[cfg(feature = "metrics")]
+    let metrics_endpoint = args.metrics_endpoint.as_deref();
+    #[cfg(not(feature = "metrics"))]
+    let metrics_endpoint: Option<&str> = None;
+
+    // Hold the guard so the OTel pipeline stays alive for the process lifetime.
+    let _metrics_guard = betcode_core::tracing_init::init_tracing_with_metrics(
+        "betcode_daemon=info",
+        args.log_json,
+        metrics_endpoint,
+    );
+    // jscpd:ignore-end
 
     info!(
         version = env!("CARGO_PKG_VERSION"),
@@ -140,6 +168,8 @@ async fn main() -> anyhow::Result<()> {
         tunnel_config
             .ca_cert_path
             .clone_from(&args.relay_custom_ca_cert);
+        tunnel_config.client_cert_path.clone_from(&args.client_cert);
+        tunnel_config.client_key_path.clone_from(&args.client_key);
 
         info!(
             relay_url = %relay_url,
@@ -157,6 +187,7 @@ async fn main() -> anyhow::Result<()> {
         tunnel_client.set_repo_service(Arc::new(server.repo_service_impl()));
         tunnel_client.set_worktree_service(Arc::new(server.worktree_service_impl()));
         tunnel_client.set_config_service(Arc::new(server.config_service_impl()));
+        tunnel_client.set_version_service(Arc::new(server.version_service_impl()));
         if let Some(gitlab_svc) = GrpcServer::gitlab_service_impl_from_env() {
             info!("GitLab service configured for tunnel");
             tunnel_client.set_gitlab_service(Arc::new(gitlab_svc));
@@ -168,6 +199,10 @@ async fn main() -> anyhow::Result<()> {
         drop(shutdown_rx);
         None
     };
+
+    // Spawn certificate expiry monitor (checks daily, rotates if < 30 days to expiry)
+    let cert_monitor_rx = shutdown_tx.subscribe();
+    let cert_monitor_handle = betcode_daemon::tunnel::spawn_cert_monitor(cert_monitor_rx);
 
     // Serve until shutdown signal
     #[cfg(unix)]
@@ -201,11 +236,12 @@ async fn main() -> anyhow::Result<()> {
         }
     }
 
-    // Signal tunnel client to shut down
+    // Signal tunnel client and cert monitor to shut down
     let _ = shutdown_tx.send(true);
     if let Some(handle) = tunnel_handle {
         let _ = handle.await;
     }
+    let _ = cert_monitor_handle.await;
 
     info!("Daemon stopped");
     Ok(())

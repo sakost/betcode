@@ -10,6 +10,8 @@ pub mod commands;
 pub mod config;
 pub mod db;
 pub mod error;
+#[cfg(feature = "metrics")]
+pub mod metrics;
 pub mod ndjson;
 pub mod permissions;
 pub mod tracing_init;

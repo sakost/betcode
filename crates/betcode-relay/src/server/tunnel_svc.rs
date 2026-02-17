@@ -24,6 +24,7 @@ pub struct TunnelServiceImpl {
     registry: Arc<ConnectionRegistry>,
     db: RelayDatabase,
     buffer: Arc<BufferManager>,
+    mtls_enabled: bool,
 }
 
 impl TunnelServiceImpl {
@@ -31,11 +32,13 @@ impl TunnelServiceImpl {
         registry: Arc<ConnectionRegistry>,
         db: RelayDatabase,
         buffer: Arc<BufferManager>,
+        mtls_enabled: bool,
     ) -> Self {
         Self {
             registry,
             db,
             buffer,
+            mtls_enabled,
         }
     }
 }
@@ -51,6 +54,35 @@ impl TunnelService for TunnelServiceImpl {
     ) -> Result<Response<Self::OpenTunnelStream>, Status> {
         let claims = extract_claims(&request)?;
         let owner_id = claims.sub.clone();
+
+        // mTLS: validate client certificate when enabled
+        let peer_cert_cn = if self.mtls_enabled {
+            let info =
+                crate::server::grpc_util::extract_peer_cert_info(&request).ok_or_else(|| {
+                    Status::unauthenticated("Client certificate required for tunnel connections")
+                })?;
+
+            // Check revocation
+            if self
+                .db
+                .is_certificate_revoked(&info.serial_hex)
+                .await
+                .unwrap_or(true)
+            {
+                return Err(Status::unauthenticated(
+                    "Client certificate has been revoked",
+                ));
+            }
+
+            info!(
+                cn = %info.common_name,
+                serial = %info.serial_hex,
+                "Peer certificate validated"
+            );
+            Some(info.common_name)
+        } else {
+            None
+        };
 
         let mut in_stream = request.into_inner();
 
@@ -83,6 +115,18 @@ impl TunnelService for TunnelServiceImpl {
                     .send(Err(Status::invalid_argument(
                         "First frame must identify machine",
                     )))
+                    .await;
+                return;
+            }
+
+            // mTLS: verify the client certificate CN matches the claimed machine_id
+            if let Some(ref cn) = peer_cert_cn
+                && cn != &machine_id
+            {
+                let _ = out_tx
+                    .send(Err(Status::permission_denied(format!(
+                        "Certificate CN '{cn}' does not match machine_id '{machine_id}'"
+                    ))))
                     .await;
                 return;
             }

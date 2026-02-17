@@ -2,7 +2,7 @@
 
 **Version**: 0.1.0-alpha.1
 **Last Updated**: 2026-02-14
-**Status**: Planned
+**Status**: Implemented
 
 ## Overview
 
@@ -85,7 +85,7 @@ Clients use `parent_tool_use_id` to:
 - Collapse/expand subagent activity
 - Route permission prompts with context
 
-## Level 2: Daemon-Orchestrated Subagents
+## Level 2: Daemon-Orchestrated Subagents [Implemented]
 
 The daemon spawns independent `claude` subprocesses, each with its own session, process, working directory, model, tool restrictions, and permission context. Unlike Level 1, Level 2 subagents run in parallel across separate processes with isolated context windows.
 
@@ -771,9 +771,9 @@ action = "deny"  # Deny all other Bash commands
 
 ## Roadmap Integration
 
-**Phase 2**: `SpawnSubagent`, `WatchSubagent`, `CancelSubagent`, `ListSubagents`, subprocess pool, `subagents` table, permission inheritance, auto-approve, CLI commands.
+**Phase 2 [Complete]**: `SpawnSubagent`, `WatchSubagent`, `CancelSubagent`, `ListSubagents`, subprocess pool, `subagents` table, permission inheritance, auto-approve with tool validation, CLI commands.
 
-**Phase 4**: `CreateOrchestration`, `WatchOrchestration`, DAG scheduler, summary injection, `orchestrations` + `orchestration_steps` tables, UI integration, cost aggregation.
+**Phase 4 [Mostly Complete]**: `CreateOrchestration`, `WatchOrchestration`, DAG scheduler, summary injection, `orchestrations` + `orchestration_steps` tables, cost aggregation. UI integration deferred (external orchestrators drive strategy).
 
 ---
 

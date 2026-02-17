@@ -170,7 +170,7 @@ max 5 retries with jitter), worktree and repo management screens, settings scree
 
 ---
 
-## Phase 4: Multi-Machine and Polish [In Progress]
+## Phase 4: Multi-Machine and Polish [Mostly Complete]
 
 **Goal**: Cross-machine switching, GitLab integration, LAN mode, production readiness.
 
@@ -183,42 +183,63 @@ GetMergeRequest, ListPipelines, GetPipeline, ListIssues, GetIssue), Flutter GitL
 tab (pipelines, MRs, issues -- read-only), CLI `betcode gitlab mr/pipeline/issue
 list/get` commands.
 
+**Recently completed**:
+
+- **Push notifications** [Done]: FCM integration wired to agent events, cfg-gated
+  behind `push-notifications` feature flag. RegisterDevice/UnregisterDevice RPCs.
+- **Opt-in metrics** [Done]: OpenTelemetry OTLP integration, cfg-gated behind
+  `metrics` feature flag. `--metrics-endpoint` CLI arg on daemon and relay.
+- **Mutual TLS for daemons** [Done]: Client certificate generation (betcode-crypto),
+  relay validation with revocation checks, setup provisioning, daemon dial with
+  auto-discovery, automatic cert rotation (30 days before expiry), `betcode daemon
+  rotate-cert` CLI command.
+- **Configurable buffer TTL/cap** [Done]: Relay `--buffer-ttl` and `--buffer-cap`
+  CLI args control message buffer TTL (default 24h) and per-machine capacity
+  (default 1000).
+- **Session delete** [Done]: DeleteSession RPC implemented in daemon, routed through
+  tunnel, cascade deletes messages.
+- **VersionService** [Done]: GetVersion and NegotiateCapabilities RPCs for version
+  negotiation and capability advertisement.
+- **Plugin gRPC wiring** [Done]: 6 plugin RPCs connected to PluginManager
+  (ListPlugins, GetPluginStatus, AddPlugin, RemovePlugin, EnablePlugin,
+  DisablePlugin).
+
 **Remaining work**:
 
 - **Direct LAN mode**: mDNS discovery, explicit config, mTLS reuse, automatic
   prefer LAN over relay.
-- **Push notifications**: drift schema exists (NotificationCache table) but not
-  wired to FCM/APNs or agent events.
-- **Mutual TLS for daemons**: Server TLS exists but daemons authenticate via JWT,
-  not client certificates. Certificates table exists in relay DB but unused for auth.
-- **Configurable buffer TTL/cap**: Message buffer uses fixed 1hr TTL with no
-  per-machine capacity cap (roadmap specified 24h TTL, 1000 msg cap).
-- **Opt-in metrics**: Not started.
-- **Session delete**: Flutter shows "coming soon" stub.
 - **GitLab write operations**: Currently read-only (no create/edit/approve MRs).
 - **CLI JSON output** (low priority for now): Headless mode outputs plain text
   only; no structured JSON/stream-json output format.
 
 ---
 
-## Subagent Orchestration (Cross-Phase) [Partial]
+## Subagent Orchestration (Cross-Phase) [Mostly Complete]
 
 BetCode exposes agent listing via CommandService and a plugin system for
-extending daemon capabilities. Full subagent orchestration (spawning and
-coordinating multiple Claude Code subprocesses) is planned but not yet
-implemented.
+extending daemon capabilities. Daemon-orchestrated subagent system (spawning
+and coordinating multiple Claude Code subprocesses) is implemented with
+external orchestrator support.
 
 **Implemented**:
 - ListAgents RPC with AgentKind enum (ClaudeInternal, DaemonOrchestrated,
   TeamMember) and AgentStatus (Idle, Working, Done, Failed)
 - Plugin infrastructure (PluginManager lifecycle, PluginService gRPC interface
-  with Register/Execute/HealthCheck, socket-based communication)
+  with ListPlugins/GetPluginStatus/AddPlugin/RemovePlugin/EnablePlugin/
+  DisablePlugin, socket-based communication)
+- SubagentService gRPC: SpawnSubagent, WatchSubagent, SendToSubagent,
+  CancelSubagent, ListSubagents, RevokeAutoApprove
+- Orchestration RPCs: CreateOrchestration, WatchOrchestration
+- Subprocess pool with semaphore-based concurrency control
+- DAG scheduler (topological sort, parallel dispatch, cycle detection)
+- Agent persistence (subagents, orchestrations, orchestration_steps DB tables)
+- Auto-approve permissions with tool validation
+- Tunnel routing for all SubagentService RPCs
+- CLI commands: `betcode subagent spawn/list/cancel/watch`
 
 **Remaining work**:
-- SpawnSubagent / WatchSubagent RPCs for subprocess orchestration
-- Team management (creation, member assignment, distributed sessions)
-- OrchestrationPlan, DAG scheduler, context sharing
-- Agent persistence (DB tables for agent metadata and session bindings)
+- Team management UI (external orchestrators drive strategy)
+- Advanced orchestration patterns
 
 See [SUBAGENTS.md](./SUBAGENTS.md) for the complete design.
 

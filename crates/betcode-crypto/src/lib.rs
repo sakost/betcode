@@ -17,6 +17,9 @@ pub mod fingerprint_visual;
 pub mod identity;
 pub mod session;
 
+#[cfg(feature = "certs")]
+pub mod certs;
+
 pub use error::CryptoError;
 #[cfg(any(test, feature = "test-utils"))]
 pub use exchange::perform_key_exchange;

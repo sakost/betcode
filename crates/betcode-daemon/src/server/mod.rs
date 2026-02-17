@@ -11,6 +11,8 @@ mod gitlab_svc;
 mod handler;
 mod health;
 mod repo_svc;
+pub mod subagent_svc;
+mod version_svc;
 mod worktree_svc;
 
 #[cfg(test)]
@@ -23,6 +25,8 @@ pub use config_svc::ConfigServiceImpl;
 pub use gitlab_svc::GitLabServiceImpl;
 pub use health::HealthServiceImpl;
 pub use repo_svc::GitRepoServiceImpl;
+pub use subagent_svc::SubagentServiceImpl;
+pub use version_svc::VersionServiceImpl;
 pub use worktree_svc::WorktreeServiceImpl;
 
 use std::net::SocketAddr;
@@ -40,6 +44,8 @@ use betcode_proto::v1::command_service_server::CommandServiceServer;
 use betcode_proto::v1::config_service_server::ConfigServiceServer;
 use betcode_proto::v1::git_repo_service_server::GitRepoServiceServer;
 use betcode_proto::v1::health_server::HealthServer;
+use betcode_proto::v1::subagent_service_server::SubagentServiceServer;
+use betcode_proto::v1::version_service_server::VersionServiceServer;
 use betcode_proto::v1::worktree_service_server::WorktreeServiceServer;
 
 use crate::commands::CommandRegistry;
@@ -47,6 +53,9 @@ use crate::commands::service_executor::ServiceExecutor;
 use crate::completion::agent_lister::AgentLister;
 use crate::completion::file_index::FileIndex;
 use crate::gitlab::{GitLabClient, GitLabConfig};
+use crate::orchestration::manager::SubagentManager;
+use crate::orchestration::pool::SubprocessPool;
+use crate::plugin::manager::PluginManager;
 use crate::relay::SessionRelay;
 use crate::session::SessionMultiplexer;
 use crate::storage::Database;
@@ -76,6 +85,7 @@ pub struct GrpcServer {
     command_service: CommandServiceImpl,
     config_service: ConfigServiceImpl,
     repo_service: GitRepoServiceImpl,
+    version_service: VersionServiceImpl,
     worktree_service: WorktreeServiceImpl,
 }
 
@@ -131,16 +141,20 @@ impl GrpcServer {
         }
         let agent_lister = Arc::new(RwLock::new(lister));
         let service_executor = Arc::new(RwLock::new(ServiceExecutor::new(cwd)));
+        let plugin_manager = Arc::new(RwLock::new(PluginManager::new()));
 
         let command_service = CommandServiceImpl::new(
             command_registry,
             file_index,
             agent_lister,
             service_executor,
+            plugin_manager,
             shutdown_tx,
         );
 
         let config_service = ConfigServiceImpl::new(config.clone());
+        let version_service =
+            VersionServiceImpl::new(config.clone(), std::collections::HashMap::new());
 
         let worktree_manager = WorktreeManager::new(db.clone(), worktree_base_dir);
         let repo_service = GitRepoServiceImpl::new(db.clone(), worktree_manager.clone());
@@ -155,6 +169,7 @@ impl GrpcServer {
             command_service,
             config_service,
             repo_service,
+            version_service,
             worktree_service,
         }
     }
@@ -172,6 +187,11 @@ impl GrpcServer {
         let health_service =
             HealthServiceImpl::new(self.db.clone(), Arc::clone(&self.subprocess_manager));
 
+        // Create subagent orchestration infrastructure
+        let subagent_pool = Arc::new(SubprocessPool::new(5));
+        let subagent_manager = Arc::new(SubagentManager::new(subagent_pool, self.db.clone()));
+        let subagent_service = SubagentServiceImpl::new(subagent_manager, self.db.clone());
+
         let (grpc_health_reporter, grpc_health_service) = tonic_health::server::health_reporter();
         grpc_health_reporter
             .set_serving::<AgentServiceServer<AgentServiceImpl>>()
@@ -187,6 +207,8 @@ impl GrpcServer {
             .add_service(GitRepoServiceServer::new(self.repo_service))
             .add_service(HealthServer::new(health_service.clone()))
             .add_service(BetCodeHealthServer::new(health_service))
+            .add_service(SubagentServiceServer::new(subagent_service))
+            .add_service(VersionServiceServer::new(self.version_service))
             .add_service(WorktreeServiceServer::new(self.worktree_service))
     }
 
@@ -253,6 +275,11 @@ impl GrpcServer {
     /// Get a clone of the `GitRepoServiceImpl` that shares state with the gRPC server.
     pub fn repo_service_impl(&self) -> GitRepoServiceImpl {
         self.repo_service.clone()
+    }
+
+    /// Get a clone of the `VersionServiceImpl` that shares state with the gRPC server.
+    pub fn version_service_impl(&self) -> VersionServiceImpl {
+        self.version_service.clone()
     }
 
     /// Get a clone of the `WorktreeServiceImpl` that shares state with the gRPC server.

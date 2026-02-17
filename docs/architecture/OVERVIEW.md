@@ -68,7 +68,7 @@ identically with BetCode.
 
 | Container          | Binary           | Responsibility                                          |
 |--------------------|------------------|---------------------------------------------------------|
-| **betcode-daemon** | Rust binary      | Spawns Claude Code subprocesses, bridges NDJSON to gRPC, multiplexes sessions, manages worktrees, serves local + tunnel |
+| **betcode-daemon** | Rust binary      | Spawns Claude Code subprocesses, bridges NDJSON to gRPC, multiplexes sessions, manages worktrees, orchestrates subagents, routes plugins, manages mTLS certs, serves local + tunnel |
 | **betcode-relay**  | Rust binary      | Public gRPC router, JWT + mTLS auth, routes to machines, buffers messages for offline daemons |
 | **betcode-cli**    | Rust binary      | ratatui TUI, connects via local socket or relay, renders streaming output, permission prompts |
 | **betcode_app**    | Flutter app (separate repo) | Mobile/web client via relay, conversation UI, tool cards, permission dialogs, offline queue |

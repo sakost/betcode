@@ -15,6 +15,41 @@ use crate::router::RequestRouter;
 use crate::server::agent_proxy::{decode_response, router_error_to_status};
 use crate::storage::{DatabaseError, RelayDatabase};
 
+/// Information extracted from a peer's TLS client certificate.
+#[derive(Debug, Clone)]
+pub struct PeerCertInfo {
+    /// The Common Name (CN) from the certificate's subject.
+    pub common_name: String,
+    /// Hex-encoded serial number.
+    pub serial_hex: String,
+}
+
+/// Extract machine identity info from a peer's TLS client certificate.
+///
+/// Returns `None` when no peer certificate is available (e.g. TLS is
+/// disabled or client auth is optional and the client did not present
+/// a certificate).
+pub fn extract_peer_cert_info<T>(request: &Request<T>) -> Option<PeerCertInfo> {
+    let certs = request.peer_certs()?;
+    let first = certs.first()?;
+
+    let (_, parsed) = x509_parser::parse_x509_certificate(first.as_ref()).ok()?;
+
+    let cn = parsed
+        .subject()
+        .iter_common_name()
+        .next()
+        .and_then(|attr| attr.as_str().ok())
+        .map(String::from)?;
+
+    let serial_hex = parsed.serial.to_str_radix(16);
+
+    Some(PeerCertInfo {
+        common_name: cn,
+        serial_hex,
+    })
+}
+
 /// Check if a gRPC Status represents a normal peer disconnect
 /// (client exit, daemon shutdown, TLS close without notify, etc.).
 ///

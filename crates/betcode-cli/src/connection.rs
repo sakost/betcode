@@ -10,22 +10,25 @@ use tonic::transport::{Certificate, Channel, ClientTlsConfig, Endpoint};
 use tracing::{error, info, warn};
 
 use betcode_proto::v1::{
-    AddPluginRequest, AddPluginResponse, AgentEvent, AgentRequest, CancelTurnRequest,
-    CancelTurnResponse, CreateWorktreeRequest, DisablePluginRequest, DisablePluginResponse,
-    EnablePluginRequest, EnablePluginResponse, ExecuteServiceCommandRequest,
-    GetCommandRegistryResponse, GetIssueRequest, GetIssueResponse, GetMergeRequestRequest,
-    GetMergeRequestResponse, GetPipelineRequest, GetPipelineResponse, GetPluginStatusRequest,
-    GetPluginStatusResponse, GetRepoRequest, GetWorktreeRequest, GitRepoDetail, KeyExchangeRequest,
-    ListAgentsRequest, ListAgentsResponse, ListIssuesRequest, ListIssuesResponse,
-    ListMergeRequestsRequest, ListMergeRequestsResponse, ListPathRequest, ListPathResponse,
-    ListPipelinesRequest, ListPipelinesResponse, ListPluginsRequest, ListPluginsResponse,
-    ListReposRequest, ListReposResponse, ListSessionsRequest, ListSessionsResponse,
-    ListWorktreesRequest, ListWorktreesResponse, RegisterRepoRequest, RemovePluginRequest,
-    RemovePluginResponse, RemoveWorktreeRequest, RemoveWorktreeResponse, ResumeSessionRequest,
-    ScanReposRequest, ServiceCommandOutput, UnregisterRepoRequest, UnregisterRepoResponse,
-    UpdateRepoRequest, WorktreeDetail, agent_service_client::AgentServiceClient,
+    AddPluginRequest, AddPluginResponse, AgentEvent, AgentRequest, CancelSubagentRequest,
+    CancelSubagentResponse, CancelTurnRequest, CancelTurnResponse, CreateWorktreeRequest,
+    DisablePluginRequest, DisablePluginResponse, EnablePluginRequest, EnablePluginResponse,
+    ExecuteServiceCommandRequest, GetCommandRegistryResponse, GetIssueRequest, GetIssueResponse,
+    GetMergeRequestRequest, GetMergeRequestResponse, GetPipelineRequest, GetPipelineResponse,
+    GetPluginStatusRequest, GetPluginStatusResponse, GetRepoRequest, GetWorktreeRequest,
+    GitRepoDetail, KeyExchangeRequest, ListAgentsRequest, ListAgentsResponse, ListIssuesRequest,
+    ListIssuesResponse, ListMergeRequestsRequest, ListMergeRequestsResponse, ListPathRequest,
+    ListPathResponse, ListPipelinesRequest, ListPipelinesResponse, ListPluginsRequest,
+    ListPluginsResponse, ListReposRequest, ListReposResponse, ListSessionsRequest,
+    ListSessionsResponse, ListSubagentsRequest, ListSubagentsResponse, ListWorktreesRequest,
+    ListWorktreesResponse, RegisterRepoRequest, RemovePluginRequest, RemovePluginResponse,
+    RemoveWorktreeRequest, RemoveWorktreeResponse, ResumeSessionRequest, ScanReposRequest,
+    ServiceCommandOutput, SpawnSubagentRequest, SpawnSubagentResponse, SubagentEvent,
+    UnregisterRepoRequest, UnregisterRepoResponse, UpdateRepoRequest, WatchSubagentRequest,
+    WorktreeDetail, agent_service_client::AgentServiceClient,
     command_service_client::CommandServiceClient, git_lab_service_client::GitLabServiceClient,
-    git_repo_service_client::GitRepoServiceClient, worktree_service_client::WorktreeServiceClient,
+    git_repo_service_client::GitRepoServiceClient, subagent_service_client::SubagentServiceClient,
+    worktree_service_client::WorktreeServiceClient,
 };
 
 use betcode_crypto::{
@@ -158,6 +161,7 @@ pub struct DaemonConnection {
     gitlab_client: Option<GitLabServiceClient<Channel>>,
     git_repo_client: Option<GitRepoServiceClient<Channel>>,
     command_client: Option<CommandServiceClient<Channel>>,
+    subagent_client: Option<SubagentServiceClient<Channel>>,
     state: ConnectionState,
     /// E2E crypto session, established via key exchange for relay connections.
     crypto: Option<std::sync::Arc<CryptoSession>>,
@@ -189,6 +193,7 @@ impl DaemonConnection {
             gitlab_client: None,
             git_repo_client: None,
             command_client: None,
+            subagent_client: None,
             state: ConnectionState::Disconnected,
             crypto: None,
             identity,
@@ -258,7 +263,8 @@ impl DaemonConnection {
         self.worktree_client = Some(WorktreeServiceClient::new(channel.clone()));
         self.gitlab_client = Some(GitLabServiceClient::new(channel.clone()));
         self.git_repo_client = Some(GitRepoServiceClient::new(channel.clone()));
-        self.command_client = Some(CommandServiceClient::new(channel));
+        self.command_client = Some(CommandServiceClient::new(channel.clone()));
+        self.subagent_client = Some(SubagentServiceClient::new(channel));
         self.state = ConnectionState::Connected;
 
         info!(addr = %self.config.addr, relay = self.config.is_relay(), "Connected");
@@ -1338,6 +1344,122 @@ impl DaemonConnection {
         apply_relay_meta(&mut request, &auth_token, &machine_id);
         let response = client
             .disable_plugin(request)
+            .await
+            .map_err(|e| ConnectionError::RpcFailed(e.to_string()))?;
+
+        Ok(response.into_inner())
+    }
+
+    // =========================================================================
+    // Subagent operations
+    // =========================================================================
+
+    /// Spawn a new subagent under a parent session.
+    pub async fn spawn_subagent(
+        &mut self,
+        parent_session_id: &str,
+        prompt: &str,
+        model: Option<&str>,
+        max_turns: i32,
+    ) -> Result<SpawnSubagentResponse, ConnectionError> {
+        let auth_token = self.config.auth_token.clone();
+        let machine_id = self.config.machine_id.clone();
+        let client = self
+            .subagent_client
+            .as_mut()
+            .ok_or(ConnectionError::NotConnected)?;
+
+        let mut request = tonic::Request::new(SpawnSubagentRequest {
+            parent_session_id: parent_session_id.to_string(),
+            prompt: prompt.to_string(),
+            model: model.unwrap_or_default().to_string(),
+            working_directory: String::new(),
+            allowed_tools: Vec::new(),
+            max_turns,
+            env: std::collections::HashMap::new(),
+            name: String::new(),
+            auto_approve: false,
+        });
+        apply_relay_meta(&mut request, &auth_token, &machine_id);
+        let response = client
+            .spawn_subagent(request)
+            .await
+            .map_err(|e| ConnectionError::RpcFailed(e.to_string()))?;
+
+        Ok(response.into_inner())
+    }
+
+    /// List subagents for a parent session.
+    pub async fn list_subagents(
+        &mut self,
+        parent_session_id: Option<&str>,
+    ) -> Result<ListSubagentsResponse, ConnectionError> {
+        let auth_token = self.config.auth_token.clone();
+        let machine_id = self.config.machine_id.clone();
+        let client = self
+            .subagent_client
+            .as_mut()
+            .ok_or(ConnectionError::NotConnected)?;
+
+        let mut request = tonic::Request::new(ListSubagentsRequest {
+            parent_session_id: parent_session_id.unwrap_or_default().to_string(),
+            status_filter: String::new(),
+        });
+        apply_relay_meta(&mut request, &auth_token, &machine_id);
+        let response = client
+            .list_subagents(request)
+            .await
+            .map_err(|e| ConnectionError::RpcFailed(e.to_string()))?;
+
+        Ok(response.into_inner())
+    }
+
+    /// Cancel a running subagent.
+    pub async fn cancel_subagent(
+        &mut self,
+        subagent_id: &str,
+    ) -> Result<CancelSubagentResponse, ConnectionError> {
+        let auth_token = self.config.auth_token.clone();
+        let machine_id = self.config.machine_id.clone();
+        let client = self
+            .subagent_client
+            .as_mut()
+            .ok_or(ConnectionError::NotConnected)?;
+
+        let mut request = tonic::Request::new(CancelSubagentRequest {
+            subagent_id: subagent_id.to_string(),
+            reason: String::new(),
+            force: false,
+            cleanup_worktree: false,
+        });
+        apply_relay_meta(&mut request, &auth_token, &machine_id);
+        let response = client
+            .cancel_subagent(request)
+            .await
+            .map_err(|e| ConnectionError::RpcFailed(e.to_string()))?;
+
+        Ok(response.into_inner())
+    }
+
+    /// Watch a subagent's event stream.
+    pub async fn watch_subagent(
+        &mut self,
+        subagent_id: &str,
+    ) -> Result<tonic::Streaming<SubagentEvent>, ConnectionError> {
+        let auth_token = self.config.auth_token.clone();
+        let machine_id = self.config.machine_id.clone();
+        let client = self
+            .subagent_client
+            .as_mut()
+            .ok_or(ConnectionError::NotConnected)?;
+
+        let mut request = tonic::Request::new(WatchSubagentRequest {
+            subagent_id: subagent_id.to_string(),
+            from_sequence: 0,
+        });
+        apply_relay_meta(&mut request, &auth_token, &machine_id);
+        let response = client
+            .watch_subagent(request)
             .await
             .map_err(|e| ConnectionError::RpcFailed(e.to_string()))?;
 

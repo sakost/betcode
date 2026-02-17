@@ -14,22 +14,28 @@ use betcode_proto::v1::command_service_server::CommandService as CommandServiceT
 use betcode_proto::v1::config_service_server::ConfigService as ConfigServiceTrait;
 use betcode_proto::v1::git_lab_service_server::GitLabService as GitLabServiceTrait;
 use betcode_proto::v1::git_repo_service_server::GitRepoService as GitRepoServiceTrait;
+use betcode_proto::v1::subagent_service_server::SubagentService as SubagentServiceTrait;
+use betcode_proto::v1::version_service_server::VersionService as VersionServiceTrait;
 use betcode_proto::v1::worktree_service_server::WorktreeService as WorktreeServiceTrait;
 use betcode_proto::v1::{
-    AddPluginRequest, AgentRequest, CancelTurnRequest, CancelTurnResponse,
+    AddPluginRequest, AgentRequest, CancelSubagentRequest, CancelTurnRequest, CancelTurnResponse,
     ClearSessionGrantsRequest, ClearSessionGrantsResponse, CompactSessionRequest,
-    CompactSessionResponse, CreateWorktreeRequest, DisablePluginRequest, EnablePluginRequest,
+    CompactSessionResponse, CreateOrchestrationRequest, CreateWorktreeRequest,
+    DeleteSessionRequest, DeleteSessionResponse, DisablePluginRequest, EnablePluginRequest,
     EncryptedPayload, ExecuteServiceCommandRequest, FrameType, GetCommandRegistryRequest,
     GetIssueRequest, GetMergeRequestRequest, GetPermissionsRequest, GetPipelineRequest,
-    GetPluginStatusRequest, GetRepoRequest, GetSettingsRequest, GetWorktreeRequest,
-    InputLockRequest, InputLockResponse, KeyExchangeRequest, KeyExchangeResponse,
-    ListAgentsRequest, ListIssuesRequest, ListMcpServersRequest, ListMergeRequestsRequest,
-    ListPathRequest, ListPipelinesRequest, ListPluginsRequest, ListReposRequest,
-    ListSessionGrantsRequest, ListSessionGrantsResponse, ListSessionsRequest, ListSessionsResponse,
-    ListWorktreesRequest, RegisterRepoRequest, RemovePluginRequest, RemoveWorktreeRequest,
-    RenameSessionRequest, RenameSessionResponse, ResumeSessionRequest, ScanReposRequest,
-    SessionSummary, SetSessionGrantRequest, SetSessionGrantResponse, StreamPayload, TunnelError,
-    TunnelErrorCode, TunnelFrame, UnregisterRepoRequest, UpdateRepoRequest, UpdateSettingsRequest,
+    GetPluginStatusRequest, GetRepoRequest, GetSettingsRequest, GetVersionRequest,
+    GetWorktreeRequest, InputLockRequest, InputLockResponse, KeyExchangeRequest,
+    KeyExchangeResponse, ListAgentsRequest, ListIssuesRequest, ListMcpServersRequest,
+    ListMergeRequestsRequest, ListPathRequest, ListPipelinesRequest, ListPluginsRequest,
+    ListReposRequest, ListSessionGrantsRequest, ListSessionGrantsResponse, ListSessionsRequest,
+    ListSessionsResponse, ListSubagentsRequest, ListWorktreesRequest, NegotiateRequest,
+    RegisterRepoRequest, RemovePluginRequest, RemoveWorktreeRequest, RenameSessionRequest,
+    RenameSessionResponse, ResumeSessionRequest, RevokeAutoApproveRequest, ScanReposRequest,
+    SendToSubagentRequest, SessionSummary, SetSessionGrantRequest, SetSessionGrantResponse,
+    SpawnSubagentRequest, StreamPayload, TunnelError, TunnelErrorCode, TunnelFrame,
+    UnregisterRepoRequest, UpdateRepoRequest, UpdateSettingsRequest, WatchOrchestrationRequest,
+    WatchSubagentRequest,
 };
 
 use betcode_crypto::{CryptoSession, IdentityKeyPair, KeyExchangeState};
@@ -37,7 +43,7 @@ use betcode_crypto::{CryptoSession, IdentityKeyPair, KeyExchangeState};
 use crate::relay::{SessionRelay, is_granted};
 use crate::server::{
     CommandServiceImpl, ConfigServiceImpl, GitLabServiceImpl, GitRepoServiceImpl,
-    WorktreeServiceImpl,
+    SubagentServiceImpl, VersionServiceImpl, WorktreeServiceImpl,
 };
 use crate::session::SessionMultiplexer;
 use crate::storage::Database;
@@ -45,17 +51,20 @@ use crate::storage::Database;
 // Re-export method constants from betcode-proto so that tests (which use `use super::*`)
 // and any other in-crate consumers continue to see them at the same path.
 pub use betcode_proto::methods::{
-    METHOD_ADD_PLUGIN, METHOD_CANCEL_TURN, METHOD_CLEAR_SESSION_GRANTS, METHOD_COMPACT_SESSION,
-    METHOD_CONVERSE, METHOD_CREATE_WORKTREE, METHOD_DISABLE_PLUGIN, METHOD_ENABLE_PLUGIN,
-    METHOD_EXCHANGE_KEYS, METHOD_EXECUTE_SERVICE_COMMAND, METHOD_GET_COMMAND_REGISTRY,
-    METHOD_GET_ISSUE, METHOD_GET_MERGE_REQUEST, METHOD_GET_PERMISSIONS, METHOD_GET_PIPELINE,
-    METHOD_GET_PLUGIN_STATUS, METHOD_GET_REPO, METHOD_GET_SETTINGS, METHOD_GET_WORKTREE,
-    METHOD_LIST_AGENTS, METHOD_LIST_ISSUES, METHOD_LIST_MCP_SERVERS, METHOD_LIST_MERGE_REQUESTS,
-    METHOD_LIST_PATH, METHOD_LIST_PIPELINES, METHOD_LIST_PLUGINS, METHOD_LIST_REPOS,
-    METHOD_LIST_SESSION_GRANTS, METHOD_LIST_SESSIONS, METHOD_LIST_WORKTREES, METHOD_REGISTER_REPO,
+    METHOD_ADD_PLUGIN, METHOD_CANCEL_SUBAGENT, METHOD_CANCEL_TURN, METHOD_CLEAR_SESSION_GRANTS,
+    METHOD_COMPACT_SESSION, METHOD_CONVERSE, METHOD_CREATE_ORCHESTRATION, METHOD_CREATE_WORKTREE,
+    METHOD_DELETE_SESSION, METHOD_DISABLE_PLUGIN, METHOD_ENABLE_PLUGIN, METHOD_EXCHANGE_KEYS,
+    METHOD_EXECUTE_SERVICE_COMMAND, METHOD_GET_COMMAND_REGISTRY, METHOD_GET_ISSUE,
+    METHOD_GET_MERGE_REQUEST, METHOD_GET_PERMISSIONS, METHOD_GET_PIPELINE,
+    METHOD_GET_PLUGIN_STATUS, METHOD_GET_REPO, METHOD_GET_SETTINGS, METHOD_GET_VERSION,
+    METHOD_GET_WORKTREE, METHOD_LIST_AGENTS, METHOD_LIST_ISSUES, METHOD_LIST_MCP_SERVERS,
+    METHOD_LIST_MERGE_REQUESTS, METHOD_LIST_PATH, METHOD_LIST_PIPELINES, METHOD_LIST_PLUGINS,
+    METHOD_LIST_REPOS, METHOD_LIST_SESSION_GRANTS, METHOD_LIST_SESSIONS, METHOD_LIST_SUBAGENTS,
+    METHOD_LIST_WORKTREES, METHOD_NEGOTIATE_CAPABILITIES, METHOD_REGISTER_REPO,
     METHOD_REMOVE_PLUGIN, METHOD_REMOVE_WORKTREE, METHOD_RENAME_SESSION, METHOD_REQUEST_INPUT_LOCK,
-    METHOD_RESUME_SESSION, METHOD_SCAN_REPOS, METHOD_SET_SESSION_GRANT, METHOD_UNREGISTER_REPO,
-    METHOD_UPDATE_REPO, METHOD_UPDATE_SETTINGS,
+    METHOD_RESUME_SESSION, METHOD_REVOKE_AUTO_APPROVE, METHOD_SCAN_REPOS, METHOD_SEND_TO_SUBAGENT,
+    METHOD_SET_SESSION_GRANT, METHOD_SPAWN_SUBAGENT, METHOD_UNREGISTER_REPO, METHOD_UPDATE_REPO,
+    METHOD_UPDATE_SETTINGS, METHOD_WATCH_ORCHESTRATION, METHOD_WATCH_SUBAGENT,
 };
 
 /// Default maximum number of sessions returned by `ListSessions`.
@@ -140,6 +149,10 @@ pub struct TunnelRequestHandler {
     worktree_service: Option<Arc<WorktreeServiceImpl>>,
     /// `ConfigService` implementation for handling config RPCs through the tunnel.
     config_service: Option<Arc<ConfigServiceImpl>>,
+    /// `VersionService` implementation for handling version RPCs through the tunnel.
+    version_service: Option<Arc<VersionServiceImpl>>,
+    /// `SubagentService` implementation for handling subagent RPCs through the tunnel.
+    subagent_service: Option<Arc<SubagentServiceImpl>>,
 }
 
 impl TunnelRequestHandler {
@@ -167,6 +180,8 @@ impl TunnelRequestHandler {
             repo_service: None,
             worktree_service: None,
             config_service: None,
+            version_service: None,
+            subagent_service: None,
         }
     }
 
@@ -193,6 +208,16 @@ impl TunnelRequestHandler {
     /// Set the `ConfigService` implementation for handling config RPCs through the tunnel.
     pub fn set_config_service(&mut self, svc: Arc<ConfigServiceImpl>) {
         self.config_service = Some(svc);
+    }
+
+    /// Set the `VersionService` implementation for handling version RPCs through the tunnel.
+    pub fn set_version_service(&mut self, svc: Arc<VersionServiceImpl>) {
+        self.version_service = Some(svc);
+    }
+
+    /// Set the `SubagentService` implementation for handling subagent RPCs through the tunnel.
+    pub fn set_subagent_service(&mut self, svc: Arc<SubagentServiceImpl>) {
+        self.subagent_service = Some(svc);
     }
 
     /// Process an incoming frame and produce zero or more response frames.
@@ -456,6 +481,47 @@ impl TunnelRequestHandler {
             METHOD_RENAME_SESSION => {
                 self.handle_rename_session(&request_id, &data, relay_forwarded)
                     .await
+            }
+            // Session delete RPC
+            METHOD_DELETE_SESSION => {
+                self.handle_delete_session(&request_id, &data, relay_forwarded)
+                    .await
+            }
+            // VersionService RPCs
+            METHOD_GET_VERSION | METHOD_NEGOTIATE_CAPABILITIES => {
+                self.dispatch_version_rpc(
+                    &request_id,
+                    payload.method.as_str(),
+                    &data,
+                    relay_forwarded,
+                )
+                .await
+            }
+            // SubagentService unary RPCs
+            METHOD_SPAWN_SUBAGENT
+            | METHOD_SEND_TO_SUBAGENT
+            | METHOD_CANCEL_SUBAGENT
+            | METHOD_LIST_SUBAGENTS
+            | METHOD_CREATE_ORCHESTRATION
+            | METHOD_REVOKE_AUTO_APPROVE => {
+                self.dispatch_subagent_rpc(
+                    &request_id,
+                    payload.method.as_str(),
+                    &data,
+                    relay_forwarded,
+                )
+                .await
+            }
+            // SubagentService server-streaming RPCs
+            METHOD_WATCH_SUBAGENT => {
+                self.handle_watch_subagent(&request_id, &data, relay_forwarded)
+                    .await;
+                vec![] // Responses sent asynchronously via outbound_tx
+            }
+            METHOD_WATCH_ORCHESTRATION => {
+                self.handle_watch_orchestration(&request_id, &data, relay_forwarded)
+                    .await;
+                vec![] // Responses sent asynchronously via outbound_tx
             }
             other => vec![Self::error_response(
                 &request_id,
@@ -841,6 +907,49 @@ impl TunnelRequestHandler {
                 request_id,
                 TunnelErrorCode::Internal,
                 &format!("RenameSession failed: {e}"),
+            )],
+        }
+    }
+
+    /// Handle a `DeleteSession` request: cancel active subprocess, delete from DB.
+    async fn handle_delete_session(
+        &self,
+        request_id: &str,
+        data: &[u8],
+        relay_forwarded: bool,
+    ) -> Vec<TunnelFrame> {
+        let req = match DeleteSessionRequest::decode(data) {
+            Ok(r) => r,
+            Err(e) => {
+                return vec![Self::error_response(
+                    request_id,
+                    TunnelErrorCode::Internal,
+                    &format!("Decode error: {e}"),
+                )];
+            }
+        };
+
+        // Cancel any active subprocess (best-effort).
+        let _ = self.relay.cancel_session(&req.session_id).await;
+
+        match self.db.delete_session(&req.session_id).await {
+            Ok(deleted) => {
+                if deleted {
+                    info!(session_id = %req.session_id, "Session deleted via tunnel");
+                }
+                vec![
+                    self.unary_response_frame(
+                        request_id,
+                        &DeleteSessionResponse { deleted },
+                        relay_forwarded,
+                    )
+                    .await,
+                ]
+            }
+            Err(e) => vec![Self::error_response(
+                request_id,
+                TunnelErrorCode::Internal,
+                &format!("DeleteSession failed: {e}"),
             )],
         }
     }
@@ -2046,6 +2155,365 @@ impl TunnelRequestHandler {
                 &format!("Unknown Config method: {method}"),
             )],
         }
+    }
+
+    // --- VersionService dispatch ---
+
+    async fn dispatch_version_rpc(
+        &self,
+        request_id: &str,
+        method: &str,
+        data: &[u8],
+        relay_forwarded: bool,
+    ) -> Vec<TunnelFrame> {
+        let Some(svc) = &self.version_service else {
+            return vec![Self::error_response(
+                request_id,
+                TunnelErrorCode::Internal,
+                "VersionService not available in tunnel handler",
+            )];
+        };
+        match method {
+            METHOD_GET_VERSION => dispatch_rpc!(
+                self,
+                svc,
+                request_id,
+                data,
+                relay_forwarded,
+                GetVersionRequest,
+                get_version
+            ),
+            METHOD_NEGOTIATE_CAPABILITIES => dispatch_rpc!(
+                self,
+                svc,
+                request_id,
+                data,
+                relay_forwarded,
+                NegotiateRequest,
+                negotiate_capabilities
+            ),
+            _ => vec![Self::error_response(
+                request_id,
+                TunnelErrorCode::NotFound,
+                &format!("Unknown Version method: {method}"),
+            )],
+        }
+    }
+
+    // --- SubagentService dispatch ---
+
+    async fn dispatch_subagent_rpc(
+        &self,
+        request_id: &str,
+        method: &str,
+        data: &[u8],
+        relay_forwarded: bool,
+    ) -> Vec<TunnelFrame> {
+        let Some(svc) = &self.subagent_service else {
+            return vec![Self::error_response(
+                request_id,
+                TunnelErrorCode::Internal,
+                "SubagentService not available in tunnel handler",
+            )];
+        };
+        match method {
+            METHOD_SPAWN_SUBAGENT => dispatch_rpc!(
+                self,
+                svc,
+                request_id,
+                data,
+                relay_forwarded,
+                SpawnSubagentRequest,
+                spawn_subagent
+            ),
+            METHOD_SEND_TO_SUBAGENT => dispatch_rpc!(
+                self,
+                svc,
+                request_id,
+                data,
+                relay_forwarded,
+                SendToSubagentRequest,
+                send_to_subagent
+            ),
+            METHOD_CANCEL_SUBAGENT => dispatch_rpc!(
+                self,
+                svc,
+                request_id,
+                data,
+                relay_forwarded,
+                CancelSubagentRequest,
+                cancel_subagent
+            ),
+            METHOD_LIST_SUBAGENTS => dispatch_rpc!(
+                self,
+                svc,
+                request_id,
+                data,
+                relay_forwarded,
+                ListSubagentsRequest,
+                list_subagents
+            ),
+            METHOD_CREATE_ORCHESTRATION => dispatch_rpc!(
+                self,
+                svc,
+                request_id,
+                data,
+                relay_forwarded,
+                CreateOrchestrationRequest,
+                create_orchestration
+            ),
+            METHOD_REVOKE_AUTO_APPROVE => dispatch_rpc!(
+                self,
+                svc,
+                request_id,
+                data,
+                relay_forwarded,
+                RevokeAutoApproveRequest,
+                revoke_auto_approve
+            ),
+            _ => vec![Self::error_response(
+                request_id,
+                TunnelErrorCode::NotFound,
+                &format!("Unknown Subagent method: {method}"),
+            )],
+        }
+    }
+
+    /// Handle a `WatchSubagent` server-streaming request through the tunnel.
+    #[allow(clippy::too_many_lines)]
+    async fn handle_watch_subagent(&self, request_id: &str, data: &[u8], relay_forwarded: bool) {
+        let Some(svc) = &self.subagent_service else {
+            let _ = self
+                .outbound_tx
+                .send(Self::error_response(
+                    request_id,
+                    TunnelErrorCode::Internal,
+                    "SubagentService not available in tunnel handler",
+                ))
+                .await;
+            return;
+        };
+        let req = match WatchSubagentRequest::decode(data) {
+            Ok(r) => r,
+            Err(e) => {
+                let _ = self
+                    .outbound_tx
+                    .send(Self::error_response(
+                        request_id,
+                        TunnelErrorCode::Internal,
+                        &format!("Decode error: {e}"),
+                    ))
+                    .await;
+                return;
+            }
+        };
+        let stream_resp = match svc.watch_subagent(Request::new(req)).await {
+            Ok(resp) => resp,
+            Err(status) => {
+                let _ = self
+                    .outbound_tx
+                    .send(Self::error_response(
+                        request_id,
+                        TunnelErrorCode::Internal,
+                        &format!("WatchSubagent failed: {}", status.message()),
+                    ))
+                    .await;
+                return;
+            }
+        };
+
+        let outbound_tx = self.outbound_tx.clone();
+        let rid = request_id.to_string();
+        let crypto_for_response = if relay_forwarded {
+            None
+        } else {
+            self.crypto_snapshot().await
+        };
+        tokio::spawn(async move {
+            let mut stream = stream_resp.into_inner();
+            let mut seq = 0u64;
+            while let Some(item) = stream.next().await {
+                match item {
+                    Ok(event) => {
+                        let mut buf = Vec::with_capacity(event.encoded_len());
+                        if let Err(e) = event.encode(&mut buf) {
+                            warn!(request_id = %rid, error = %e, "Failed to encode subagent event");
+                            continue;
+                        }
+                        let encrypted = match make_encrypted_payload(
+                            crypto_for_response.as_deref(),
+                            &buf,
+                        ) {
+                            Ok(enc) => enc,
+                            Err(e) => {
+                                warn!(request_id = %rid, error = %e, "Failed to encrypt subagent event");
+                                continue;
+                            }
+                        };
+                        let frame = TunnelFrame {
+                            request_id: rid.clone(),
+                            frame_type: FrameType::StreamData as i32,
+                            timestamp: Some(prost_types::Timestamp::from(
+                                std::time::SystemTime::now(),
+                            )),
+                            payload: Some(betcode_proto::v1::tunnel_frame::Payload::StreamData(
+                                StreamPayload {
+                                    method: String::new(),
+                                    encrypted: Some(encrypted),
+                                    sequence: seq,
+                                    metadata: HashMap::new(),
+                                },
+                            )),
+                        };
+                        seq += 1;
+                        if outbound_tx.send(frame).await.is_err() {
+                            break;
+                        }
+                    }
+                    Err(e) => {
+                        warn!(error = %e, request_id = %rid, "WatchSubagent stream error");
+                        let _ = outbound_tx
+                            .send(Self::error_response(
+                                &rid,
+                                TunnelErrorCode::Internal,
+                                &format!("Stream error: {e}"),
+                            ))
+                            .await;
+                        break;
+                    }
+                }
+            }
+            let _ = outbound_tx
+                .send(TunnelFrame {
+                    request_id: rid.clone(),
+                    frame_type: FrameType::StreamEnd as i32,
+                    timestamp: Some(prost_types::Timestamp::from(std::time::SystemTime::now())),
+                    payload: None,
+                })
+                .await;
+            info!(request_id = %rid, "WatchSubagent stream ended");
+        });
+    }
+
+    /// Handle a `WatchOrchestration` server-streaming request through the tunnel.
+    #[allow(clippy::too_many_lines)]
+    async fn handle_watch_orchestration(
+        &self,
+        request_id: &str,
+        data: &[u8],
+        relay_forwarded: bool,
+    ) {
+        let Some(svc) = &self.subagent_service else {
+            let _ = self
+                .outbound_tx
+                .send(Self::error_response(
+                    request_id,
+                    TunnelErrorCode::Internal,
+                    "SubagentService not available in tunnel handler",
+                ))
+                .await;
+            return;
+        };
+        let req = match WatchOrchestrationRequest::decode(data) {
+            Ok(r) => r,
+            Err(e) => {
+                let _ = self
+                    .outbound_tx
+                    .send(Self::error_response(
+                        request_id,
+                        TunnelErrorCode::Internal,
+                        &format!("Decode error: {e}"),
+                    ))
+                    .await;
+                return;
+            }
+        };
+        let stream_resp = match svc.watch_orchestration(Request::new(req)).await {
+            Ok(resp) => resp,
+            Err(status) => {
+                let _ = self
+                    .outbound_tx
+                    .send(Self::error_response(
+                        request_id,
+                        TunnelErrorCode::Internal,
+                        &format!("WatchOrchestration failed: {}", status.message()),
+                    ))
+                    .await;
+                return;
+            }
+        };
+
+        let outbound_tx = self.outbound_tx.clone();
+        let rid = request_id.to_string();
+        let crypto_for_response = if relay_forwarded {
+            None
+        } else {
+            self.crypto_snapshot().await
+        };
+        tokio::spawn(async move {
+            let mut stream = stream_resp.into_inner();
+            let mut seq = 0u64;
+            while let Some(item) = stream.next().await {
+                match item {
+                    Ok(event) => {
+                        let mut buf = Vec::with_capacity(event.encoded_len());
+                        if let Err(e) = event.encode(&mut buf) {
+                            warn!(request_id = %rid, error = %e, "Failed to encode orchestration event");
+                            continue;
+                        }
+                        let encrypted = match make_encrypted_payload(
+                            crypto_for_response.as_deref(),
+                            &buf,
+                        ) {
+                            Ok(enc) => enc,
+                            Err(e) => {
+                                warn!(request_id = %rid, error = %e, "Failed to encrypt orchestration event");
+                                continue;
+                            }
+                        };
+                        let frame = TunnelFrame {
+                            request_id: rid.clone(),
+                            frame_type: FrameType::StreamData as i32,
+                            timestamp: Some(prost_types::Timestamp::from(
+                                std::time::SystemTime::now(),
+                            )),
+                            payload: Some(betcode_proto::v1::tunnel_frame::Payload::StreamData(
+                                StreamPayload {
+                                    method: String::new(),
+                                    encrypted: Some(encrypted),
+                                    sequence: seq,
+                                    metadata: HashMap::new(),
+                                },
+                            )),
+                        };
+                        seq += 1;
+                        if outbound_tx.send(frame).await.is_err() {
+                            break;
+                        }
+                    }
+                    Err(e) => {
+                        warn!(error = %e, request_id = %rid, "WatchOrchestration stream error");
+                        let _ = outbound_tx
+                            .send(Self::error_response(
+                                &rid,
+                                TunnelErrorCode::Internal,
+                                &format!("Stream error: {e}"),
+                            ))
+                            .await;
+                        break;
+                    }
+                }
+            }
+            let _ = outbound_tx
+                .send(TunnelFrame {
+                    request_id: rid.clone(),
+                    frame_type: FrameType::StreamEnd as i32,
+                    timestamp: Some(prost_types::Timestamp::from(std::time::SystemTime::now())),
+                    payload: None,
+                })
+                .await;
+            info!(request_id = %rid, "WatchOrchestration stream ended");
+        });
     }
 
     /// Build a unary response frame, skipping tunnel-layer encryption for

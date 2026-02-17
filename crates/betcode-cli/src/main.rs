@@ -12,10 +12,12 @@ use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 use betcode_cli::auth_cmd::{self, AuthAction};
 use betcode_cli::config::CliConfig;
 use betcode_cli::connection::{ConnectionConfig, DaemonConnection};
+use betcode_cli::daemon_cmd::{self, DaemonAction};
 use betcode_cli::gitlab_cmd::{self, GitLabAction};
 use betcode_cli::headless::{self, HeadlessConfig};
 use betcode_cli::machine_cmd::{self, MachineAction};
 use betcode_cli::repo_cmd::{self, RepoAction};
+use betcode_cli::subagent_cmd::{self, SubagentAction};
 use betcode_cli::worktree_cmd::{self, WorktreeAction};
 
 #[derive(Parser, Debug)]
@@ -95,6 +97,16 @@ enum Commands {
         #[command(subcommand)]
         action: GitLabAction,
     },
+    /// Daemon management (certificate rotation)
+    Daemon {
+        #[command(subcommand)]
+        action: DaemonAction,
+    },
+    /// Manage subagents (spawn, list, cancel, watch)
+    Subagent {
+        #[command(subcommand)]
+        action: SubagentAction,
+    },
 }
 
 #[tokio::main]
@@ -134,13 +146,16 @@ async fn main() -> anyhow::Result<()> {
         cli_config.relay_custom_ca_cert = Some(ca.clone());
     }
 
-    // Dispatch auth/machine subcommands (don't need daemon connection)
+    // Dispatch auth/machine/daemon subcommands (don't need daemon connection)
     match cli.command {
         Some(Commands::Auth { action }) => {
             return auth_cmd::run(action, &mut cli_config).await;
         }
         Some(Commands::Machine { action }) => {
             return machine_cmd::run(action, &mut cli_config).await;
+        }
+        Some(Commands::Daemon { action }) => {
+            return daemon_cmd::run(action);
         }
         _ => {}
     }
@@ -223,6 +238,8 @@ async fn main() -> anyhow::Result<()> {
         repo_cmd::run(&mut conn, action).await?;
     } else if let Some(Commands::Gitlab { action }) = cli.command {
         gitlab_cmd::run(&mut conn, action).await?;
+    } else if let Some(Commands::Subagent { action }) = cli.command {
+        subagent_cmd::run(&mut conn, action).await?;
     } else if let Some(prompt) = cli.prompt {
         // Headless mode
         let working_dir = cli.working_dir.unwrap_or_else(|| {

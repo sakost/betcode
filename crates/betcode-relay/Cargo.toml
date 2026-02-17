@@ -14,6 +14,7 @@ path = "src/main.rs"
 [dependencies]
 betcode-proto = { workspace = true }
 betcode-core = { workspace = true }
+betcode-crypto = { workspace = true, features = ["certs"] }
 tokio.workspace = true
 tonic = { workspace = true, features = ["tls-ring", "tls-native-roots"] }
 tonic-health.workspace = true
@@ -33,7 +34,19 @@ dirs = "6"
 jsonwebtoken = { version = "10.3.0", features = ["rust_crypto"] }
 argon2 = "0.5.3"
 sha2 = "0.10.9"
-rcgen = "0.14.7"
+rcgen.workspace = true
+x509-parser = "0.17"
+
+[features]
+push-notifications = ["dep:reqwest"]
+metrics = ["betcode-core/metrics"]
+
+[dependencies.reqwest]
+workspace = true
+optional = true
+
+[dev-dependencies]
+rustls = { version = "0.23", default-features = false, features = ["ring"] }
 
 [package.metadata.cargo-machete]
 ignored = ["tracing-subscriber"]

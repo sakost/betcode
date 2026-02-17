@@ -18,17 +18,19 @@ use tracing::{info, instrument, warn};
 use betcode_proto::v1::agent_service_server::AgentService;
 use betcode_proto::v1::{
     AgentEvent, AgentRequest, CancelTurnRequest, CancelTurnResponse, ClearSessionGrantsRequest,
-    ClearSessionGrantsResponse, CompactSessionRequest, CompactSessionResponse, EncryptedPayload,
-    FrameType, InputLockRequest, InputLockResponse, KeyExchangeRequest, KeyExchangeResponse,
-    ListSessionGrantsRequest, ListSessionGrantsResponse, ListSessionsRequest, ListSessionsResponse,
-    RenameSessionRequest, RenameSessionResponse, ResumeSessionRequest, SetSessionGrantRequest,
-    SetSessionGrantResponse, StreamPayload, TunnelFrame,
+    ClearSessionGrantsResponse, CompactSessionRequest, CompactSessionResponse,
+    DeleteSessionRequest, DeleteSessionResponse, EncryptedPayload, FrameType, InputLockRequest,
+    InputLockResponse, KeyExchangeRequest, KeyExchangeResponse, ListSessionGrantsRequest,
+    ListSessionGrantsResponse, ListSessionsRequest, ListSessionsResponse, RenameSessionRequest,
+    RenameSessionResponse, ResumeSessionRequest, SetSessionGrantRequest, SetSessionGrantResponse,
+    StreamPayload, TunnelFrame,
 };
 
 use betcode_proto::methods::{
     METHOD_CANCEL_TURN, METHOD_CLEAR_SESSION_GRANTS, METHOD_COMPACT_SESSION, METHOD_CONVERSE,
-    METHOD_EXCHANGE_KEYS, METHOD_LIST_SESSION_GRANTS, METHOD_LIST_SESSIONS, METHOD_RENAME_SESSION,
-    METHOD_REQUEST_INPUT_LOCK, METHOD_RESUME_SESSION, METHOD_SET_SESSION_GRANT,
+    METHOD_DELETE_SESSION, METHOD_EXCHANGE_KEYS, METHOD_LIST_SESSION_GRANTS, METHOD_LIST_SESSIONS,
+    METHOD_RENAME_SESSION, METHOD_REQUEST_INPUT_LOCK, METHOD_RESUME_SESSION,
+    METHOD_SET_SESSION_GRANT,
 };
 
 use crate::router::{RequestRouter, RouterError};
@@ -375,6 +377,15 @@ impl AgentService for AgentProxyService {
         request: Request<RenameSessionRequest>,
     ) -> Result<Response<RenameSessionResponse>, Status> {
         super::grpc_util::forward_unary_rpc(&self.router, &self.db, request, METHOD_RENAME_SESSION)
+            .await
+    }
+
+    #[instrument(skip(self, request), fields(rpc = "DeleteSession"))]
+    async fn delete_session(
+        &self,
+        request: Request<DeleteSessionRequest>,
+    ) -> Result<Response<DeleteSessionResponse>, Status> {
+        super::grpc_util::forward_unary_rpc(&self.router, &self.db, request, METHOD_DELETE_SESSION)
             .await
     }
 }

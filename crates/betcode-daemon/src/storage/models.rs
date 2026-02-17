@@ -125,6 +125,49 @@ pub struct Todo {
     pub updated_at: i64,
 }
 
+/// Subagent record from the database.
+#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
+pub struct SubagentRow {
+    pub id: String,
+    pub parent_session_id: String,
+    pub prompt: String,
+    pub model: Option<String>,
+    pub max_turns: i64,
+    pub auto_approve: i64,
+    pub allowed_tools: String,
+    pub working_directory: Option<String>,
+    pub status: String,
+    pub exit_code: Option<i64>,
+    pub result_summary: Option<String>,
+    pub created_at: i64,
+    pub started_at: Option<i64>,
+    pub completed_at: Option<i64>,
+}
+
+/// Orchestration record from the database.
+#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
+pub struct OrchestrationRow {
+    pub id: String,
+    pub parent_session_id: String,
+    pub strategy: String,
+    pub status: String,
+    pub created_at: i64,
+    pub completed_at: Option<i64>,
+}
+
+/// Orchestration step record from the database.
+#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
+pub struct OrchestrationStepRow {
+    pub id: String,
+    pub orchestration_id: String,
+    pub subagent_id: Option<String>,
+    pub step_index: i64,
+    pub prompt: String,
+    pub depends_on: String,
+    pub status: String,
+    pub created_at: i64,
+}
+
 /// Session status enum.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SessionStatus {

@@ -6,6 +6,8 @@ mod db;
 mod models;
 mod queries;
 mod queries_buffer;
+mod queries_certs;
+mod queries_notifications;
 
 #[cfg(test)]
 #[allow(clippy::panic, clippy::expect_used, clippy::unwrap_used)]

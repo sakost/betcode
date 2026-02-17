@@ -180,6 +180,11 @@ pub fn run(args: DaemonArgs, non_interactive: bool) -> Result<()> {
 
     tracing::info!("daemon setup: mode={}, addr={}", config.mode, config.addr);
 
+    // Provision mTLS client certificate when relay is configured
+    if config.relay_url.is_some() {
+        provision_mtls_certs(&config.machine_id, non_interactive)?;
+    }
+
     match config.mode {
         DaemonMode::System => {
             crate::escalate::escalate_if_needed(non_interactive)?;
@@ -233,6 +238,47 @@ fn prompt_enable_service(non_interactive: bool) -> Result<bool> {
         .default(true)
         .interact()?;
     Ok(confirmed)
+}
+
+/// Provision mTLS client certificates for relay connections.
+///
+/// If certificates already exist, prompts the user (or skips in non-interactive
+/// mode) before overwriting.
+fn provision_mtls_certs(machine_id: &str, non_interactive: bool) -> Result<()> {
+    let certs_dir = crate::cert_provisioning::default_certs_dir()?;
+
+    if crate::cert_provisioning::certs_exist(&certs_dir) {
+        let should_overwrite = if non_interactive {
+            false
+        } else {
+            Confirm::new()
+                .with_prompt(
+                    "mTLS client certificates already exist. Regenerate them? \
+                     (existing certificates will be overwritten)",
+                )
+                .default(false)
+                .interact()?
+        };
+
+        if !should_overwrite {
+            tracing::info!("Keeping existing mTLS certificates");
+            return Ok(());
+        }
+    }
+
+    let paths = crate::cert_provisioning::provision_client_cert(&certs_dir, machine_id)?;
+
+    #[allow(clippy::print_stdout)]
+    {
+        println!();
+        println!("  mTLS certificates provisioned:");
+        println!("    Client cert: {}", paths.client_cert.display());
+        println!("    Client key:  {}", paths.client_key.display());
+        println!("    CA cert:     {}", paths.ca_cert.display());
+        println!();
+    }
+
+    Ok(())
 }
 
 fn prompt_linger(non_interactive: bool) -> Result<bool> {

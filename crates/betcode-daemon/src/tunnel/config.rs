@@ -36,6 +36,14 @@ pub struct TunnelConfig {
     /// If the file doesn't exist, a new keypair is generated and saved.
     /// Defaults to `~/.config/betcode/identity.key`.
     pub identity_key_path: Option<PathBuf>,
+
+    /// Path to PEM-encoded client certificate for mTLS.
+    /// When set alongside `client_key_path`, the daemon presents this
+    /// certificate when connecting to the relay.
+    pub client_cert_path: Option<PathBuf>,
+
+    /// Path to PEM-encoded client private key for mTLS.
+    pub client_key_path: Option<PathBuf>,
 }
 
 /// Exponential backoff reconnection policy.
@@ -105,6 +113,8 @@ impl TunnelConfig {
             heartbeat_interval: Duration::from_secs(30),
             ca_cert_path: None,
             identity_key_path: None,
+            client_cert_path: None,
+            client_key_path: None,
         }
     }
 }
@@ -121,6 +131,8 @@ impl fmt::Debug for TunnelConfig {
             .field("heartbeat_interval", &self.heartbeat_interval)
             .field("ca_cert_path", &self.ca_cert_path)
             .field("identity_key_path", &self.identity_key_path)
+            .field("client_cert_path", &self.client_cert_path)
+            .field("client_key_path", &self.client_key_path)
             .finish()
     }
 }

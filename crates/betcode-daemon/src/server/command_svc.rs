@@ -22,6 +22,7 @@ use crate::commands::CommandRegistry;
 use crate::commands::service_executor::{ServiceExecutor, ServiceOutput};
 use crate::completion::agent_lister::AgentLister;
 use crate::completion::file_index::FileIndex;
+use crate::plugin::manager::PluginManager;
 
 /// `CommandService` gRPC handler.
 #[derive(Clone)]
@@ -30,6 +31,7 @@ pub struct CommandServiceImpl {
     file_index: Arc<RwLock<FileIndex>>,
     agent_lister: Arc<RwLock<AgentLister>>,
     service_executor: Arc<RwLock<ServiceExecutor>>,
+    plugin_manager: Arc<RwLock<PluginManager>>,
     /// When sent `true`, triggers graceful daemon shutdown.
     shutdown_tx: tokio::sync::watch::Sender<bool>,
 }
@@ -40,6 +42,7 @@ impl CommandServiceImpl {
         file_index: Arc<RwLock<FileIndex>>,
         agent_lister: Arc<RwLock<AgentLister>>,
         service_executor: Arc<RwLock<ServiceExecutor>>,
+        plugin_manager: Arc<RwLock<PluginManager>>,
         shutdown_tx: tokio::sync::watch::Sender<bool>,
     ) -> Self {
         Self {
@@ -47,6 +50,7 @@ impl CommandServiceImpl {
             file_index,
             agent_lister,
             service_executor,
+            plugin_manager,
             shutdown_tx,
         }
     }
@@ -246,46 +250,102 @@ impl CommandService for CommandServiceImpl {
         Ok(Response::new(Box::pin(stream)))
     }
 
+    #[allow(clippy::significant_drop_tightening)]
     async fn list_plugins(
         &self,
         _request: Request<ListPluginsRequest>,
     ) -> Result<Response<ListPluginsResponse>, Status> {
-        Err(Status::unimplemented("Plugin management not yet available"))
+        let mgr = self.plugin_manager.read().await;
+        let plugins = mgr
+            .list_plugins()
+            .into_iter()
+            .map(plugin_summary_to_proto)
+            .collect();
+        Ok(Response::new(ListPluginsResponse { plugins }))
     }
 
+    #[allow(clippy::significant_drop_tightening)]
     async fn get_plugin_status(
         &self,
-        _request: Request<GetPluginStatusRequest>,
+        request: Request<GetPluginStatusRequest>,
     ) -> Result<Response<GetPluginStatusResponse>, Status> {
-        Err(Status::unimplemented("Plugin management not yet available"))
+        let name = &request.get_ref().name;
+        let mgr = self.plugin_manager.read().await;
+        let client = mgr
+            .get_plugin_status(name)
+            .ok_or_else(|| Status::not_found(format!("plugin '{name}' not found")))?;
+        let plugin = Some(plugin_client_to_proto(client));
+        Ok(Response::new(GetPluginStatusResponse { plugin }))
     }
 
+    #[allow(clippy::significant_drop_tightening)]
     async fn add_plugin(
         &self,
-        _request: Request<AddPluginRequest>,
+        request: Request<AddPluginRequest>,
     ) -> Result<Response<AddPluginResponse>, Status> {
-        Err(Status::unimplemented("Plugin management not yet available"))
+        let req = request.into_inner();
+        if req.name.is_empty() {
+            return Err(Status::invalid_argument("plugin name must not be empty"));
+        }
+        if req.socket_path.is_empty() {
+            return Err(Status::invalid_argument("socket_path must not be empty"));
+        }
+        let mut mgr = self.plugin_manager.write().await;
+        mgr.add_plugin(
+            &req.name,
+            &req.socket_path,
+            std::time::Duration::from_secs(30),
+        );
+        let client = mgr
+            .get_plugin_status(&req.name)
+            .ok_or_else(|| Status::internal("failed to retrieve newly added plugin"))?;
+        let plugin = Some(plugin_client_to_proto(client));
+        Ok(Response::new(AddPluginResponse { plugin }))
     }
 
+    #[allow(clippy::significant_drop_tightening)]
     async fn remove_plugin(
         &self,
-        _request: Request<RemovePluginRequest>,
+        request: Request<RemovePluginRequest>,
     ) -> Result<Response<RemovePluginResponse>, Status> {
-        Err(Status::unimplemented("Plugin management not yet available"))
+        let name = &request.get_ref().name;
+        let mut mgr = self.plugin_manager.write().await;
+        let existed = mgr.get_plugin_status(name).is_some();
+        mgr.remove_plugin(name);
+        drop(mgr);
+        Ok(Response::new(RemovePluginResponse { removed: existed }))
     }
 
+    #[allow(clippy::significant_drop_tightening)]
     async fn enable_plugin(
         &self,
-        _request: Request<EnablePluginRequest>,
+        request: Request<EnablePluginRequest>,
     ) -> Result<Response<EnablePluginResponse>, Status> {
-        Err(Status::unimplemented("Plugin management not yet available"))
+        let name = &request.get_ref().name;
+        let mut mgr = self.plugin_manager.write().await;
+        mgr.enable_plugin(name)
+            .map_err(|e| Status::not_found(e.to_string()))?;
+        let client = mgr
+            .get_plugin_status(name)
+            .ok_or_else(|| Status::internal("plugin disappeared after enable"))?;
+        let plugin = Some(plugin_client_to_proto(client));
+        Ok(Response::new(EnablePluginResponse { plugin }))
     }
 
+    #[allow(clippy::significant_drop_tightening)]
     async fn disable_plugin(
         &self,
-        _request: Request<DisablePluginRequest>,
+        request: Request<DisablePluginRequest>,
     ) -> Result<Response<DisablePluginResponse>, Status> {
-        Err(Status::unimplemented("Plugin management not yet available"))
+        let name = &request.get_ref().name;
+        let mut mgr = self.plugin_manager.write().await;
+        mgr.disable_plugin(name)
+            .map_err(|e| Status::not_found(e.to_string()))?;
+        let client = mgr
+            .get_plugin_status(name)
+            .ok_or_else(|| Status::internal("plugin disappeared after disable"))?;
+        let plugin = Some(plugin_client_to_proto(client));
+        Ok(Response::new(DisablePluginResponse { plugin }))
     }
 }
 
@@ -385,6 +445,49 @@ fn core_path_to_proto(
 }
 
 // ---------------------------------------------------------------------------
+// Plugin conversion helpers: core types -> proto types
+// ---------------------------------------------------------------------------
+
+fn plugin_status_to_string(status: &crate::plugin::client::PluginStatus) -> String {
+    match status {
+        crate::plugin::client::PluginStatus::Healthy => "healthy".to_string(),
+        crate::plugin::client::PluginStatus::Degraded => "degraded".to_string(),
+        crate::plugin::client::PluginStatus::Unavailable => "unavailable".to_string(),
+    }
+}
+
+fn plugin_summary_to_proto(
+    summary: crate::plugin::manager::PluginSummary,
+) -> betcode_proto::v1::PluginInfo {
+    let healthy = summary.status == crate::plugin::client::PluginStatus::Healthy;
+    betcode_proto::v1::PluginInfo {
+        name: summary.name,
+        status: plugin_status_to_string(&summary.status),
+        enabled: summary.enabled,
+        socket_path: String::new(),
+        command_count: u32::try_from(summary.command_count).unwrap_or(u32::MAX),
+        health_message: None,
+        healthy: Some(healthy),
+    }
+}
+
+fn plugin_client_to_proto(
+    client: &crate::plugin::client::PluginClient,
+) -> betcode_proto::v1::PluginInfo {
+    let status = client.health.status();
+    let healthy = status == crate::plugin::client::PluginStatus::Healthy;
+    betcode_proto::v1::PluginInfo {
+        name: client.name.clone(),
+        status: plugin_status_to_string(&status),
+        enabled: client.enabled,
+        socket_path: client.socket_path.clone(),
+        command_count: 0,
+        health_message: None,
+        healthy: Some(healthy),
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Output helpers
 // ---------------------------------------------------------------------------
 
@@ -454,12 +557,14 @@ async fn create_test_service_with_dir(path: &std::path::Path) -> CommandServiceI
     ));
     let agent_lister = Arc::new(RwLock::new(AgentLister::new()));
     let service_executor = Arc::new(RwLock::new(ServiceExecutor::new(path.to_path_buf())));
+    let plugin_manager = Arc::new(RwLock::new(PluginManager::new()));
     let (shutdown_tx, _) = tokio::sync::watch::channel(false);
     CommandServiceImpl::new(
         registry,
         file_index,
         agent_lister,
         service_executor,
+        plugin_manager,
         shutdown_tx,
     )
 }
@@ -477,6 +582,19 @@ async fn create_test_service_with_dir(path: &std::path::Path) -> CommandServiceI
 mod tests {
     use super::*;
     use betcode_proto::v1::*;
+
+    /// Add a test plugin to the service and return the plugin info.
+    async fn add_test_plugin(svc: &CommandServiceImpl) -> betcode_proto::v1::PluginInfo {
+        svc.add_plugin(tonic::Request::new(AddPluginRequest {
+            name: "test-plugin".to_string(),
+            socket_path: "/tmp/test.sock".to_string(),
+        }))
+        .await
+        .unwrap()
+        .into_inner()
+        .plugin
+        .unwrap()
+    }
 
     /// Execute a service command and return the first output event.
     async fn exec_first_output(
@@ -563,11 +681,13 @@ mod tests {
         let service_executor = Arc::new(RwLock::new(ServiceExecutor::new(
             std::env::temp_dir().to_path_buf(),
         )));
+        let plugin_manager = Arc::new(RwLock::new(PluginManager::new()));
         let service = CommandServiceImpl::new(
             registry,
             file_index,
             agent_lister,
             service_executor,
+            plugin_manager,
             shutdown_tx,
         );
         let request = tonic::Request::new(ExecuteServiceCommandRequest {
@@ -600,12 +720,157 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_plugin_rpcs_unimplemented() {
+    async fn test_list_plugins_empty() {
         let service = create_test_service().await;
-        let err = service
+        let resp = service
             .list_plugins(tonic::Request::new(ListPluginsRequest {}))
             .await
+            .unwrap();
+        assert!(resp.into_inner().plugins.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_add_and_list_plugins() {
+        let service = create_test_service().await;
+        let resp = service
+            .add_plugin(tonic::Request::new(AddPluginRequest {
+                name: "test-plugin".to_string(),
+                socket_path: "/tmp/test.sock".to_string(),
+            }))
+            .await
+            .unwrap();
+        let info = resp.into_inner().plugin.unwrap();
+        assert_eq!(info.name, "test-plugin");
+        assert!(info.enabled);
+        assert_eq!(info.socket_path, "/tmp/test.sock");
+
+        let list = service
+            .list_plugins(tonic::Request::new(ListPluginsRequest {}))
+            .await
+            .unwrap();
+        assert_eq!(list.into_inner().plugins.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_add_plugin_empty_name() {
+        let service = create_test_service().await;
+        let err = service
+            .add_plugin(tonic::Request::new(AddPluginRequest {
+                name: String::new(),
+                socket_path: "/tmp/test.sock".to_string(),
+            }))
+            .await
             .unwrap_err();
-        assert_eq!(err.code(), tonic::Code::Unimplemented);
+        assert_eq!(err.code(), tonic::Code::InvalidArgument);
+    }
+
+    #[tokio::test]
+    async fn test_get_plugin_status_found() {
+        let service = create_test_service().await;
+        add_test_plugin(&service).await;
+
+        let resp = service
+            .get_plugin_status(tonic::Request::new(GetPluginStatusRequest {
+                name: "test-plugin".to_string(),
+            }))
+            .await
+            .unwrap();
+        let info = resp.into_inner().plugin.unwrap();
+        assert_eq!(info.name, "test-plugin");
+        assert_eq!(info.status, "healthy");
+    }
+
+    #[tokio::test]
+    async fn test_get_plugin_status_not_found() {
+        let service = create_test_service().await;
+        let err = service
+            .get_plugin_status(tonic::Request::new(GetPluginStatusRequest {
+                name: "nonexistent".to_string(),
+            }))
+            .await
+            .unwrap_err();
+        assert_eq!(err.code(), tonic::Code::NotFound);
+    }
+
+    #[tokio::test]
+    async fn test_remove_plugin() {
+        let service = create_test_service().await;
+        add_test_plugin(&service).await;
+
+        let resp = service
+            .remove_plugin(tonic::Request::new(RemovePluginRequest {
+                name: "test-plugin".to_string(),
+            }))
+            .await
+            .unwrap();
+        assert!(resp.into_inner().removed);
+
+        let list = service
+            .list_plugins(tonic::Request::new(ListPluginsRequest {}))
+            .await
+            .unwrap();
+        assert!(list.into_inner().plugins.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_remove_plugin_nonexistent() {
+        let service = create_test_service().await;
+        let resp = service
+            .remove_plugin(tonic::Request::new(RemovePluginRequest {
+                name: "nonexistent".to_string(),
+            }))
+            .await
+            .unwrap();
+        assert!(!resp.into_inner().removed);
+    }
+
+    #[tokio::test]
+    async fn test_disable_and_enable_plugin() {
+        let service = create_test_service().await;
+        add_test_plugin(&service).await;
+
+        // Disable
+        let resp = service
+            .disable_plugin(tonic::Request::new(DisablePluginRequest {
+                name: "test-plugin".to_string(),
+            }))
+            .await
+            .unwrap();
+        let info = resp.into_inner().plugin.unwrap();
+        assert!(!info.enabled);
+
+        // Enable
+        let resp = service
+            .enable_plugin(tonic::Request::new(EnablePluginRequest {
+                name: "test-plugin".to_string(),
+            }))
+            .await
+            .unwrap();
+        let info = resp.into_inner().plugin.unwrap();
+        assert!(info.enabled);
+    }
+
+    #[tokio::test]
+    async fn test_enable_plugin_not_found() {
+        let service = create_test_service().await;
+        let err = service
+            .enable_plugin(tonic::Request::new(EnablePluginRequest {
+                name: "nonexistent".to_string(),
+            }))
+            .await
+            .unwrap_err();
+        assert_eq!(err.code(), tonic::Code::NotFound);
+    }
+
+    #[tokio::test]
+    async fn test_disable_plugin_not_found() {
+        let service = create_test_service().await;
+        let err = service
+            .disable_plugin(tonic::Request::new(DisablePluginRequest {
+                name: "nonexistent".to_string(),
+            }))
+            .await
+            .unwrap_err();
+        assert_eq!(err.code(), tonic::Code::NotFound);
     }
 }
