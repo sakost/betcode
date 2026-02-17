@@ -69,13 +69,10 @@ fn status_str_to_proto(s: &str) -> i32 {
 }
 
 /// Convert an `OrchestrationStrategy` enum value from its i32 form.
-const fn strategy_from_i32(v: i32) -> OrchestrationStrategy {
-    match v {
-        2 => OrchestrationStrategy::Sequential,
-        3 => OrchestrationStrategy::Dag,
-        // 1 (Parallel) and all unknown values default to Parallel
-        _ => OrchestrationStrategy::Parallel,
-    }
+///
+/// Unknown values default to `Parallel`.
+fn strategy_from_i32(v: i32) -> OrchestrationStrategy {
+    OrchestrationStrategy::try_from(v).unwrap_or(OrchestrationStrategy::Parallel)
 }
 
 #[tonic::async_trait]
@@ -293,8 +290,8 @@ impl SubagentService for SubagentServiceImpl {
 
         let strategy = strategy_from_i32(req.strategy);
 
-        // Assign IDs to steps that don't have them
-        let steps: Vec<betcode_proto::v1::OrchestrationStep> = req
+        // Assign IDs to steps that don't have them, then chain sequential deps
+        let mut steps: Vec<betcode_proto::v1::OrchestrationStep> = req
             .steps
             .into_iter()
             .enumerate()
@@ -302,18 +299,19 @@ impl SubagentService for SubagentServiceImpl {
                 if step.id.is_empty() {
                     step.id = format!("step-{i}");
                 }
-
-                // For sequential strategy, chain dependencies
-                if strategy == OrchestrationStrategy::Sequential && i > 0 {
-                    let prev_id = format!("step-{}", i - 1);
-                    if !step.depends_on.contains(&prev_id) {
-                        step.depends_on.push(prev_id);
-                    }
-                }
-
                 step
             })
             .collect();
+
+        // For sequential strategy, chain each step to depend on the previous
+        if strategy == OrchestrationStrategy::Sequential {
+            for i in 1..steps.len() {
+                let prev_id = steps[i - 1].id.clone();
+                if !steps[i].depends_on.contains(&prev_id) {
+                    steps[i].depends_on.push(prev_id);
+                }
+            }
+        }
 
         #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
         let total_steps = steps.len() as i32;
