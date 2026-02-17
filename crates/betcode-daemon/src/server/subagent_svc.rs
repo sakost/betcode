@@ -3,7 +3,6 @@
 use std::pin::Pin;
 use std::sync::Arc;
 
-use tokio::sync::mpsc;
 use tokio_stream::{Stream, StreamExt, wrappers::ReceiverStream};
 use tonic::{Request, Response, Status};
 use tracing::{info, instrument, warn};
@@ -42,7 +41,9 @@ fn manager_err_to_status(e: &ManagerError) -> Status {
     match e {
         ManagerError::PoolFull => Status::resource_exhausted(e.to_string()),
         ManagerError::SpawnFailed { .. } => Status::internal(e.to_string()),
-        ManagerError::NotFound { .. } => Status::not_found(e.to_string()),
+        ManagerError::NotFound { .. } | ManagerError::OrchestrationNotFound { .. } => {
+            Status::not_found(e.to_string())
+        }
         ManagerError::AlreadyCompleted { .. } => Status::failed_precondition(e.to_string()),
         ManagerError::Database(db_err) => {
             use crate::storage::DatabaseError;
@@ -318,16 +319,12 @@ impl SubagentService for SubagentServiceImpl {
         let total_steps = steps.len() as i32;
         let orchestration_id = uuid::Uuid::new_v4().to_string();
 
-        // Create event channel for WatchOrchestration subscribers
-        let (event_tx, _event_rx) = mpsc::channel::<OrchestrationEvent>(128);
-
         self.manager
             .run_orchestration(
                 orchestration_id.clone(),
                 req.parent_session_id.clone(),
                 strategy,
                 steps,
-                event_tx,
             )
             .await
             .map_err(|e| manager_err_to_status(&e))?;
@@ -358,19 +355,34 @@ impl SubagentService for SubagentServiceImpl {
             ));
         }
 
-        // Verify orchestration exists
-        let _orch = self
-            .db
-            .get_orchestration(&req.orchestration_id)
+        // Subscribe to the orchestration's broadcast channel
+        let mut broadcast_rx = self
+            .manager
+            .subscribe_orchestration(&req.orchestration_id)
             .await
-            .map_err(|e| Status::not_found(e.to_string()))?;
+            .map_err(|e| manager_err_to_status(&e))?;
 
-        // For now, return an empty stream. The events are dispatched via
-        // the `run_orchestration` task. A full implementation would maintain
-        // a per-orchestration broadcast channel that WatchOrchestration taps into.
-        let (_tx, rx) = mpsc::channel::<Result<OrchestrationEvent, Status>>(128);
+        // Convert broadcast::Receiver into a Stream via async_stream
+        let stream = async_stream::stream! {
+            loop {
+                match broadcast_rx.recv().await {
+                    Ok(event) => yield Ok(event),
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                        warn!(
+                            orchestration_id = %req.orchestration_id,
+                            skipped = n,
+                            "WatchOrchestration subscriber lagged, skipped events"
+                        );
+                        // Continue receiving; the subscriber just missed some events
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                        // Channel closed — orchestration finished
+                        break;
+                    }
+                }
+            }
+        };
 
-        let stream = ReceiverStream::new(rx);
         Ok(Response::new(Box::pin(stream)))
     }
 

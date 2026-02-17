@@ -15,7 +15,7 @@ use std::sync::Arc;
 
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::Command;
-use tokio::sync::{RwLock, mpsc};
+use tokio::sync::{Notify, RwLock, broadcast, mpsc};
 use tracing::{debug, error, info, warn};
 
 use betcode_proto::v1::{
@@ -58,6 +58,14 @@ pub struct SubagentConfig {
     pub timeout_secs: u64,
 }
 
+/// Per-orchestration state for event broadcasting and loop notification.
+struct OrchestrationState {
+    /// Broadcast sender for orchestration events (for `WatchOrchestration` subscribers).
+    event_tx: broadcast::Sender<OrchestrationEvent>,
+    /// Notify handle to wake the orchestration loop when a subagent finishes.
+    step_notify: Arc<Notify>,
+}
+
 /// Handle to track a running subagent for event broadcasting.
 struct RunningSubagent {
     /// Subscribers watching this subagent.
@@ -84,6 +92,9 @@ pub enum ManagerError {
     #[error("Subagent already completed: {id}")]
     AlreadyCompleted { id: String },
 
+    #[error("Orchestration not found: {id}")]
+    OrchestrationNotFound { id: String },
+
     #[error("Database error: {0}")]
     Database(#[from] crate::storage::DatabaseError),
 
@@ -91,12 +102,19 @@ pub enum ManagerError {
     Validation { message: String },
 }
 
+/// Broadcast channel buffer size for orchestration events.
+const ORCHESTRATION_BROADCAST_CAPACITY: usize = 256;
+
 /// High-level subagent lifecycle manager.
 pub struct SubagentManager {
     pool: Arc<SubprocessPool>,
     db: Database,
     /// Active subagents keyed by subagent ID.
     running: Arc<RwLock<HashMap<String, RunningSubagent>>>,
+    /// Active orchestrations keyed by orchestration ID.
+    orchestrations: Arc<RwLock<HashMap<String, OrchestrationState>>>,
+    /// Maps `subagent_id` to `orchestration_id` for notifying the right orchestration.
+    subagent_to_orchestration: Arc<RwLock<HashMap<String, String>>>,
 }
 
 impl SubagentManager {
@@ -106,6 +124,8 @@ impl SubagentManager {
             pool,
             db,
             running: Arc::new(RwLock::new(HashMap::new())),
+            orchestrations: Arc::new(RwLock::new(HashMap::new())),
+            subagent_to_orchestration: Arc::new(RwLock::new(HashMap::new())),
         }
     }
 
@@ -256,6 +276,8 @@ impl SubagentManager {
         let running_map = Arc::clone(&self.running);
         let pool = Arc::clone(&self.pool);
         let db = self.db.clone();
+        let subagent_to_orch = Arc::clone(&self.subagent_to_orchestration);
+        let orchestrations_map = Arc::clone(&self.orchestrations);
 
         let timeout = if config.timeout_secs == 0 {
             DEFAULT_TIMEOUT_SECS
@@ -394,6 +416,15 @@ impl SubagentManager {
             pool.unregister(&sa_id).await;
             running_map.write().await.remove(&sa_id);
 
+            // Notify orchestration if this subagent belongs to one
+            let orch_id = subagent_to_orch.read().await.get(&sa_id).cloned();
+            if let Some(orch_id) = orch_id {
+                if let Some(state) = orchestrations_map.read().await.get(&orch_id) {
+                    state.step_notify.notify_one();
+                }
+                subagent_to_orch.write().await.remove(&sa_id);
+            }
+
             info!(subagent_id = %sa_id, status = status_str, "Subagent monitoring task finished");
         });
 
@@ -501,9 +532,29 @@ impl SubagentManager {
         &self.db
     }
 
+    /// Subscribe to an orchestration's event broadcast channel.
+    ///
+    /// Returns a `broadcast::Receiver` that receives all `OrchestrationEvent`
+    /// messages for the given orchestration.
+    #[allow(clippy::significant_drop_tightening)]
+    pub async fn subscribe_orchestration(
+        &self,
+        orchestration_id: &str,
+    ) -> Result<broadcast::Receiver<OrchestrationEvent>, ManagerError> {
+        let orchestrations = self.orchestrations.read().await;
+        let state = orchestrations.get(orchestration_id).ok_or_else(|| {
+            ManagerError::OrchestrationNotFound {
+                id: orchestration_id.to_string(),
+            }
+        })?;
+        Ok(state.event_tx.subscribe())
+    }
+
     /// Run an orchestration lifecycle.
     ///
     /// This is used by `CreateOrchestration` to kick off the scheduler loop.
+    /// The manager owns the broadcast channel; subscribers connect via
+    /// [`subscribe_orchestration`].
     #[allow(clippy::too_many_lines)]
     pub async fn run_orchestration(
         self: &Arc<Self>,
@@ -511,7 +562,6 @@ impl SubagentManager {
         parent_session_id: String,
         strategy: OrchestrationStrategy,
         steps: Vec<betcode_proto::v1::OrchestrationStep>,
-        event_tx: mpsc::Sender<OrchestrationEvent>,
     ) -> Result<(), ManagerError> {
         // Validate and create scheduler
         let step_ids: Vec<String> = steps.iter().map(|s| s.id.clone()).collect();
@@ -554,6 +604,20 @@ impl SubagentManager {
                 .await?;
         }
 
+        // Create broadcast channel and Notify for this orchestration
+        let (event_tx, _) = broadcast::channel(ORCHESTRATION_BROADCAST_CAPACITY);
+        let step_notify = Arc::new(Notify::new());
+        {
+            let mut orchestrations = self.orchestrations.write().await;
+            orchestrations.insert(
+                orchestration_id.clone(),
+                OrchestrationState {
+                    event_tx: event_tx.clone(),
+                    step_notify: Arc::clone(&step_notify),
+                },
+            );
+        }
+
         // Build step configs from proto steps (owned, for 'static in tokio::spawn)
         let step_configs: HashMap<String, betcode_proto::v1::OrchestrationStep> =
             steps.into_iter().map(|s| (s.id.clone(), s)).collect();
@@ -562,6 +626,8 @@ impl SubagentManager {
         let manager = Arc::clone(self);
         let orch_id = orchestration_id.clone();
         let db = self.db.clone();
+        let orchestrations_map = Arc::clone(&self.orchestrations);
+        let subagent_to_orch = Arc::clone(&self.subagent_to_orchestration);
 
         tokio::spawn(async move {
             let mut scheduler = scheduler;
@@ -574,8 +640,8 @@ impl SubagentManager {
             loop {
                 let ready = scheduler.next_ready();
                 if ready.is_empty() && !scheduler.is_complete() && failed_count == 0 {
-                    // Wait a bit for running steps to complete
-                    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                    // Wait for a subagent to complete (event-driven via Notify)
+                    step_notify.notified().await;
                     continue;
                 }
 
@@ -622,6 +688,12 @@ impl SubagentManager {
                         timeout_secs: 0,
                     };
 
+                    // Register subagent -> orchestration mapping before spawning
+                    subagent_to_orch
+                        .write()
+                        .await
+                        .insert(sa_id.clone(), orch_id.clone());
+
                     // Update step status
                     let _ = db
                         .update_step_status(step_id, "running", Some(&sa_id))
@@ -630,27 +702,31 @@ impl SubagentManager {
                     match manager.spawn(sa_config).await {
                         Ok(_) => {
                             // Broadcast StepStarted
-                            let _ = event_tx
-                                .send(OrchestrationEvent {
-                                    orchestration_id: orch_id.clone(),
-                                    timestamp: Some(now_timestamp()),
-                                    event: Some(
-                                        betcode_proto::v1::orchestration_event::Event::StepStarted(
-                                            StepStarted {
-                                                step_id: step_id.clone(),
-                                                subagent_id: sa_id,
-                                                name: step_cfg.name.clone(),
-                                            },
-                                        ),
+                            let _ = event_tx.send(OrchestrationEvent {
+                                orchestration_id: orch_id.clone(),
+                                timestamp: Some(now_timestamp()),
+                                event: Some(
+                                    betcode_proto::v1::orchestration_event::Event::StepStarted(
+                                        StepStarted {
+                                            step_id: step_id.clone(),
+                                            subagent_id: sa_id,
+                                            name: step_cfg.name.clone(),
+                                        },
                                     ),
-                                })
-                                .await;
+                                ),
+                            });
 
                             scheduler.mark_running(step_id);
                         }
                         Err(e) => {
                             error!(step_id, error = %e, "Failed to spawn step subagent");
                             let _ = db.update_step_status(step_id, "failed", None).await;
+
+                            // Remove the mapping since spawn failed
+                            subagent_to_orch
+                                .write()
+                                .await
+                                .remove(&format!("{orch_id}-{step_id}"));
 
                             // Cascade failure
                             let blocked = scheduler.mark_failed(step_id);
@@ -659,29 +735,29 @@ impl SubagentManager {
                             }
                             failed_count += 1;
 
-                            let _ = event_tx
-                                .send(OrchestrationEvent {
-                                    orchestration_id: orch_id.clone(),
-                                    timestamp: Some(now_timestamp()),
-                                    event: Some(
-                                        betcode_proto::v1::orchestration_event::Event::StepFailed(
-                                            StepFailed {
-                                                step_id: step_id.clone(),
-                                                error_message: e.to_string(),
-                                                blocked_steps: blocked,
-                                            },
-                                        ),
+                            let _ = event_tx.send(OrchestrationEvent {
+                                orchestration_id: orch_id.clone(),
+                                timestamp: Some(now_timestamp()),
+                                event: Some(
+                                    betcode_proto::v1::orchestration_event::Event::StepFailed(
+                                        StepFailed {
+                                            step_id: step_id.clone(),
+                                            error_message: e.to_string(),
+                                            blocked_steps: blocked,
+                                        },
                                     ),
-                                })
-                                .await;
+                                ),
+                            });
                         }
                     }
                 }
 
-                // Wait for any running step to complete
-                // Poll DB for status changes
-                tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+                // If there are still running steps, wait for notification
+                if !scheduler.running_ids().is_empty() {
+                    step_notify.notified().await;
+                }
 
+                // Check all running steps for completion
                 let running_ids = scheduler.running_ids();
                 for step_id in &running_ids {
                     let sa_id = format!("{orch_id}-{step_id}");
@@ -703,22 +779,20 @@ impl SubagentManager {
                             let _ = blocked; // freed downstream steps are now ready
                             completed_count += 1;
 
-                            let _ = event_tx
-                                .send(OrchestrationEvent {
-                                    orchestration_id: orch_id.clone(),
-                                    timestamp: Some(now_timestamp()),
-                                    event: Some(
-                                        betcode_proto::v1::orchestration_event::Event::StepCompleted(
-                                            StepCompleted {
-                                                step_id: step_id.clone(),
-                                                result_summary: summary,
-                                                completed_count,
-                                                total_count: total,
-                                            },
-                                        ),
+                            let _ = event_tx.send(OrchestrationEvent {
+                                orchestration_id: orch_id.clone(),
+                                timestamp: Some(now_timestamp()),
+                                event: Some(
+                                    betcode_proto::v1::orchestration_event::Event::StepCompleted(
+                                        StepCompleted {
+                                            step_id: step_id.clone(),
+                                            result_summary: summary,
+                                            completed_count,
+                                            total_count: total,
+                                        },
                                     ),
-                                })
-                                .await;
+                                ),
+                            });
                         }
                         Ok(sa) if sa.status == "failed" || sa.status == "cancelled" => {
                             let error_msg = sa
@@ -732,21 +806,19 @@ impl SubagentManager {
                             }
                             failed_count += 1;
 
-                            let _ = event_tx
-                                .send(OrchestrationEvent {
-                                    orchestration_id: orch_id.clone(),
-                                    timestamp: Some(now_timestamp()),
-                                    event: Some(
-                                        betcode_proto::v1::orchestration_event::Event::StepFailed(
-                                            StepFailed {
-                                                step_id: step_id.clone(),
-                                                error_message: error_msg,
-                                                blocked_steps: blocked,
-                                            },
-                                        ),
+                            let _ = event_tx.send(OrchestrationEvent {
+                                orchestration_id: orch_id.clone(),
+                                timestamp: Some(now_timestamp()),
+                                event: Some(
+                                    betcode_proto::v1::orchestration_event::Event::StepFailed(
+                                        StepFailed {
+                                            step_id: step_id.clone(),
+                                            error_message: error_msg,
+                                            blocked_steps: blocked,
+                                        },
                                     ),
-                                })
-                                .await;
+                                ),
+                            });
                         }
                         _ => {
                             // Still pending or unknown — check again next iteration
@@ -789,7 +861,10 @@ impl SubagentManager {
             };
 
             let _ = db.update_orchestration_status(&orch_id, final_status).await;
-            let _ = event_tx.send(final_event).await;
+            let _ = event_tx.send(final_event);
+
+            // Clean up orchestration state
+            orchestrations_map.write().await.remove(&orch_id);
 
             info!(
                 orchestration_id = %orch_id,
@@ -1171,5 +1246,110 @@ mod tests {
         let ts = now_timestamp();
         // Should be after 2020
         assert!(ts.seconds > 1_577_836_800);
+    }
+
+    // =========================================================================
+    // Orchestration subscription & Notify tests
+    // =========================================================================
+
+    #[tokio::test]
+    async fn subscribe_orchestration_returns_error_for_unknown() {
+        let db = test_db().await;
+        let pool = test_pool();
+        let manager = SubagentManager::new(pool, db);
+
+        let result = manager.subscribe_orchestration("nonexistent").await;
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(
+            err.contains("Orchestration not found"),
+            "Expected OrchestrationNotFound, got: {err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn notify_wakes_orchestration_loop() {
+        // Verify that Notify::notify_one wakes a waiting notified().await
+        let notify = Arc::new(Notify::new());
+        let notify_clone = Arc::clone(&notify);
+
+        let handle = tokio::spawn(async move {
+            notify_clone.notified().await;
+            true
+        });
+
+        // Give the spawned task time to start waiting
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        notify.notify_one();
+
+        let result = tokio::time::timeout(std::time::Duration::from_secs(1), handle)
+            .await
+            .expect("should not time out")
+            .expect("task should not panic");
+        assert!(result, "notified task should have completed");
+    }
+
+    #[tokio::test]
+    async fn broadcast_delivers_to_multiple_subscribers() {
+        let (tx, _) = broadcast::channel::<OrchestrationEvent>(16);
+
+        let mut rx1 = tx.subscribe();
+        let mut rx2 = tx.subscribe();
+
+        let event = OrchestrationEvent {
+            orchestration_id: "orch-1".to_string(),
+            timestamp: Some(now_timestamp()),
+            event: Some(betcode_proto::v1::orchestration_event::Event::Completed(
+                OrchestrationCompleted {
+                    total_steps: 1,
+                    succeeded: 1,
+                    failed: 0,
+                },
+            )),
+        };
+
+        tx.send(event.clone()).expect("send should succeed");
+
+        let ev1 = rx1.recv().await.expect("rx1 should receive event");
+        let ev2 = rx2.recv().await.expect("rx2 should receive event");
+
+        assert_eq!(ev1.orchestration_id, "orch-1");
+        assert_eq!(ev2.orchestration_id, "orch-1");
+    }
+
+    #[tokio::test]
+    async fn orchestration_state_stored_and_cleaned_up() {
+        // Verify that OrchestrationState is properly managed in the map
+        let db = test_db().await;
+        let pool = test_pool();
+        let manager = SubagentManager::new(pool, db);
+
+        // Manually insert an orchestration state
+        let (event_tx, _) = broadcast::channel(16);
+        let step_notify = Arc::new(Notify::new());
+        {
+            let mut orchestrations = manager.orchestrations.write().await;
+            orchestrations.insert(
+                "test-orch-1".to_string(),
+                OrchestrationState {
+                    event_tx,
+                    step_notify,
+                },
+            );
+        }
+
+        // Should be able to subscribe now
+        let result = manager.subscribe_orchestration("test-orch-1").await;
+        assert!(
+            result.is_ok(),
+            "subscribe should succeed for existing orchestration"
+        );
+
+        // Remove it
+        manager.orchestrations.write().await.remove("test-orch-1");
+
+        // Should fail now
+        let result = manager.subscribe_orchestration("test-orch-1").await;
+        assert!(result.is_err(), "subscribe should fail after cleanup");
     }
 }
