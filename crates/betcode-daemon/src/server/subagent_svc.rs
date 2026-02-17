@@ -638,4 +638,81 @@ mod tests {
         assert_eq!(strategy_from_i32(3), OrchestrationStrategy::Dag);
         assert_eq!(strategy_from_i32(99), OrchestrationStrategy::Parallel); // default
     }
+
+    #[tokio::test]
+    async fn sequential_strategy_adds_dependencies() {
+        // The gRPC layer auto-chains sequential dependencies before passing
+        // steps to run_orchestration.  Verify DB records reflect the chain.
+        let svc = test_service().await;
+
+        let steps = vec![
+            betcode_proto::v1::OrchestrationStep {
+                id: "alpha".to_string(),
+                prompt: "do alpha".to_string(),
+                working_directory: std::env::temp_dir().to_string_lossy().into_owned(),
+                ..Default::default()
+            },
+            betcode_proto::v1::OrchestrationStep {
+                id: "beta".to_string(),
+                prompt: "do beta".to_string(),
+                working_directory: std::env::temp_dir().to_string_lossy().into_owned(),
+                ..Default::default()
+            },
+            betcode_proto::v1::OrchestrationStep {
+                id: "gamma".to_string(),
+                prompt: "do gamma".to_string(),
+                working_directory: std::env::temp_dir().to_string_lossy().into_owned(),
+                ..Default::default()
+            },
+        ];
+
+        let req = Request::new(CreateOrchestrationRequest {
+            parent_session_id: "parent-1".to_string(),
+            steps,
+            strategy: i32::from(OrchestrationStrategy::Sequential),
+        });
+
+        let resp = svc
+            .create_orchestration(req)
+            .await
+            .expect("create_orchestration should succeed");
+        let inner = resp.into_inner();
+        assert_eq!(inner.total_steps, 3);
+        let orch_id = inner.orchestration_id;
+
+        // Allow spawned task to start and write DB records
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+
+        // Verify step records exist with correct chained dependencies
+        let db_steps = svc
+            .db
+            .get_steps_for_orchestration(&orch_id)
+            .await
+            .expect("steps should be retrievable");
+        assert_eq!(db_steps.len(), 3);
+        assert_eq!(db_steps[0].id, "alpha");
+        assert_eq!(db_steps[1].id, "beta");
+        assert_eq!(db_steps[2].id, "gamma");
+
+        // Parse stored dependency JSON arrays
+        let deps_alpha: Vec<String> =
+            serde_json::from_str(&db_steps[0].depends_on).unwrap_or_default();
+        let deps_beta: Vec<String> =
+            serde_json::from_str(&db_steps[1].depends_on).unwrap_or_default();
+        let deps_gamma: Vec<String> =
+            serde_json::from_str(&db_steps[2].depends_on).unwrap_or_default();
+
+        assert!(
+            deps_alpha.is_empty(),
+            "alpha (first step) should have no deps"
+        );
+        assert!(
+            deps_beta.contains(&"alpha".to_string()),
+            "beta should depend on alpha, got: {deps_beta:?}"
+        );
+        assert!(
+            deps_gamma.contains(&"beta".to_string()),
+            "gamma should depend on beta, got: {deps_gamma:?}"
+        );
+    }
 }

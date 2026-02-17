@@ -1352,4 +1352,240 @@ mod tests {
         let result = manager.subscribe_orchestration("test-orch-1").await;
         assert!(result.is_err(), "subscribe should fail after cleanup");
     }
+
+    // =========================================================================
+    // Orchestration lifecycle integration tests
+    // =========================================================================
+
+    /// Helper: insert an `OrchestrationState` into the manager and return its
+    /// broadcast sender for manual event injection.
+    async fn insert_orchestration_state(
+        manager: &SubagentManager,
+        orch_id: &str,
+    ) -> broadcast::Sender<OrchestrationEvent> {
+        let (event_tx, _) = broadcast::channel(ORCHESTRATION_BROADCAST_CAPACITY);
+        let step_notify = Arc::new(Notify::new());
+        let tx_clone = event_tx.clone();
+        manager.orchestrations.write().await.insert(
+            orch_id.to_string(),
+            OrchestrationState {
+                event_tx,
+                step_notify,
+            },
+        );
+        tx_clone
+    }
+
+    /// Build a minimal `OrchestrationStep` proto for testing.
+    fn make_step(
+        id: &str,
+        prompt: &str,
+        depends_on: Vec<String>,
+    ) -> betcode_proto::v1::OrchestrationStep {
+        betcode_proto::v1::OrchestrationStep {
+            id: id.to_string(),
+            name: id.to_string(),
+            prompt: prompt.to_string(),
+            depends_on,
+            working_directory: std::env::temp_dir().to_string_lossy().into_owned(),
+            ..Default::default()
+        }
+    }
+
+    #[tokio::test]
+    async fn subscribe_orchestration_receives_events() {
+        let db = test_db().await;
+        let pool = test_pool();
+        let manager = SubagentManager::new(pool, db);
+
+        let tx = insert_orchestration_state(&manager, "orch-sub-1").await;
+
+        // Subscribe to the orchestration
+        let mut rx = manager
+            .subscribe_orchestration("orch-sub-1")
+            .await
+            .expect("subscribe should succeed");
+
+        // Send an event through the broadcast sender
+        let event = OrchestrationEvent {
+            orchestration_id: "orch-sub-1".to_string(),
+            timestamp: Some(now_timestamp()),
+            event: Some(betcode_proto::v1::orchestration_event::Event::StepStarted(
+                StepStarted {
+                    step_id: "step-0".to_string(),
+                    subagent_id: "sa-0".to_string(),
+                    name: "first".to_string(),
+                },
+            )),
+        };
+        tx.send(event.clone())
+            .expect("broadcast send should succeed");
+
+        let received = rx.recv().await.expect("subscriber should receive event");
+        assert_eq!(received.orchestration_id, "orch-sub-1");
+        match &received.event {
+            Some(betcode_proto::v1::orchestration_event::Event::StepStarted(started)) => {
+                assert_eq!(started.step_id, "step-0");
+                assert_eq!(started.name, "first");
+            }
+            other => panic!("Expected StepStarted event, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn subscribe_orchestration_multiple_subscribers() {
+        let db = test_db().await;
+        let pool = test_pool();
+        let manager = SubagentManager::new(pool, db);
+
+        let tx = insert_orchestration_state(&manager, "orch-multi-1").await;
+
+        // Subscribe twice
+        let mut rx1 = manager
+            .subscribe_orchestration("orch-multi-1")
+            .await
+            .expect("first subscribe should succeed");
+        let mut rx2 = manager
+            .subscribe_orchestration("orch-multi-1")
+            .await
+            .expect("second subscribe should succeed");
+
+        // Send one event
+        let event = OrchestrationEvent {
+            orchestration_id: "orch-multi-1".to_string(),
+            timestamp: Some(now_timestamp()),
+            event: Some(betcode_proto::v1::orchestration_event::Event::Completed(
+                OrchestrationCompleted {
+                    total_steps: 2,
+                    succeeded: 2,
+                    failed: 0,
+                },
+            )),
+        };
+        tx.send(event).expect("broadcast send should succeed");
+
+        // Both receivers should get the event
+        let ev1 = rx1.recv().await.expect("rx1 should receive event");
+        let ev2 = rx2.recv().await.expect("rx2 should receive event");
+
+        assert_eq!(ev1.orchestration_id, "orch-multi-1");
+        assert_eq!(ev2.orchestration_id, "orch-multi-1");
+        match (&ev1.event, &ev2.event) {
+            (
+                Some(betcode_proto::v1::orchestration_event::Event::Completed(c1)),
+                Some(betcode_proto::v1::orchestration_event::Event::Completed(c2)),
+            ) => {
+                assert_eq!(c1.succeeded, 2);
+                assert_eq!(c2.succeeded, 2);
+            }
+            other => panic!("Expected Completed events, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn orchestration_db_records_created() {
+        // run_orchestration creates DB records (orchestration + steps) before
+        // spawning subprocesses, so they should exist even if claude isn't
+        // available.
+        let db = test_db().await;
+        let pool = test_pool();
+        let manager = Arc::new(SubagentManager::new(pool, db.clone()));
+
+        let steps = vec![
+            make_step("p-1", "task one", vec![]),
+            make_step("p-2", "task two", vec![]),
+        ];
+
+        manager
+            .run_orchestration(
+                "orch-db-1".to_string(),
+                "parent-1".to_string(),
+                OrchestrationStrategy::Parallel,
+                steps,
+            )
+            .await
+            .expect("run_orchestration should succeed (DB records created)");
+
+        // Allow the spawned task to start and attempt subprocess spawn
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+
+        // Orchestration record should exist in DB
+        let orch = db
+            .get_orchestration("orch-db-1")
+            .await
+            .expect("orchestration record should exist");
+        assert_eq!(orch.parent_session_id, "parent-1");
+        assert_eq!(orch.strategy, "parallel");
+
+        // Step records should exist in DB
+        let db_steps = db
+            .get_steps_for_orchestration("orch-db-1")
+            .await
+            .expect("steps should be retrievable");
+        assert_eq!(db_steps.len(), 2);
+        assert_eq!(db_steps[0].id, "p-1");
+        assert_eq!(db_steps[1].id, "p-2");
+    }
+
+    #[tokio::test]
+    async fn orchestration_sequential_dependency_chaining() {
+        // Sequential strategy chains steps A -> B -> C in the DAG.
+        // Dependencies are pre-chained (as the gRPC layer would do) and the
+        // manager stores them in the DB via run_orchestration.
+        let db = test_db().await;
+        let pool = test_pool();
+        let manager = Arc::new(SubagentManager::new(pool, db.clone()));
+
+        // Pre-chain dependencies the same way the gRPC layer does for Sequential.
+        let steps = vec![
+            make_step("seq-a", "first", vec![]),
+            make_step("seq-b", "second", vec!["seq-a".to_string()]),
+            make_step("seq-c", "third", vec!["seq-b".to_string()]),
+        ];
+
+        manager
+            .run_orchestration(
+                "orch-seq-1".to_string(),
+                "parent-1".to_string(),
+                OrchestrationStrategy::Sequential,
+                steps,
+            )
+            .await
+            .expect("run_orchestration should succeed");
+
+        // Allow spawned task to start
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+
+        // Verify orchestration stored with sequential strategy
+        let orch = db
+            .get_orchestration("orch-seq-1")
+            .await
+            .expect("orchestration should exist");
+        assert_eq!(orch.strategy, "sequential");
+
+        // Verify steps exist and have correct order
+        let db_steps = db
+            .get_steps_for_orchestration("orch-seq-1")
+            .await
+            .expect("steps should be retrievable");
+        assert_eq!(db_steps.len(), 3);
+        assert_eq!(db_steps[0].id, "seq-a");
+        assert_eq!(db_steps[1].id, "seq-b");
+        assert_eq!(db_steps[2].id, "seq-c");
+
+        // Verify dependency chaining: seq-b depends on seq-a, seq-c depends on seq-b.
+        // Dependencies are stored as JSON arrays in the `depends_on` column.
+        let deps_a: Vec<String> = serde_json::from_str(&db_steps[0].depends_on).unwrap();
+        let deps_b: Vec<String> = serde_json::from_str(&db_steps[1].depends_on).unwrap();
+        let deps_c: Vec<String> = serde_json::from_str(&db_steps[2].depends_on).unwrap();
+        assert!(deps_a.is_empty(), "first step should have no dependencies");
+        assert!(
+            deps_b.contains(&"seq-a".to_string()),
+            "seq-b should depend on seq-a"
+        );
+        assert!(
+            deps_c.contains(&"seq-b".to_string()),
+            "seq-c should depend on seq-b"
+        );
+    }
 }
