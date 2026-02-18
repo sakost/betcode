@@ -16,6 +16,7 @@ pub mod headless;
 pub mod machine_cmd;
 pub mod relay;
 pub mod repo_cmd;
+pub mod session_cmd;
 pub mod subagent_cmd;
 pub mod tui;
 pub mod ui;
