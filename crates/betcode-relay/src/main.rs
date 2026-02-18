@@ -17,6 +17,7 @@ use betcode_proto::v1::command_service_server::CommandServiceServer;
 use betcode_proto::v1::config_service_server::ConfigServiceServer;
 use betcode_proto::v1::git_lab_service_server::GitLabServiceServer;
 use betcode_proto::v1::git_repo_service_server::GitRepoServiceServer;
+use betcode_proto::v1::health_server::HealthServer;
 use betcode_proto::v1::machine_service_server::MachineServiceServer;
 use betcode_proto::v1::subagent_service_server::SubagentServiceServer;
 use betcode_proto::v1::tunnel_service_server::TunnelServiceServer;
@@ -28,8 +29,8 @@ use betcode_relay::registry::ConnectionRegistry;
 use betcode_relay::router::RequestRouter;
 use betcode_relay::server::{
     AgentProxyService, AuthServiceImpl, CommandProxyService, ConfigProxyService,
-    GitLabProxyService, GitRepoProxyService, MachineServiceImpl, SubagentProxyService,
-    TunnelServiceImpl, WorktreeProxyService,
+    GitLabProxyService, GitRepoProxyService, MachineServiceImpl, RelayHealthService,
+    SubagentProxyService, TunnelServiceImpl, WorktreeProxyService,
 };
 use betcode_relay::storage::RelayDatabase;
 use betcode_relay::tls::TlsMode;
@@ -265,6 +266,7 @@ async fn main() -> anyhow::Result<()> {
 
     let grpc_router = builder
         .add_service(grpc_health_service)
+        .add_service(HealthServer::new(RelayHealthService::new()))
         .add_service(AuthServiceServer::new(auth))
         .add_service(TunnelServiceServer::with_interceptor(
             tunnel,
