@@ -25,16 +25,25 @@ pub struct HandlerContext<'a> {
 pub async fn handle_agent_request(
     ctx: &HandlerContext<'_>,
     session_id: &mut Option<String>,
+    pending_config: &mut Option<RelaySessionConfig>,
     request: AgentRequest,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     use betcode_proto::v1::agent_request::Request;
 
     match request.request {
         Some(Request::Start(start)) => {
-            handle_start(ctx, session_id, start).await?;
+            handle_start(ctx, session_id, pending_config, start).await?;
         }
         Some(Request::Message(msg)) => {
             if let Some(sid) = session_id {
+                // Deferred subprocess spawn: start on first UserMessage.
+                if let Some(config) = pending_config.take() {
+                    info!(session_id = %sid, "Starting deferred subprocess on first user message");
+                    ctx.relay
+                        .start_session(config)
+                        .await
+                        .map_err(|e| e.to_string())?;
+                }
                 let agent_id = Some(msg.agent_id.as_str()).filter(|s| !s.is_empty());
                 info!(session_id = %sid, content_len = msg.content.len(), "User message");
                 ctx.relay
@@ -130,9 +139,15 @@ async fn handle_permission(
 }
 
 /// Handle a `StartConversation` request.
+///
+/// Prepares the session in the database and subscribes the client to events,
+/// but **defers** subprocess spawn until the first `UserMessage` arrives.
+/// The `RelaySessionConfig` is stored in `pending_config` and consumed by
+/// [`handle_agent_request`] on the first `Request::Message`.
 async fn handle_start(
     ctx: &HandlerContext<'_>,
     session_id: &mut Option<String>,
+    pending_config: &mut Option<RelaySessionConfig>,
     start: betcode_proto::v1::StartConversation,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     info!(
@@ -182,7 +197,9 @@ async fn handle_start(
 
     *session_id = Some(sid.clone());
 
-    // Start the relay (spawns subprocess + event pipeline)
+    // Build session config but defer subprocess start until first UserMessage.
+    // Without deferral the subprocess starts with no prompt, times out waiting
+    // for stdin, and exits before the user types anything in TUI mode.
     let config = RelaySessionConfig {
         session_id: sid.clone(),
         working_directory: working_dir,
@@ -190,11 +207,7 @@ async fn handle_start(
         resume_session,
         worktree_id: start.worktree_id,
     };
-
-    ctx.relay
-        .start_session(config)
-        .await
-        .map_err(|e| e.to_string())?;
+    *pending_config = Some(config);
 
     // Forward broadcast events to this client's gRPC stream
     let tx_clone = ctx.tx.clone();

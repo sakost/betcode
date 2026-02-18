@@ -82,6 +82,7 @@ impl AgentService for AgentServiceImpl {
         tokio::spawn(async move {
             let client_id = uuid::Uuid::new_v4().to_string();
             let mut session_id: Option<String> = None;
+            let mut pending_config: Option<crate::relay::RelaySessionConfig> = None;
 
             while let Some(result) = in_stream.next().await {
                 match result {
@@ -93,8 +94,13 @@ impl AgentService for AgentServiceImpl {
                             tx: &tx,
                             client_id: &client_id,
                         };
-                        if let Err(e) =
-                            handle_agent_request(&handler_ctx, &mut session_id, req).await
+                        if let Err(e) = handle_agent_request(
+                            &handler_ctx,
+                            &mut session_id,
+                            &mut pending_config,
+                            req,
+                        )
+                        .await
                         {
                             error!(?e, "Error handling agent request");
                             let _ = tx.send(Err(Status::internal(e.to_string()))).await;
