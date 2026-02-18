@@ -219,14 +219,16 @@ async fn main() -> anyhow::Result<()> {
     let mut tls_config = tls_mode.to_server_tls_config()?;
 
     // Apply mutual TLS if a client CA cert is provided
-    if let (Some(tls), Some(ca_path)) = (tls_config.take(), &args.mtls_ca_cert) {
-        let ca_pem = std::fs::read_to_string(ca_path).map_err(|e| {
-            anyhow::anyhow!("Failed to read mTLS CA cert {}: {e}", ca_path.display())
-        })?;
-        tls_config = Some(betcode_relay::tls::apply_mtls(tls, &ca_pem));
-        info!(ca = %ca_path.display(), "Mutual TLS enabled for tunnel connections");
-    } else if mtls_enabled {
-        warn!("--mtls-ca-cert specified but TLS is disabled; mTLS will have no effect");
+    if let Some(ca_path) = &args.mtls_ca_cert {
+        if let Some(tls) = tls_config.take() {
+            let ca_pem = std::fs::read_to_string(ca_path).map_err(|e| {
+                anyhow::anyhow!("Failed to read mTLS CA cert {}: {e}", ca_path.display())
+            })?;
+            tls_config = Some(betcode_relay::tls::apply_mtls(tls, &ca_pem));
+            info!(ca = %ca_path.display(), "Mutual TLS enabled for tunnel connections");
+        } else {
+            warn!("--mtls-ca-cert specified but TLS is disabled; mTLS will have no effect");
+        }
     }
 
     let mut builder = Server::builder()
