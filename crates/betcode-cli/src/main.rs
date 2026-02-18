@@ -17,6 +17,7 @@ use betcode_cli::gitlab_cmd::{self, GitLabAction};
 use betcode_cli::headless::{self, HeadlessConfig};
 use betcode_cli::machine_cmd::{self, MachineAction};
 use betcode_cli::repo_cmd::{self, RepoAction};
+use betcode_cli::session_cmd::{self, SessionAction};
 use betcode_cli::subagent_cmd::{self, SubagentAction};
 use betcode_cli::worktree_cmd::{self, WorktreeAction};
 
@@ -101,6 +102,11 @@ enum Commands {
     Daemon {
         #[command(subcommand)]
         action: DaemonAction,
+    },
+    /// Manage sessions (list, rename, delete, compact, cancel)
+    Session {
+        #[command(subcommand)]
+        action: SessionAction,
     },
     /// Manage subagents (spawn, list, cancel, watch)
     Subagent {
@@ -238,6 +244,8 @@ async fn main() -> anyhow::Result<()> {
         repo_cmd::run(&mut conn, action).await?;
     } else if let Some(Commands::Gitlab { action }) = cli.command {
         gitlab_cmd::run(&mut conn, action).await?;
+    } else if let Some(Commands::Session { action }) = cli.command {
+        session_cmd::run(&mut conn, action).await?;
     } else if let Some(Commands::Subagent { action }) = cli.command {
         subagent_cmd::run(&mut conn, action).await?;
     } else if let Some(prompt) = cli.prompt {

@@ -11,7 +11,8 @@ use tracing::{error, info, warn};
 
 use betcode_proto::v1::{
     AddPluginRequest, AddPluginResponse, AgentEvent, AgentRequest, CancelSubagentRequest,
-    CancelSubagentResponse, CancelTurnRequest, CancelTurnResponse, CreateWorktreeRequest,
+    CancelSubagentResponse, CancelTurnRequest, CancelTurnResponse, CompactSessionRequest,
+    CompactSessionResponse, CreateWorktreeRequest, DeleteSessionRequest, DeleteSessionResponse,
     DisablePluginRequest, DisablePluginResponse, EnablePluginRequest, EnablePluginResponse,
     ExecuteServiceCommandRequest, GetCommandRegistryResponse, GetIssueRequest, GetIssueResponse,
     GetMergeRequestRequest, GetMergeRequestResponse, GetPipelineRequest, GetPipelineResponse,
@@ -22,13 +23,13 @@ use betcode_proto::v1::{
     ListPluginsResponse, ListReposRequest, ListReposResponse, ListSessionsRequest,
     ListSessionsResponse, ListSubagentsRequest, ListSubagentsResponse, ListWorktreesRequest,
     ListWorktreesResponse, RegisterRepoRequest, RemovePluginRequest, RemovePluginResponse,
-    RemoveWorktreeRequest, RemoveWorktreeResponse, ResumeSessionRequest, ScanReposRequest,
-    ServiceCommandOutput, SpawnSubagentRequest, SpawnSubagentResponse, SubagentEvent,
-    UnregisterRepoRequest, UnregisterRepoResponse, UpdateRepoRequest, WatchSubagentRequest,
-    WorktreeDetail, agent_service_client::AgentServiceClient,
-    command_service_client::CommandServiceClient, git_lab_service_client::GitLabServiceClient,
-    git_repo_service_client::GitRepoServiceClient, subagent_service_client::SubagentServiceClient,
-    worktree_service_client::WorktreeServiceClient,
+    RemoveWorktreeRequest, RemoveWorktreeResponse, RenameSessionRequest, RenameSessionResponse,
+    ResumeSessionRequest, ScanReposRequest, ServiceCommandOutput, SpawnSubagentRequest,
+    SpawnSubagentResponse, SubagentEvent, UnregisterRepoRequest, UnregisterRepoResponse,
+    UpdateRepoRequest, WatchSubagentRequest, WorktreeDetail,
+    agent_service_client::AgentServiceClient, command_service_client::CommandServiceClient,
+    git_lab_service_client::GitLabServiceClient, git_repo_service_client::GitRepoServiceClient,
+    subagent_service_client::SubagentServiceClient, worktree_service_client::WorktreeServiceClient,
 };
 
 use betcode_crypto::{
@@ -661,6 +662,98 @@ impl DaemonConnection {
         apply_relay_meta(&mut request, &auth_token, &machine_id);
         let response = client
             .cancel_turn(request)
+            .await
+            .map_err(|e| ConnectionError::RpcFailed(e.to_string()))?;
+
+        Ok(response.into_inner())
+    }
+
+    /// List sessions with full filtering parameters.
+    pub async fn list_sessions_filtered(
+        &mut self,
+        working_directory: Option<&str>,
+        worktree_id: Option<&str>,
+        limit: u32,
+        offset: u32,
+    ) -> Result<ListSessionsResponse, ConnectionError> {
+        let auth_token = self.config.auth_token.clone();
+        let machine_id = self.config.machine_id.clone();
+        let client = self.client.as_mut().ok_or(ConnectionError::NotConnected)?;
+
+        let mut request = tonic::Request::new(ListSessionsRequest {
+            working_directory: working_directory.unwrap_or_default().to_string(),
+            worktree_id: worktree_id.unwrap_or_default().to_string(),
+            limit,
+            offset,
+        });
+        apply_relay_meta(&mut request, &auth_token, &machine_id);
+        let response = client
+            .list_sessions(request)
+            .await
+            .map_err(|e| ConnectionError::RpcFailed(e.to_string()))?;
+
+        Ok(response.into_inner())
+    }
+
+    /// Rename a session.
+    pub async fn rename_session(
+        &mut self,
+        session_id: &str,
+        name: &str,
+    ) -> Result<RenameSessionResponse, ConnectionError> {
+        let auth_token = self.config.auth_token.clone();
+        let machine_id = self.config.machine_id.clone();
+        let client = self.client.as_mut().ok_or(ConnectionError::NotConnected)?;
+
+        let mut request = tonic::Request::new(RenameSessionRequest {
+            session_id: session_id.to_string(),
+            name: name.to_string(),
+        });
+        apply_relay_meta(&mut request, &auth_token, &machine_id);
+        let response = client
+            .rename_session(request)
+            .await
+            .map_err(|e| ConnectionError::RpcFailed(e.to_string()))?;
+
+        Ok(response.into_inner())
+    }
+
+    /// Delete a session.
+    pub async fn delete_session(
+        &mut self,
+        session_id: &str,
+    ) -> Result<DeleteSessionResponse, ConnectionError> {
+        let auth_token = self.config.auth_token.clone();
+        let machine_id = self.config.machine_id.clone();
+        let client = self.client.as_mut().ok_or(ConnectionError::NotConnected)?;
+
+        let mut request = tonic::Request::new(DeleteSessionRequest {
+            session_id: session_id.to_string(),
+        });
+        apply_relay_meta(&mut request, &auth_token, &machine_id);
+        let response = client
+            .delete_session(request)
+            .await
+            .map_err(|e| ConnectionError::RpcFailed(e.to_string()))?;
+
+        Ok(response.into_inner())
+    }
+
+    /// Compact a session (remove redundant messages to save tokens).
+    pub async fn compact_session(
+        &mut self,
+        session_id: &str,
+    ) -> Result<CompactSessionResponse, ConnectionError> {
+        let auth_token = self.config.auth_token.clone();
+        let machine_id = self.config.machine_id.clone();
+        let client = self.client.as_mut().ok_or(ConnectionError::NotConnected)?;
+
+        let mut request = tonic::Request::new(CompactSessionRequest {
+            session_id: session_id.to_string(),
+        });
+        apply_relay_meta(&mut request, &auth_token, &machine_id);
+        let response = client
+            .compact_session(request)
             .await
             .map_err(|e| ConnectionError::RpcFailed(e.to_string()))?;
 
