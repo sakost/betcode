@@ -17,7 +17,7 @@ betcode-crypto = { workspace = true, features = ["certs"] }
 clap = { workspace = true, features = ["derive"] }
 dialoguer.workspace = true
 dirs.workspace = true
-nix = { workspace = true, features = ["user"] }
+nix = { workspace = true, features = ["user", "fs"] }
 rand.workspace = true
 serde_json.workspace = true
 tracing.workspace = true
