@@ -1229,7 +1229,7 @@ impl TunnelRequestHandler {
                 .db
                 .create_session(
                     &sid,
-                    model.as_deref().unwrap_or("default"),
+                    model.as_deref().unwrap_or("claude-sonnet-4"),
                     &start_conv.working_directory,
                 )
                 .await
