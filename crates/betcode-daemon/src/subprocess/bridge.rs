@@ -4,8 +4,8 @@
 
 use betcode_core::ndjson::{
     AssistantMessage, ContentBlock, ControlRequest as NdjsonControlRequest,
-    ControlRequestType as NdjsonControlRequestType, Delta, Message, SessionResult, StopReason,
-    StreamEvent, StreamEventType, SystemInit, UserMessage,
+    ControlRequestType as NdjsonControlRequestType, Delta, Message, ResultSubtype, SessionResult,
+    StopReason, StreamEvent, StreamEventType, SystemInit, UserMessage,
 };
 use betcode_proto::v1::{
     self as proto, AgentEvent, AgentStatus, PermissionRequest, QuestionOption, SessionInfo,
@@ -317,8 +317,13 @@ impl EventBridge {
     fn handle_result(&mut self, result: SessionResult) -> Vec<AgentEvent> {
         let mut events = Vec::new();
 
-        // If Claude reported an error, emit an ErrorEvent before the status change
-        if result.is_error {
+        // If Claude reported an error, emit an ErrorEvent before the status change.
+        // Use `subtype` as the authoritative signal: when subtype is Success and
+        // there are no error messages, `is_error: true` is spurious (Claude Code
+        // can send this contradictory combination) and should not kill the session.
+        let has_real_error = result.is_error
+            && (result.subtype != ResultSubtype::Success || !result.errors.is_empty());
+        if has_real_error {
             let error_message = if result.errors.is_empty() {
                 format!("Claude exited with error (subtype: {:?})", result.subtype)
             } else {
@@ -333,6 +338,13 @@ impl EventBridge {
                 details: HashMap::default(),
             }));
             events.push(error_event);
+        } else if result.is_error {
+            // is_error is set but subtype is Success with no error messages —
+            // log for observability but don't emit a fatal error to the client.
+            warn!(
+                subtype = ?result.subtype,
+                "Claude result has is_error=true but subtype=Success with no errors, ignoring"
+            );
         }
 
         // Emit usage report
@@ -1042,6 +1054,43 @@ mod tests {
         let events = bridge.convert(Message::Result(result));
         // Should produce only 2 events: UsageReport, StatusChange(Idle) — no ErrorEvent
         assert_eq!(events.len(), 2, "expected usage + status events only");
+
+        assert!(matches!(
+            &events[0].event,
+            Some(proto::agent_event::Event::Usage(_))
+        ));
+        assert!(matches!(
+            &events[1].event,
+            Some(proto::agent_event::Event::StatusChange(_))
+        ));
+    }
+
+    #[test]
+    fn handle_result_is_error_true_but_subtype_success_no_errors_is_not_fatal() {
+        use betcode_core::ndjson::{ResultSubtype, Usage};
+
+        let mut bridge = EventBridge::new();
+        let result = SessionResult {
+            subtype: ResultSubtype::Success,
+            session_id: "sess-spurious".to_string(),
+            duration_ms: 500,
+            cost_usd: Some(0.005),
+            usage: Usage {
+                input_tokens: 50,
+                output_tokens: 25,
+                ..Default::default()
+            },
+            is_error: true,
+            errors: vec![],
+        };
+
+        let events = bridge.convert(Message::Result(result));
+        // is_error=true but subtype=Success with no errors: should NOT emit ErrorEvent
+        assert_eq!(
+            events.len(),
+            2,
+            "expected usage + status events only (no error)"
+        );
 
         assert!(matches!(
             &events[0].event,
