@@ -169,11 +169,14 @@ async fn handle_start(
     } else {
         start.session_id.clone()
     };
-    let model = if start.model.is_empty() {
-        "claude-sonnet-4".to_string()
+    // `model_for_cli` is `None` when the client doesn't specify a model,
+    // causing `--model` to be omitted so Claude Code uses its own default.
+    let model_for_cli = if start.model.is_empty() {
+        None
     } else {
-        start.model.clone()
+        Some(start.model.clone())
     };
+    let model_for_db = model_for_cli.as_deref().unwrap_or("default");
     let working_dir: std::path::PathBuf = start.working_directory.clone().into();
 
     // Check if session already exists in DB; create if new
@@ -183,7 +186,7 @@ async fn handle_start(
     } else {
         // New session - create in DB
         ctx.db
-            .create_session(&sid, &model, &start.working_directory)
+            .create_session(&sid, model_for_db, &start.working_directory)
             .await
             .map_err(|e| e.to_string())?;
         info!(session_id = %sid, "Created new session in database");
@@ -211,7 +214,7 @@ async fn handle_start(
     let config = RelaySessionConfig {
         session_id: sid.clone(),
         working_directory: working_dir,
-        model: Some(model),
+        model: model_for_cli,
         resume_session,
         worktree_id: start.worktree_id,
     };
