@@ -8,6 +8,7 @@
 //! ```
 
 use std::collections::{HashMap, HashSet};
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -81,8 +82,9 @@ impl SessionRelay {
         let (stdout_tx, stdout_rx) = mpsc::channel::<String>(256);
 
         // Spawn the Claude subprocess
+        let spawn_working_directory = config.working_directory;
         let spawn_config = SpawnConfig {
-            working_directory: config.working_directory,
+            working_directory: spawn_working_directory.clone(),
             prompt: initial_prompt,
             resume_session: config.resume_session,
             model: config.model,
@@ -128,6 +130,7 @@ impl SessionRelay {
             session_grants,
             stdin_tx: process_handle.stdin_tx.clone(),
             command_registry: Arc::clone(&self.command_registry),
+            working_directory: spawn_working_directory,
         });
 
         // Store the relay handle
@@ -347,6 +350,9 @@ struct StdoutPipelineContext {
     session_grants: Arc<tokio::sync::RwLock<HashMap<String, bool>>>,
     stdin_tx: tokio::sync::mpsc::Sender<String>,
     command_registry: Arc<RwLock<CommandRegistry>>,
+    /// The working directory used to spawn the subprocess. Injected into
+    /// `SessionInfo` events when Claude's stdout JSON omits the `cwd` field.
+    working_directory: PathBuf,
 }
 
 /// Spawn the stdout → NDJSON parser → `EventBridge` → forwarder pipeline.
@@ -365,6 +371,7 @@ fn spawn_stdout_pipeline(ctx: StdoutPipelineContext) {
         session_grants,
         stdin_tx,
         command_registry,
+        working_directory,
     } = ctx;
     tokio::spawn(async move {
         let sid = session_id.clone();
@@ -397,7 +404,28 @@ fn spawn_stdout_pipeline(ctx: StdoutPipelineContext) {
 
             // Capture the SystemInit flag before `convert` consumes `msg`.
             let is_system_init = matches!(msg, ndjson::Message::SystemInit(_));
-            let events = bridge.convert(msg);
+            let mut events = bridge.convert(msg);
+
+            // Inject the daemon's working directory into SessionInfo when
+            // Claude's stdout JSON didn't include a `cwd` field. The
+            // subprocess runs in the correct directory (set via current_dir)
+            // but the NDJSON output may omit or empty the cwd.
+            if is_system_init {
+                for event in &mut events {
+                    if let Some(betcode_proto::v1::agent_event::Event::SessionInfo(ref mut info)) =
+                        event.event
+                        && info.working_directory.is_empty()
+                    {
+                        debug!(
+                            session_id = %sid,
+                            working_directory = %working_directory.display(),
+                            "Injecting working_directory into SessionInfo \
+                             (Claude stdout omitted cwd)",
+                        );
+                        info.working_directory = working_directory.display().to_string();
+                    }
+                }
+            }
 
             // After processing a SystemInit, build the full session layer:
             // MCP entries + plugin/skill entries discovered from the session's
@@ -406,9 +434,16 @@ fn spawn_stdout_pipeline(ctx: StdoutPipelineContext) {
                 let mut session_entries: Vec<betcode_core::commands::CommandEntry> =
                     bridge.mcp_entries().to_vec();
 
-                // Discover plugins/skills from the session's cwd
-                if let Some(info) = bridge.session_info() {
-                    let claude_dir = std::path::Path::new(&info.working_directory).join(".claude");
+                // Discover plugins/skills from the session's cwd.
+                // Prefer the bridge's session_info (from Claude's JSON), but
+                // fall back to the daemon's working_directory when empty.
+                {
+                    let cwd = bridge
+                        .session_info()
+                        .map(|i| i.working_directory.clone())
+                        .filter(|d| !d.is_empty())
+                        .unwrap_or_else(|| working_directory.display().to_string());
+                    let claude_dir = std::path::Path::new(&cwd).join(".claude");
                     let plugin_entries = tokio::task::spawn_blocking(move || {
                         betcode_core::commands::discover_plugin_entries(&claude_dir)
                     })

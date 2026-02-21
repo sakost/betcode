@@ -1252,10 +1252,21 @@ impl TunnelRequestHandler {
         } else {
             Some(start_conv.model.clone())
         };
-        let working_dir: std::path::PathBuf = start_conv.working_directory.clone().into();
+        let mut working_dir: std::path::PathBuf = start_conv.working_directory.clone().into();
 
         // Create or resume session in DB
         let resume_session = if let Ok(existing) = self.db.get_session(&sid).await {
+            // If the client didn't send a working directory (e.g. reconnection
+            // or resume before worktrees loaded), use the stored value from the
+            // session record so the subprocess starts in the correct directory.
+            if working_dir.as_os_str().is_empty() && !existing.working_directory.is_empty() {
+                debug!(
+                    session_id = %sid,
+                    stored_dir = %existing.working_directory,
+                    "Using stored working_directory (client sent empty)",
+                );
+                working_dir = existing.working_directory.clone().into();
+            }
             existing.claude_session_id.filter(|s| !s.is_empty())
         } else {
             if let Err(e) = self
