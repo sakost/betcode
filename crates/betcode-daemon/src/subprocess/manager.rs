@@ -134,7 +134,6 @@ impl SubprocessManager {
             .arg("--input-format")
             .arg("stream-json")
             .arg("--verbose")
-            .arg("--include-partial-messages")
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
@@ -155,6 +154,8 @@ impl SubprocessManager {
 
         if let Some(ref prompt) = config.prompt {
             cmd.arg("-p").arg(prompt);
+            // --include-partial-messages requires -p (--print mode)
+            cmd.arg("--include-partial-messages");
         }
 
         if let Some(ref session) = config.resume_session {
