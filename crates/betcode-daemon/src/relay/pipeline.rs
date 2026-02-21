@@ -746,7 +746,7 @@ mod tests {
     #[tokio::test]
     async fn relay_creation() {
         let db = Database::open_in_memory().await.unwrap();
-        let subprocess_mgr = Arc::new(SubprocessManager::new(5));
+        let subprocess_mgr = Arc::new(SubprocessManager::new(5, "claude".into()));
         let multiplexer = Arc::new(SessionMultiplexer::with_defaults());
         let relay = SessionRelay::new(subprocess_mgr, multiplexer, db, test_command_registry());
         assert!(!relay.is_active("test-session").await);
@@ -755,7 +755,7 @@ mod tests {
     #[tokio::test]
     async fn get_handle_returns_none_for_unknown() {
         let db = Database::open_in_memory().await.unwrap();
-        let subprocess_mgr = Arc::new(SubprocessManager::new(5));
+        let subprocess_mgr = Arc::new(SubprocessManager::new(5, "claude".into()));
         let multiplexer = Arc::new(SessionMultiplexer::with_defaults());
         let relay = SessionRelay::new(subprocess_mgr, multiplexer, db, test_command_registry());
         assert!(relay.get_handle("nonexistent").await.is_none());
@@ -764,7 +764,7 @@ mod tests {
     #[tokio::test]
     async fn send_message_fails_for_unknown_session() {
         let db = Database::open_in_memory().await.unwrap();
-        let subprocess_mgr = Arc::new(SubprocessManager::new(5));
+        let subprocess_mgr = Arc::new(SubprocessManager::new(5, "claude".into()));
         let multiplexer = Arc::new(SessionMultiplexer::with_defaults());
         let relay = SessionRelay::new(subprocess_mgr, multiplexer, db, test_command_registry());
         let result = relay.send_user_message("nonexistent", "hello", None).await;
@@ -774,7 +774,7 @@ mod tests {
     #[tokio::test]
     async fn send_permission_fails_for_unknown_session() {
         let db = Database::open_in_memory().await.unwrap();
-        let subprocess_mgr = Arc::new(SubprocessManager::new(5));
+        let subprocess_mgr = Arc::new(SubprocessManager::new(5, "claude".into()));
         let multiplexer = Arc::new(SessionMultiplexer::with_defaults());
         let relay = SessionRelay::new(subprocess_mgr, multiplexer, db, test_command_registry());
         let result = relay
@@ -786,7 +786,7 @@ mod tests {
     #[tokio::test]
     async fn cancel_unknown_session_returns_false() {
         let db = Database::open_in_memory().await.unwrap();
-        let subprocess_mgr = Arc::new(SubprocessManager::new(5));
+        let subprocess_mgr = Arc::new(SubprocessManager::new(5, "claude".into()));
         let multiplexer = Arc::new(SessionMultiplexer::with_defaults());
         let relay = SessionRelay::new(subprocess_mgr, multiplexer, db, test_command_registry());
         let result = relay.cancel_session("nonexistent").await.unwrap();
@@ -796,7 +796,7 @@ mod tests {
     #[tokio::test]
     async fn send_question_response_fails_for_unknown_session() {
         let db = Database::open_in_memory().await.unwrap();
-        let subprocess_mgr = Arc::new(SubprocessManager::new(5));
+        let subprocess_mgr = Arc::new(SubprocessManager::new(5, "claude".into()));
         let multiplexer = Arc::new(SessionMultiplexer::with_defaults());
         let relay = SessionRelay::new(subprocess_mgr, multiplexer, db, test_command_registry());
         let answers: HashMap<String, String> =

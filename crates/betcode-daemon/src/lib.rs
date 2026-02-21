@@ -52,7 +52,7 @@ pub mod testutil {
     /// Panics if the in-memory database cannot be opened.
     pub async fn test_components() -> TestComponents {
         let db = Database::open_in_memory().await.unwrap();
-        let subprocess_mgr = Arc::new(SubprocessManager::new(5));
+        let subprocess_mgr = Arc::new(SubprocessManager::new(5, "claude".into()));
         let multiplexer = Arc::new(SessionMultiplexer::with_defaults());
         let command_registry = Arc::new(RwLock::new(CommandRegistry::new()));
         let relay = Arc::new(SessionRelay::new(

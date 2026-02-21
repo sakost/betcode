@@ -87,6 +87,7 @@ pub struct GrpcServer {
     repo_service: GitRepoServiceImpl,
     version_service: VersionServiceImpl,
     worktree_service: WorktreeServiceImpl,
+    claude_bin: std::path::PathBuf,
 }
 
 impl GrpcServer {
@@ -101,6 +102,7 @@ impl GrpcServer {
         subprocess_manager: SubprocessManager,
         shutdown_tx: tokio::sync::watch::Sender<bool>,
         worktree_base_dir: std::path::PathBuf,
+        claude_bin: std::path::PathBuf,
     ) -> Self {
         use crate::completion::agent_lister::{AgentInfo, AgentKind, AgentStatus};
 
@@ -153,8 +155,11 @@ impl GrpcServer {
         );
 
         let config_service = ConfigServiceImpl::new(config.clone());
-        let version_service =
-            VersionServiceImpl::new(config.clone(), std::collections::HashMap::new());
+        let version_service = VersionServiceImpl::new(
+            config.clone(),
+            std::collections::HashMap::new(),
+            claude_bin.clone(),
+        );
 
         let worktree_manager = WorktreeManager::new(db.clone(), worktree_base_dir);
         let repo_service = GitRepoServiceImpl::new(db.clone(), worktree_manager.clone());
@@ -171,6 +176,7 @@ impl GrpcServer {
             repo_service,
             version_service,
             worktree_service,
+            claude_bin,
         }
     }
 
@@ -189,7 +195,11 @@ impl GrpcServer {
 
         // Create subagent orchestration infrastructure
         let subagent_pool = Arc::new(SubprocessPool::new(5));
-        let subagent_manager = Arc::new(SubagentManager::new(subagent_pool, self.db.clone()));
+        let subagent_manager = Arc::new(SubagentManager::new(
+            subagent_pool,
+            self.db.clone(),
+            self.claude_bin.clone(),
+        ));
         let subagent_service = SubagentServiceImpl::new(subagent_manager, self.db.clone());
 
         let (grpc_health_reporter, grpc_health_service) = tonic_health::server::health_reporter();

@@ -4,6 +4,7 @@
 //! connecting to the daemon.
 
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use tokio::sync::OnceCell;
@@ -34,12 +35,9 @@ fn version_satisfies_min(version: &str, min_version: &str) -> bool {
     }
 }
 
-/// Cached result of running `claude --version`.
-static CLAUDE_VERSION_CACHE: OnceCell<Option<String>> = OnceCell::const_new();
-
 /// Detect the installed Claude Code version by running `claude --version`.
-async fn detect_claude_version() -> Option<String> {
-    let output = tokio::process::Command::new("claude")
+async fn detect_claude_version(claude_bin: PathBuf) -> Option<String> {
+    let output = tokio::process::Command::new(&claude_bin)
         .arg("--version")
         .output()
         .await
@@ -53,26 +51,35 @@ async fn detect_claude_version() -> Option<String> {
     }
 }
 
-/// Get (or lazily detect) the Claude Code version string.
-async fn claude_version() -> Option<String> {
-    CLAUDE_VERSION_CACHE
-        .get_or_init(detect_claude_version)
-        .await
-        .clone()
-}
-
 /// `VersionService` implementation.
 #[derive(Clone)]
 pub struct VersionServiceImpl {
     feature_flags: Arc<HashMap<String, bool>>,
+    claude_bin: PathBuf,
+    claude_version_cache: Arc<OnceCell<Option<String>>>,
 }
 
 impl VersionServiceImpl {
     /// Create a new `VersionServiceImpl`.
-    pub fn new(_config: ServerConfig, feature_flags: HashMap<String, bool>) -> Self {
+    pub fn new(
+        _config: ServerConfig,
+        feature_flags: HashMap<String, bool>,
+        claude_bin: PathBuf,
+    ) -> Self {
         Self {
             feature_flags: Arc::new(feature_flags),
+            claude_bin,
+            claude_version_cache: Arc::new(OnceCell::new()),
         }
+    }
+
+    /// Get (or lazily detect) the Claude Code version string.
+    async fn claude_version(&self) -> Option<String> {
+        let bin = self.claude_bin.clone();
+        self.claude_version_cache
+            .get_or_init(|| detect_claude_version(bin))
+            .await
+            .clone()
     }
 
     /// Build the capability set from current configuration.
@@ -123,7 +130,7 @@ impl VersionService for VersionServiceImpl {
             .map(|(k, _)| k.clone())
             .collect();
 
-        let claude_ver = claude_version().await;
+        let claude_ver = self.claude_version().await;
         let claude_code = claude_ver.map(|v| ClaudeCodeInfo {
             version: v,
             api_version: "v1".to_string(),
@@ -207,11 +214,11 @@ mod tests {
         let mut flags = HashMap::new();
         flags.insert("subagents".to_string(), true);
         flags.insert("e2e_encryption".to_string(), true);
-        VersionServiceImpl::new(ServerConfig::default(), flags)
+        VersionServiceImpl::new(ServerConfig::default(), flags, "claude".into())
     }
 
     fn test_service_no_flags() -> VersionServiceImpl {
-        VersionServiceImpl::new(ServerConfig::default(), HashMap::new())
+        VersionServiceImpl::new(ServerConfig::default(), HashMap::new(), "claude".into())
     }
 
     fn negotiate_request(version: &str, features: Vec<String>) -> Request<NegotiateRequest> {

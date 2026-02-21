@@ -75,6 +75,8 @@ pub struct SubprocessManager {
     processes: Arc<RwLock<HashMap<String, ProcessState>>>,
     /// Maximum concurrent processes.
     max_processes: usize,
+    /// Path to the `claude` binary.
+    claude_bin: PathBuf,
 }
 
 struct ProcessState {
@@ -86,10 +88,11 @@ struct ProcessState {
 
 impl SubprocessManager {
     /// Create a new subprocess manager.
-    pub fn new(max_processes: usize) -> Self {
+    pub fn new(max_processes: usize, claude_bin: PathBuf) -> Self {
         Self {
             processes: Arc::new(RwLock::new(HashMap::new())),
             max_processes,
+            claude_bin,
         }
     }
 
@@ -124,7 +127,7 @@ impl SubprocessManager {
         } else {
             config.working_directory.clone()
         };
-        let mut cmd = Command::new("claude");
+        let mut cmd = Command::new(&self.claude_bin);
         cmd.current_dir(&working_dir)
             .arg("--output-format")
             .arg("stream-json")
@@ -385,7 +388,7 @@ mod tests {
 
     #[tokio::test]
     async fn manager_respects_pool_limit() {
-        let manager = SubprocessManager::new(2);
+        let manager = SubprocessManager::new(2, "claude".into());
         assert_eq!(manager.active_count().await, 0);
     }
 

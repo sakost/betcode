@@ -109,6 +109,8 @@ const ORCHESTRATION_BROADCAST_CAPACITY: usize = 256;
 pub struct SubagentManager {
     pool: Arc<SubprocessPool>,
     db: Database,
+    /// Path to the `claude` binary.
+    claude_bin: PathBuf,
     /// Active subagents keyed by subagent ID.
     running: Arc<RwLock<HashMap<String, RunningSubagent>>>,
     /// Active orchestrations keyed by orchestration ID.
@@ -119,10 +121,11 @@ pub struct SubagentManager {
 
 impl SubagentManager {
     /// Create a new manager backed by the given pool and database.
-    pub fn new(pool: Arc<SubprocessPool>, db: Database) -> Self {
+    pub fn new(pool: Arc<SubprocessPool>, db: Database, claude_bin: PathBuf) -> Self {
         Self {
             pool,
             db,
+            claude_bin,
             running: Arc::new(RwLock::new(HashMap::new())),
             orchestrations: Arc::new(RwLock::new(HashMap::new())),
             subagent_to_orchestration: Arc::new(RwLock::new(HashMap::new())),
@@ -176,7 +179,7 @@ impl SubagentManager {
             config.working_directory.clone()
         };
 
-        let mut cmd = Command::new("claude");
+        let mut cmd = Command::new(&self.claude_bin);
         cmd.current_dir(&working_dir)
             .arg("--output-format")
             .arg("stream-json")
@@ -1101,14 +1104,14 @@ mod tests {
     async fn manager_creation() {
         let db = test_db().await;
         let pool = test_pool();
-        let _manager = SubagentManager::new(pool, db);
+        let _manager = SubagentManager::new(pool, db, "claude".into());
     }
 
     #[tokio::test]
     async fn spawn_validates_empty_prompt() {
         let db = test_db().await;
         let pool = test_pool();
-        let manager = SubagentManager::new(pool, db);
+        let manager = SubagentManager::new(pool, db, "claude".into());
 
         let mut config = test_config();
         config.prompt = String::new();
@@ -1128,7 +1131,7 @@ mod tests {
     async fn spawn_validates_auto_approve_requires_tools() {
         let db = test_db().await;
         let pool = test_pool();
-        let manager = SubagentManager::new(pool, db);
+        let manager = SubagentManager::new(pool, db, "claude".into());
 
         let mut config = test_config();
         config.auto_approve = true;
@@ -1149,7 +1152,7 @@ mod tests {
     async fn is_running_returns_false_for_nonexistent() {
         let db = test_db().await;
         let pool = test_pool();
-        let manager = SubagentManager::new(pool, db);
+        let manager = SubagentManager::new(pool, db, "claude".into());
 
         assert!(!manager.is_running("nonexistent").await);
     }
@@ -1158,7 +1161,7 @@ mod tests {
     async fn cancel_nonexistent_returns_false() {
         let db = test_db().await;
         let pool = test_pool();
-        let manager = SubagentManager::new(pool, db);
+        let manager = SubagentManager::new(pool, db, "claude".into());
 
         let result = manager.cancel("nonexistent", "test").await;
         assert!(matches!(result, Ok(false)));
@@ -1168,7 +1171,7 @@ mod tests {
     async fn subscribe_nonexistent_returns_error() {
         let db = test_db().await;
         let pool = test_pool();
-        let manager = SubagentManager::new(pool, db);
+        let manager = SubagentManager::new(pool, db, "claude".into());
 
         let result = manager.subscribe("nonexistent").await;
         assert!(result.is_err());
@@ -1178,7 +1181,7 @@ mod tests {
     async fn send_input_nonexistent_returns_error() {
         let db = test_db().await;
         let pool = test_pool();
-        let manager = SubagentManager::new(pool, db);
+        let manager = SubagentManager::new(pool, db, "claude".into());
 
         let result = manager.send_input("nonexistent", "hello").await;
         assert!(result.is_err());
@@ -1188,7 +1191,7 @@ mod tests {
     async fn revoke_auto_approve_nonexistent() {
         let db = test_db().await;
         let pool = test_pool();
-        let manager = SubagentManager::new(pool, db);
+        let manager = SubagentManager::new(pool, db, "claude".into());
 
         let result = manager.revoke_auto_approve("nonexistent").await;
         assert!(matches!(result, Ok(false)));
@@ -1256,7 +1259,7 @@ mod tests {
     async fn subscribe_orchestration_returns_error_for_unknown() {
         let db = test_db().await;
         let pool = test_pool();
-        let manager = SubagentManager::new(pool, db);
+        let manager = SubagentManager::new(pool, db, "claude".into());
 
         let result = manager.subscribe_orchestration("nonexistent").await;
         assert!(result.is_err());
@@ -1322,7 +1325,7 @@ mod tests {
         // Verify that OrchestrationState is properly managed in the map
         let db = test_db().await;
         let pool = test_pool();
-        let manager = SubagentManager::new(pool, db);
+        let manager = SubagentManager::new(pool, db, "claude".into());
 
         // Manually insert an orchestration state
         let (event_tx, _) = broadcast::channel(16);
@@ -1396,7 +1399,7 @@ mod tests {
     async fn subscribe_orchestration_receives_events() {
         let db = test_db().await;
         let pool = test_pool();
-        let manager = SubagentManager::new(pool, db);
+        let manager = SubagentManager::new(pool, db, "claude".into());
 
         let tx = insert_orchestration_state(&manager, "orch-sub-1").await;
 
@@ -1436,7 +1439,7 @@ mod tests {
     async fn subscribe_orchestration_multiple_subscribers() {
         let db = test_db().await;
         let pool = test_pool();
-        let manager = SubagentManager::new(pool, db);
+        let manager = SubagentManager::new(pool, db, "claude".into());
 
         let tx = insert_orchestration_state(&manager, "orch-multi-1").await;
 
@@ -1489,7 +1492,7 @@ mod tests {
         // available.
         let db = test_db().await;
         let pool = test_pool();
-        let manager = Arc::new(SubagentManager::new(pool, db.clone()));
+        let manager = Arc::new(SubagentManager::new(pool, db.clone(), "claude".into()));
 
         let steps = vec![
             make_step("p-1", "task one", vec![]),
@@ -1534,7 +1537,7 @@ mod tests {
         // manager stores them in the DB via run_orchestration.
         let db = test_db().await;
         let pool = test_pool();
-        let manager = Arc::new(SubagentManager::new(pool, db.clone()));
+        let manager = Arc::new(SubagentManager::new(pool, db.clone(), "claude".into()));
 
         // Pre-chain dependencies the same way the gRPC layer does for Sequential.
         let steps = vec![

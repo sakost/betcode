@@ -530,7 +530,7 @@ mod tests {
         );
         config.identity_key_path = Some(key_path);
         let db = Database::open_in_memory().await.unwrap();
-        let sub = Arc::new(SubprocessManager::new(5));
+        let sub = Arc::new(SubprocessManager::new(5, "claude".into()));
         let mux = Arc::new(SessionMultiplexer::with_defaults());
         let command_registry = Arc::new(tokio::sync::RwLock::new(
             crate::commands::CommandRegistry::new(),

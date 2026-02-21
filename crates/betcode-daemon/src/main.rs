@@ -74,6 +74,10 @@ struct Args {
     #[arg(long, env = "BETCODE_WORKTREE_DIR")]
     worktree_dir: Option<PathBuf>,
 
+    /// Path to the `claude` CLI binary
+    #[arg(long, default_value = "claude", env = "BETCODE_CLAUDE_BIN")]
+    claude_bin: PathBuf,
+
     /// Output logs as JSON (for structured log aggregation).
     #[arg(long, env = "BETCODE_LOG_JSON")]
     log_json: bool,
@@ -123,7 +127,7 @@ async fn main() -> anyhow::Result<()> {
     };
 
     // Create subprocess manager
-    let subprocess_manager = SubprocessManager::new(args.max_processes);
+    let subprocess_manager = SubprocessManager::new(args.max_processes, args.claude_bin.clone());
 
     // Daemon-level shutdown channel (triggered by exit-daemon command or Ctrl+C)
     let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
@@ -146,6 +150,7 @@ async fn main() -> anyhow::Result<()> {
         subprocess_manager,
         shutdown_tx.clone(),
         worktree_dir,
+        args.claude_bin,
     )
     .await;
 

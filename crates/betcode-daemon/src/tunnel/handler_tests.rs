@@ -82,7 +82,7 @@ impl HandlerTestBuilder {
     #[allow(clippy::too_many_lines)]
     async fn build(self) -> HandlerTestOutput {
         let db = Database::open_in_memory().await.unwrap();
-        let sub = Arc::new(SubprocessManager::new(self.max_processes));
+        let sub = Arc::new(SubprocessManager::new(self.max_processes, "claude".into()));
         let mux = Arc::new(SessionMultiplexer::with_defaults());
         let command_registry = Arc::new(RwLock::new(CommandRegistry::new()));
         let relay = Arc::new(SessionRelay::new(

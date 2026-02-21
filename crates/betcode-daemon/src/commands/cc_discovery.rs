@@ -15,8 +15,8 @@ pub struct DiscoveryResult {
 }
 
 /// Runs `claude --version` and returns the version string.
-pub async fn detect_cc_version() -> anyhow::Result<String> {
-    let output = tokio::process::Command::new("claude")
+pub async fn detect_cc_version(claude_bin: &std::path::Path) -> anyhow::Result<String> {
+    let output = tokio::process::Command::new(claude_bin)
         .arg("--version")
         .output()
         .await?;

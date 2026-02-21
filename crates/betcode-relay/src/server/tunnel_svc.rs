@@ -220,12 +220,22 @@ impl TunnelService for TunnelServiceImpl {
                                     warn!(request_id = %rid, "No pending waiter for StreamData");
                                 }
                             }
-                        } else if frame_type == FrameType::Response as i32
-                            || frame_type == FrameType::Error as i32
-                        {
-                            // Unary response or error: complete the oneshot pending
+                        } else if frame_type == FrameType::Error as i32 {
+                            // Error may target either a streaming or unary request.
+                            // Try stream channel first (Converse path), then fall back to unary.
+                            if !conn_ref.send_stream_frame(&rid, frame.clone()).await
+                                && !conn_ref.complete_pending(&rid, frame).await
+                            {
+                                if conn_ref.is_cancelled_stream(&rid).await {
+                                    debug!(request_id = %rid, "Dropping Error for cancelled stream");
+                                } else {
+                                    warn!(request_id = %rid, "No pending waiter for Error frame");
+                                }
+                            }
+                        } else if frame_type == FrameType::Response as i32 {
+                            // Unary response: complete the oneshot pending
                             if !conn_ref.complete_pending(&rid, frame).await {
-                                warn!(request_id = %rid, frame_type, "No pending waiter for frame");
+                                warn!(request_id = %rid, "No pending waiter for Response frame");
                             }
                         }
                     }

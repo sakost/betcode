@@ -178,7 +178,7 @@ mod tests {
 
     async fn test_health_service() -> HealthServiceImpl {
         let db = Database::open_in_memory().await.unwrap();
-        let subprocess_mgr = Arc::new(SubprocessManager::new(5));
+        let subprocess_mgr = Arc::new(SubprocessManager::new(5, "claude".into()));
         HealthServiceImpl::new(db, subprocess_mgr)
     }
 

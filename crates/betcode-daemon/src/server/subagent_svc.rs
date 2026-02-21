@@ -437,7 +437,7 @@ mod tests {
             .unwrap();
 
         let pool = Arc::new(SubprocessPool::new(3));
-        let manager = Arc::new(SubagentManager::new(pool, db.clone()));
+        let manager = Arc::new(SubagentManager::new(pool, db.clone(), "claude".into()));
 
         SubagentServiceImpl::new(manager, db)
     }
