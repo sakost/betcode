@@ -22,6 +22,20 @@ use super::config::ServerConfig;
 /// Minimum client version required to connect.
 const MIN_CLIENT_VERSION: &str = "0.1.0";
 
+/// Known valid model identifiers accepted by Claude Code CLI.
+///
+/// There is no `claude model list` command yet
+/// (<https://github.com/anthropics/claude-code/issues/12612>), so this list
+/// is maintained manually based on the Claude Code model configuration docs.
+/// Clients can query these via `NegotiateCapabilities → CapabilitySet.available_models`.
+const KNOWN_MODELS: &[&str] = &[
+    "claude-sonnet-4-6",
+    "claude-opus-4-6",
+    "claude-sonnet-4-5-20250929",
+    "claude-opus-4-5-20251101",
+    "claude-haiku-4-5-20251001",
+];
+
 /// Compare two semver version strings.
 /// Returns `true` if `version` >= `min_version`.
 /// Non-parseable versions return `false`.
@@ -89,7 +103,7 @@ impl VersionServiceImpl {
             compression_supported: false,
             max_message_size: 10 * 1024 * 1024, // 10 MB
             available_tools: Vec::new(),
-            available_models: vec!["claude-sonnet-4-5-20250929".to_string()],
+            available_models: KNOWN_MODELS.iter().map(|s| (*s).to_string()).collect(),
             subagents_enabled: self
                 .feature_flags
                 .get("subagents")

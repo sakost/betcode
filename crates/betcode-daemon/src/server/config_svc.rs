@@ -38,7 +38,7 @@ impl ConfigServiceImpl {
                 max_payload_bytes: 0,
             }),
             sessions: Some(SessionSettings {
-                default_model: "claude-sonnet-4-5-20250929".into(),
+                default_model: "claude-sonnet-4-6".into(),
                 auto_compact: true,
                 auto_compact_threshold: 80,
                 max_messages_per_session: 0,
@@ -145,7 +145,7 @@ mod tests {
 
         // Session settings
         let sessions = settings.sessions.expect("session settings present");
-        assert_eq!(sessions.default_model, "claude-sonnet-4-5-20250929");
+        assert_eq!(sessions.default_model, "claude-sonnet-4-6");
         assert!(sessions.auto_compact);
         assert_eq!(sessions.auto_compact_threshold, 80);
 
