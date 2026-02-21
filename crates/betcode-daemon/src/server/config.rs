@@ -18,8 +18,23 @@ pub struct ServerConfig {
     /// Maximum concurrent clients per session.
     pub max_clients_per_session: usize,
 
+    /// Maximum concurrent subprocess pool size.
+    pub max_processes: usize,
+
     /// Heartbeat timeout in seconds.
     pub heartbeat_timeout_secs: u64,
+
+    /// Buffer size for subprocess stdin channel.
+    pub stdin_channel_size: usize,
+
+    /// Buffer size for subprocess stdout channel.
+    pub stdout_channel_size: usize,
+
+    /// HTTP/2 keepalive interval in seconds.
+    pub keepalive_interval_secs: u64,
+
+    /// HTTP/2 keepalive timeout in seconds.
+    pub keepalive_timeout_secs: u64,
 }
 
 impl Default for ServerConfig {
@@ -29,7 +44,12 @@ impl Default for ServerConfig {
             unix_socket: None,
             max_sessions: 10,
             max_clients_per_session: 5,
+            max_processes: 5,
             heartbeat_timeout_secs: 30,
+            stdin_channel_size: 32,
+            stdout_channel_size: 256,
+            keepalive_interval_secs: 30,
+            keepalive_timeout_secs: 10,
         }
     }
 }
@@ -65,6 +85,13 @@ impl ServerConfig {
     #[must_use]
     pub const fn with_max_clients_per_session(mut self, max: usize) -> Self {
         self.max_clients_per_session = max;
+        self
+    }
+
+    /// Set max concurrent subprocess pool size.
+    #[must_use]
+    pub const fn with_max_processes(mut self, max: usize) -> Self {
+        self.max_processes = max;
         self
     }
 }

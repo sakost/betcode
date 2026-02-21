@@ -93,6 +93,8 @@ pub struct DaemonSetupConfig {
     pub relay_password: Option<String>,
     pub relay_custom_ca_cert: Option<PathBuf>,
     pub worktree_dir: Option<PathBuf>,
+    /// Path to the `claude` CLI binary (for env file generation).
+    pub claude_bin: Option<PathBuf>,
     pub daemon_binary_path: Option<PathBuf>,
     /// Whether to enable lingering for user services
     pub enable_linger: bool,

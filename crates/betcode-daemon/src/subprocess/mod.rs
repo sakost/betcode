@@ -4,4 +4,6 @@ pub mod bridge;
 pub mod manager;
 
 pub use bridge::EventBridge;
-pub use manager::{ProcessHandle, SpawnConfig, SubprocessError, SubprocessManager};
+pub use manager::{
+    PermissionStrategy, ProcessHandle, SpawnConfig, SubprocessError, SubprocessManager,
+};

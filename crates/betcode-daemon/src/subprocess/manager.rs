@@ -37,8 +37,6 @@ pub struct SpawnConfig {
     pub resume_session: Option<String>,
     /// Model to use.
     pub model: Option<String>,
-    /// Maximum subprocess pool size.
-    pub max_processes: usize,
     /// Permission handling strategy.
     pub permission_strategy: PermissionStrategy,
 }
@@ -50,7 +48,6 @@ impl Default for SpawnConfig {
             prompt: None,
             resume_session: None,
             model: None,
-            max_processes: 5,
             permission_strategy: PermissionStrategy::default(),
         }
     }
@@ -77,6 +74,10 @@ pub struct SubprocessManager {
     max_processes: usize,
     /// Path to the `claude` binary.
     claude_bin: PathBuf,
+    /// Default permission strategy for new subprocesses.
+    default_permission_strategy: PermissionStrategy,
+    /// Timeout for graceful subprocess termination before SIGKILL.
+    terminate_timeout: std::time::Duration,
 }
 
 struct ProcessState {
@@ -93,7 +94,30 @@ impl SubprocessManager {
             processes: Arc::new(RwLock::new(HashMap::new())),
             max_processes,
             claude_bin,
+            default_permission_strategy: PermissionStrategy::default(),
+            terminate_timeout: std::time::Duration::from_secs(5),
         }
+    }
+
+    /// Create a new subprocess manager with full configuration.
+    pub fn with_options(
+        max_processes: usize,
+        claude_bin: PathBuf,
+        default_permission_strategy: PermissionStrategy,
+        terminate_timeout_secs: u64,
+    ) -> Self {
+        Self {
+            processes: Arc::new(RwLock::new(HashMap::new())),
+            max_processes,
+            claude_bin,
+            default_permission_strategy,
+            terminate_timeout: std::time::Duration::from_secs(terminate_timeout_secs),
+        }
+    }
+
+    /// Get the default permission strategy.
+    pub const fn default_permission_strategy(&self) -> &PermissionStrategy {
+        &self.default_permission_strategy
     }
 
     /// Spawn a new Claude subprocess.
@@ -117,7 +141,12 @@ impl SubprocessManager {
         let working_dir = if config.working_directory.as_os_str().is_empty()
             || !config.working_directory.exists()
         {
-            let fallback = dirs::home_dir().unwrap_or_else(std::env::temp_dir);
+            let fallback = dirs::home_dir().unwrap_or_else(|| {
+                warn!(
+                    "dirs::home_dir() returned None; falling back to temp_dir for working directory"
+                );
+                std::env::temp_dir()
+            });
             warn!(
                 requested = %config.working_directory.display(),
                 fallback = %fallback.display(),
@@ -137,6 +166,18 @@ impl SubprocessManager {
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
+
+        // Ensure essential env vars are available to the subprocess even
+        // when running under systemd with stripped environment.
+        if let Ok(home) = std::env::var("HOME") {
+            cmd.env("HOME", &home);
+        }
+        if let Ok(path) = std::env::var("PATH") {
+            cmd.env("PATH", &path);
+        }
+        if let Ok(key) = std::env::var("ANTHROPIC_API_KEY") {
+            cmd.env("ANTHROPIC_API_KEY", &key);
+        }
 
         match &config.permission_strategy {
             PermissionStrategy::PromptToolStdio => {
@@ -319,7 +360,7 @@ impl SubprocessManager {
         }
 
         // Wait with timeout
-        match tokio::time::timeout(std::time::Duration::from_secs(5), state.child.wait()).await {
+        match tokio::time::timeout(self.terminate_timeout, state.child.wait()).await {
             Ok(Ok(status)) => {
                 info!(process_id, ?status, "Process exited gracefully");
                 Ok(())
@@ -396,7 +437,6 @@ mod tests {
     #[tokio::test]
     async fn spawn_config_defaults() {
         let config = SpawnConfig::default();
-        assert_eq!(config.max_processes, 5);
         assert!(config.prompt.is_none());
         assert!(config.resume_session.is_none());
     }

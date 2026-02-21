@@ -86,7 +86,6 @@ impl SessionRelay {
             prompt: initial_prompt,
             resume_session: config.resume_session,
             model: config.model,
-            max_processes: 5,
             ..Default::default()
         };
 

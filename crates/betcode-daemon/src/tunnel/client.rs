@@ -170,10 +170,13 @@ impl TunnelClient {
     /// Load or generate the X25519 identity keypair.
     fn load_identity(config: &TunnelConfig) -> Result<IdentityKeyPair, TunnelClientError> {
         let path = config.identity_key_path.clone().unwrap_or_else(|| {
-            dirs::config_dir()
-                .unwrap_or_else(|| std::path::PathBuf::from("."))
-                .join("betcode")
-                .join("identity.key")
+            dirs::home_dir().map_or_else(
+                || {
+                    warn!("dirs::home_dir() returned None; falling back to current directory for identity key");
+                    std::path::PathBuf::from(".").join("identity.key")
+                },
+                |home| home.join(".betcode").join("identity.key"),
+            )
         });
         IdentityKeyPair::load_or_generate(&path)
             .map_err(|e| TunnelClientError::Auth(format!("Failed to load identity key: {e}")))

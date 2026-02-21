@@ -22,6 +22,9 @@ use super::config::ServerConfig;
 /// Minimum client version required to connect.
 const MIN_CLIENT_VERSION: &str = "0.1.0";
 
+/// Default maximum message size for gRPC payloads (10 MB).
+const DEFAULT_MAX_MESSAGE_SIZE: u32 = 10 * 1024 * 1024;
+
 /// Known valid model identifiers accepted by Claude Code CLI.
 ///
 /// There is no `claude model list` command yet
@@ -101,7 +104,7 @@ impl VersionServiceImpl {
         CapabilitySet {
             streaming_supported: true,
             compression_supported: false,
-            max_message_size: 10 * 1024 * 1024, // 10 MB
+            max_message_size: DEFAULT_MAX_MESSAGE_SIZE,
             available_tools: Vec::new(),
             available_models: KNOWN_MODELS.iter().map(|s| (*s).to_string()).collect(),
             subagents_enabled: self
@@ -367,7 +370,7 @@ mod tests {
         assert!(!caps.compression_supported);
         assert!(caps.subagents_enabled);
         assert!(caps.worktrees_enabled);
-        assert_eq!(caps.max_message_size, 10 * 1024 * 1024);
+        assert_eq!(caps.max_message_size, DEFAULT_MAX_MESSAGE_SIZE);
     }
 
     #[tokio::test]

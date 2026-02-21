@@ -22,7 +22,9 @@ RestartSec=5
 # Hardening
 NoNewPrivileges=true
 ProtectSystem=strict
-ProtectHome=true
+ProtectHome=tmpfs
+BindReadOnlyPaths=/home/{user}/.claude
+BindReadOnlyPaths=/home/{user}/.local/bin
 ReadWritePaths=/var/lib/betcode
 ReadOnlyPaths=/etc/betcode
 PrivateTmp=true
@@ -82,6 +84,9 @@ pub fn env_file(config: &DaemonSetupConfig) -> String {
     if let Some(ref dir) = config.worktree_dir {
         lines.push(format!("BETCODE_WORKTREE_DIR={}", dir.display()));
     }
+    if let Some(ref bin) = config.claude_bin {
+        lines.push(format!("BETCODE_CLAUDE_BIN={}", bin.display()));
+    }
 
     let mut result = lines.join("\n");
     result.push('\n');
@@ -117,7 +122,7 @@ mod tests {
         let unit = systemd_unit_system(&config);
         assert!(unit.contains("NoNewPrivileges=true"));
         assert!(unit.contains("ProtectSystem=strict"));
-        assert!(unit.contains("ProtectHome=true"));
+        assert!(unit.contains("ProtectHome=tmpfs"));
     }
 
     #[test]
@@ -164,6 +169,29 @@ mod tests {
         assert!(!content.contains("BETCODE_RELAY_URL"));
         assert!(!content.contains("BETCODE_RELAY_USERNAME"));
         assert!(!content.contains("BETCODE_RELAY_PASSWORD"));
+    }
+
+    #[test]
+    fn env_file_includes_claude_bin_when_set() {
+        let mut config = make_test_daemon_config(DaemonMode::System);
+        config.claude_bin = Some(PathBuf::from("/usr/local/bin/claude"));
+        let content = env_file(&config);
+        assert!(content.contains("BETCODE_CLAUDE_BIN=/usr/local/bin/claude"));
+    }
+
+    #[test]
+    fn env_file_omits_claude_bin_when_unset() {
+        let config = make_test_daemon_config(DaemonMode::System);
+        let content = env_file(&config);
+        assert!(!content.contains("BETCODE_CLAUDE_BIN"));
+    }
+
+    #[test]
+    fn system_unit_has_bind_mounts_for_claude() {
+        let config = make_test_daemon_config(DaemonMode::System);
+        let unit = systemd_unit_system(&config);
+        assert!(unit.contains("BindReadOnlyPaths=/home/betcode/.claude"));
+        assert!(unit.contains("BindReadOnlyPaths=/home/betcode/.local/bin"));
     }
 
     #[test]

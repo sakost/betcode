@@ -174,7 +174,12 @@ impl SubagentManager {
         let working_dir = if config.working_directory.as_os_str().is_empty()
             || !config.working_directory.exists()
         {
-            dirs::home_dir().unwrap_or_else(std::env::temp_dir)
+            dirs::home_dir().unwrap_or_else(|| {
+                warn!(
+                    "dirs::home_dir() returned None; falling back to temp_dir for working directory"
+                );
+                std::env::temp_dir()
+            })
         } else {
             config.working_directory.clone()
         };
@@ -190,6 +195,18 @@ impl SubagentManager {
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
 
+        // Ensure essential env vars are available to the subprocess even
+        // when running under systemd with stripped environment.
+        if let Ok(home) = std::env::var("HOME") {
+            cmd.env("HOME", &home);
+        }
+        if let Ok(path) = std::env::var("PATH") {
+            cmd.env("PATH", &path);
+        }
+        if let Ok(key) = std::env::var("ANTHROPIC_API_KEY") {
+            cmd.env("ANTHROPIC_API_KEY", &key);
+        }
+
         // Permission handling
         if config.auto_approve && !config.allowed_tools.is_empty() {
             cmd.arg("--allowedTools").args(&config.allowed_tools);
@@ -197,6 +214,8 @@ impl SubagentManager {
 
         // Prompt
         cmd.arg("-p").arg(&config.prompt);
+        // --include-partial-messages requires -p (--print mode)
+        cmd.arg("--include-partial-messages");
 
         // Model
         if let Some(ref model) = config.model {

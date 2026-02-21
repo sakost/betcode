@@ -194,7 +194,7 @@ impl GrpcServer {
             HealthServiceImpl::new(self.db.clone(), Arc::clone(&self.subprocess_manager));
 
         // Create subagent orchestration infrastructure
-        let subagent_pool = Arc::new(SubprocessPool::new(5));
+        let subagent_pool = Arc::new(SubprocessPool::new(self.config.max_processes));
         let subagent_manager = Arc::new(SubagentManager::new(
             subagent_pool,
             self.db.clone(),
@@ -208,8 +208,12 @@ impl GrpcServer {
             .await;
 
         Server::builder()
-            .http2_keepalive_interval(Some(Duration::from_secs(30)))
-            .http2_keepalive_timeout(Some(Duration::from_secs(10)))
+            .http2_keepalive_interval(Some(Duration::from_secs(
+                self.config.keepalive_interval_secs,
+            )))
+            .http2_keepalive_timeout(Some(Duration::from_secs(
+                self.config.keepalive_timeout_secs,
+            )))
             .add_service(grpc_health_service)
             .add_service(AgentServiceServer::new(agent_service))
             .add_service(CommandServiceServer::new(self.command_service))

@@ -78,6 +78,23 @@ struct Args {
     #[arg(long, default_value = "claude", env = "BETCODE_CLAUDE_BIN")]
     claude_bin: PathBuf,
 
+    /// Log level filter for the daemon (e.g. "info", "debug", "warn").
+    #[arg(long, default_value = "info", env = "BETCODE_LOG_LEVEL")]
+    log_level: String,
+
+    /// Default permission strategy for subprocesses.
+    #[arg(
+        long,
+        default_value = "prompt-tool-stdio",
+        env = "BETCODE_PERMISSION_STRATEGY",
+        value_parser = ["prompt-tool-stdio", "skip-permissions"]
+    )]
+    permission_strategy: String,
+
+    /// Seconds to wait for graceful subprocess shutdown before SIGKILL.
+    #[arg(long, default_value_t = 5, env = "BETCODE_TERMINATE_TIMEOUT")]
+    terminate_timeout: u64,
+
     /// Output logs as JSON (for structured log aggregation).
     #[arg(long, env = "BETCODE_LOG_JSON")]
     log_json: bool,
@@ -101,8 +118,9 @@ async fn main() -> anyhow::Result<()> {
     let metrics_endpoint: Option<&str> = None;
 
     // Hold the guard so the OTel pipeline stays alive for the process lifetime.
+    let log_filter = format!("betcode_daemon={}", args.log_level);
     let _metrics_guard = betcode_core::tracing_init::init_tracing_with_metrics(
-        "betcode_daemon=info",
+        &log_filter,
         args.log_json,
         metrics_endpoint,
     );
@@ -126,8 +144,19 @@ async fn main() -> anyhow::Result<()> {
         Database::open(&default_path).await?
     };
 
+    // Parse permission strategy
+    let default_permission_strategy = match args.permission_strategy.as_str() {
+        "skip-permissions" => betcode_daemon::subprocess::PermissionStrategy::SkipPermissions,
+        _ => betcode_daemon::subprocess::PermissionStrategy::PromptToolStdio,
+    };
+
     // Create subprocess manager
-    let subprocess_manager = SubprocessManager::new(args.max_processes, args.claude_bin.clone());
+    let subprocess_manager = SubprocessManager::with_options(
+        args.max_processes,
+        args.claude_bin.clone(),
+        default_permission_strategy,
+        args.terminate_timeout,
+    );
 
     // Daemon-level shutdown channel (triggered by exit-daemon command or Ctrl+C)
     let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
@@ -143,7 +172,9 @@ async fn main() -> anyhow::Result<()> {
     };
 
     // Create and start gRPC server
-    let config = ServerConfig::tcp(args.addr).with_max_sessions(args.max_sessions);
+    let config = ServerConfig::tcp(args.addr)
+        .with_max_sessions(args.max_sessions)
+        .with_max_processes(args.max_processes);
     let server = GrpcServer::new(
         config,
         db,

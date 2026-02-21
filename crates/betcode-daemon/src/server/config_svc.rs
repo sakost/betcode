@@ -30,7 +30,8 @@ impl ConfigServiceImpl {
     fn build_settings(&self) -> Settings {
         Settings {
             daemon: Some(DaemonSettings {
-                max_subprocesses: 5,
+                #[allow(clippy::cast_possible_truncation)]
+                max_subprocesses: self.config.max_processes as u32,
                 socket_path: String::new(),
                 port: self.config.tcp_addr.map_or(0, |a| u32::from(a.port())),
                 database_path: String::new(),
@@ -138,6 +139,7 @@ mod tests {
 
         // Daemon settings
         let daemon = settings.daemon.expect("daemon settings present");
+        // Default ServerConfig has max_processes = 5
         assert_eq!(daemon.max_subprocesses, 5);
         assert_eq!(daemon.log_level, "info");
         // Default ServerConfig has tcp_addr = 127.0.0.1:50051
