@@ -1013,26 +1013,36 @@ impl TunnelRequestHandler {
         };
 
         // Check if we need to start the subprocess (deferred from handle_converse).
-        // Take the config under a write lock so only the first message triggers start.
-        let pending = {
-            let mut streams = self.active_streams.write().await;
-            streams
-                .get_mut(request_id)
-                .and_then(|a| a.pending_config.take())
-        };
-
-        // When doing a deferred spawn, pass the first UserMessage as the `-p`
-        // prompt so Claude starts in headless print mode (not interactive TUI).
-        // Track whether the message was consumed as a prompt to avoid double-sending.
+        // Only consume the pending config when the request is a UserMessage so we
+        // can pass the content as the `-p` prompt for headless mode. If the first
+        // StreamData frame is NOT a UserMessage (e.g. a re-sent Start, a
+        // Permission, or an empty request), leave pending_config in place so the
+        // actual user message can trigger the spawn later.
         use betcode_proto::v1::agent_request::Request;
-        let initial_prompt = if pending.is_some() {
-            if let Some(Request::Message(ref msg)) = req.request {
-                Some(msg.content.clone())
+        let (pending, initial_prompt) = {
+            let mut streams = self.active_streams.write().await;
+            if let Some(active) = streams.get_mut(request_id) {
+                if active.pending_config.is_some() {
+                    if let Some(Request::Message(ref msg)) = req.request {
+                        // First UserMessage — consume config and use content as prompt
+                        let config = active.pending_config.take();
+                        (config, Some(msg.content.clone()))
+                    } else {
+                        // Non-message request while subprocess hasn't started yet.
+                        // Leave pending_config in place; log for diagnostics.
+                        info!(
+                            request_id = %request_id,
+                            request_type = ?req.request.as_ref().map(std::mem::discriminant),
+                            "Ignoring non-UserMessage request while subprocess start is pending"
+                        );
+                        (None, None)
+                    }
+                } else {
+                    (None, None)
+                }
             } else {
-                None
+                (None, None)
             }
-        } else {
-            None
         };
 
         if let Some(config) = pending {
@@ -1040,7 +1050,7 @@ impl TunnelRequestHandler {
                 request_id = %request_id,
                 session_id = %sid,
                 has_initial_prompt = initial_prompt.is_some(),
-                "Starting deferred subprocess on first user input"
+                "Starting deferred subprocess on first user message"
             );
             if let Err(e) = self
                 .relay
