@@ -54,9 +54,15 @@ impl SessionRelay {
 
     /// Start a new relay session, spawning a subprocess and wiring up the
     /// NDJSON → `EventBridge` → Multiplexer pipeline.
+    ///
+    /// When `initial_prompt` is `Some`, Claude is started with `-p` (print mode)
+    /// for headless NDJSON operation. This is the normal path: the deferred spawn
+    /// passes the first user message as the prompt so Claude doesn't enter
+    /// interactive TUI mode.
     pub async fn start_session(
         &self,
         config: RelaySessionConfig,
+        initial_prompt: Option<String>,
     ) -> Result<RelayHandle, RelayError> {
         let session_id = config.session_id.clone();
 
@@ -77,7 +83,7 @@ impl SessionRelay {
         // Spawn the Claude subprocess
         let spawn_config = SpawnConfig {
             working_directory: config.working_directory,
-            prompt: None,
+            prompt: initial_prompt,
             resume_session: config.resume_session,
             model: config.model,
             max_processes: 5,

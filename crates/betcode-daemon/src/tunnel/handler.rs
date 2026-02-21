@@ -1020,13 +1020,33 @@ impl TunnelRequestHandler {
                 .get_mut(request_id)
                 .and_then(|a| a.pending_config.take())
         };
+
+        // When doing a deferred spawn, pass the first UserMessage as the `-p`
+        // prompt so Claude starts in headless print mode (not interactive TUI).
+        // Track whether the message was consumed as a prompt to avoid double-sending.
+        use betcode_proto::v1::agent_request::Request;
+        let initial_prompt = if pending.is_some() {
+            if let Some(Request::Message(ref msg)) = req.request {
+                Some(msg.content.clone())
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
         if let Some(config) = pending {
             debug!(
                 request_id = %request_id,
                 session_id = %sid,
+                has_initial_prompt = initial_prompt.is_some(),
                 "Starting deferred subprocess on first user input"
             );
-            if let Err(e) = self.relay.start_session(config).await {
+            if let Err(e) = self
+                .relay
+                .start_session(config, initial_prompt.clone())
+                .await
+            {
                 error!(
                     request_id = %request_id,
                     session_id = %sid,
@@ -1046,16 +1066,19 @@ impl TunnelRequestHandler {
             }
         }
 
-        use betcode_proto::v1::agent_request::Request;
         match req.request {
             Some(Request::Message(msg)) => {
-                let agent_id = Some(msg.agent_id.as_str()).filter(|s| !s.is_empty());
-                if let Err(e) = self
-                    .relay
-                    .send_user_message(&sid, &msg.content, agent_id)
-                    .await
-                {
-                    warn!(session_id = %sid, error = %e, "Failed to send user message via tunnel");
+                // Skip sending if the message was already passed as the `-p` prompt
+                // during deferred spawn above.
+                if initial_prompt.is_none() {
+                    let agent_id = Some(msg.agent_id.as_str()).filter(|s| !s.is_empty());
+                    if let Err(e) = self
+                        .relay
+                        .send_user_message(&sid, &msg.content, agent_id)
+                        .await
+                    {
+                        warn!(session_id = %sid, error = %e, "Failed to send user message via tunnel");
+                    }
                 }
             }
             Some(Request::Permission(perm)) => {

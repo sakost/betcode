@@ -37,19 +37,27 @@ pub async fn handle_agent_request(
         Some(Request::Message(msg)) => {
             if let Some(sid) = session_id {
                 // Deferred subprocess spawn: start on first UserMessage.
-                if let Some(config) = pending_config.take() {
+                // Pass the message content as `-p` so Claude starts in headless
+                // print mode (not interactive TUI). Skip send_user_message since
+                // the content was already passed as the prompt.
+                let consumed_as_prompt = if let Some(config) = pending_config.take() {
                     info!(session_id = %sid, "Starting deferred subprocess on first user message");
                     ctx.relay
-                        .start_session(config)
+                        .start_session(config, Some(msg.content.clone()))
+                        .await
+                        .map_err(|e| e.to_string())?;
+                    true
+                } else {
+                    false
+                };
+                if !consumed_as_prompt {
+                    let agent_id = Some(msg.agent_id.as_str()).filter(|s| !s.is_empty());
+                    info!(session_id = %sid, content_len = msg.content.len(), "User message");
+                    ctx.relay
+                        .send_user_message(sid, &msg.content, agent_id)
                         .await
                         .map_err(|e| e.to_string())?;
                 }
-                let agent_id = Some(msg.agent_id.as_str()).filter(|s| !s.is_empty());
-                info!(session_id = %sid, content_len = msg.content.len(), "User message");
-                ctx.relay
-                    .send_user_message(sid, &msg.content, agent_id)
-                    .await
-                    .map_err(|e| e.to_string())?;
             } else {
                 warn!("Received message before session start");
             }
