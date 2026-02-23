@@ -6,13 +6,18 @@ use tonic::{Request, Response, Status};
 use tracing::{info, instrument, warn};
 
 use betcode_proto::v1::{
-    GetRepoRequest, GitRepoDetail, ListReposRequest, ListReposResponse, RegisterRepoRequest,
-    ScanReposRequest, UnregisterRepoRequest, UnregisterRepoResponse, UpdateRepoRequest,
-    WorktreeMode, git_repo_service_server::GitRepoService,
+    BranchInfo, CreateBranchRequest, DeleteBranchRequest, DeleteBranchResponse, GetBranchRequest,
+    GetRepoRequest, GitRepoDetail, ListBranchesRequest, ListBranchesResponse, ListReposRequest,
+    ListReposResponse, RegisterRepoRequest, ScanReposRequest, UnregisterRepoRequest,
+    UnregisterRepoResponse, UpdateRepoRequest, WorktreeMode,
+    git_repo_service_server::GitRepoService,
 };
 
 use crate::storage::{Database, DatabaseError, GitRepoParams, GitRepoRow};
 use crate::worktree::WorktreeManager;
+
+/// Timeout for git subprocess commands.
+const GIT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 
 /// `GitRepoService` implementation backed by `Database`.
 #[derive(Clone)]
@@ -79,6 +84,137 @@ fn to_detail(row: GitRepoRow, worktree_count: u32) -> GitRepoDetail {
             seconds: row.last_active,
             nanos: 0,
         }),
+    }
+}
+
+/// Validate a branch name: alphanumeric, hyphens, underscores, slashes, dots.
+/// Rejects path traversal (`..`), leading dashes, and control characters.
+fn validate_branch_name(name: &str) -> Result<(), Status> {
+    if name.is_empty() {
+        return Err(Status::invalid_argument("branch name is required"));
+    }
+    if name.starts_with('-') {
+        return Err(Status::invalid_argument(
+            "branch name cannot start with a dash",
+        ));
+    }
+    if name.contains("..") {
+        return Err(Status::invalid_argument("branch name cannot contain '..'"));
+    }
+    if !name
+        .chars()
+        .all(|c| c.is_alphanumeric() || matches!(c, '-' | '_' | '.' | '/'))
+    {
+        return Err(Status::invalid_argument(format!(
+            "branch name contains invalid characters: {name}"
+        )));
+    }
+    Ok(())
+}
+
+/// Run a git command in the given repo directory and return stdout on success.
+async fn run_git(repo_path: &Path, args: &[&str]) -> Result<String, Status> {
+    let output = tokio::time::timeout(
+        GIT_TIMEOUT,
+        tokio::process::Command::new("git")
+            .args(args)
+            .current_dir(repo_path)
+            .env_remove("GIT_DIR")
+            .env_remove("GIT_INDEX_FILE")
+            .env_remove("GIT_WORK_TREE")
+            .output(),
+    )
+    .await
+    .map_err(|_| {
+        Status::internal(format!(
+            "git command timed out after {}s",
+            GIT_TIMEOUT.as_secs()
+        ))
+    })?
+    .map_err(|e| Status::internal(format!("failed to spawn git: {e}")))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(Status::internal(format!(
+            "git {} failed: {}",
+            args.first().unwrap_or(&""),
+            stderr.trim()
+        )));
+    }
+
+    String::from_utf8(output.stdout)
+        .map_err(|e| Status::internal(format!("git output is not valid UTF-8: {e}")))
+}
+
+/// Separator used in `git for-each-ref --format` output (ASCII Unit Separator).
+const REF_FIELD_SEP: char = '\x1f';
+
+/// Pre-built `git for-each-ref --format` template.
+fn ref_format_str() -> String {
+    let s = REF_FIELD_SEP;
+    format!("%(refname:short){s}%(objectname){s}%(subject){s}%(HEAD){s}%(worktreepath)")
+}
+
+/// Parse a single line of `git for-each-ref` output into a `BranchInfo`.
+///
+/// Expected format (fields separated by `REF_FIELD_SEP`):
+///   refname:short | objectname | subject | HEAD | worktreepath
+fn parse_branch_line(line: &str, is_remote: bool) -> Option<BranchInfo> {
+    let fields: Vec<&str> = line.split(REF_FIELD_SEP).collect();
+    if fields.len() < 4 {
+        return None;
+    }
+    Some(BranchInfo {
+        name: fields[0].to_string(),
+        commit_sha: fields[1].to_string(),
+        commit_message: fields[2].to_string(),
+        is_head: fields[3].trim() == "*",
+        has_worktree: fields.get(4).is_some_and(|wt| !wt.is_empty()),
+        is_remote,
+    })
+}
+
+impl GitRepoServiceImpl {
+    /// Look up a registered repo by ID and return its path.
+    async fn resolve_repo_path(&self, repo_id: &str) -> Result<std::path::PathBuf, Status> {
+        if repo_id.is_empty() {
+            return Err(Status::invalid_argument("repo_id is required"));
+        }
+        let row = self.db.get_git_repo(repo_id).await.map_err(|e| match e {
+            DatabaseError::NotFound(_) => Status::not_found(format!("repo not found: {repo_id}")),
+            _ => Status::internal(e.to_string()),
+        })?;
+        let path = std::path::PathBuf::from(&row.repo_path);
+        if !path.is_dir() {
+            return Err(Status::failed_precondition(format!(
+                "repo directory does not exist: {}",
+                row.repo_path
+            )));
+        }
+        Ok(path)
+    }
+
+    /// Fetch `BranchInfo` for a single branch ref via `git for-each-ref`.
+    async fn get_branch_info(
+        &self,
+        repo_path: &Path,
+        branch_name: &str,
+        is_remote: bool,
+    ) -> Result<BranchInfo, Status> {
+        let ref_prefix = if is_remote {
+            format!("refs/remotes/{branch_name}")
+        } else {
+            format!("refs/heads/{branch_name}")
+        };
+        let fmt = ref_format_str();
+        let stdout = run_git(repo_path, &["for-each-ref", "--format", &fmt, &ref_prefix]).await?;
+        let line = stdout
+            .lines()
+            .next()
+            .ok_or_else(|| Status::not_found(format!("branch not found: {branch_name}")))?;
+        parse_branch_line(line, is_remote).ok_or_else(|| {
+            Status::internal(format!("failed to parse branch info for {branch_name}"))
+        })
     }
 }
 
@@ -405,6 +541,124 @@ impl GitRepoService for GitRepoServiceImpl {
             repos: registered,
             total_count,
         }))
+    }
+
+    #[instrument(skip(self, request), fields(rpc = "ListBranches"))]
+    async fn list_branches(
+        &self,
+        request: Request<ListBranchesRequest>,
+    ) -> Result<Response<ListBranchesResponse>, Status> {
+        let req = request.into_inner();
+        let repo_path = self.resolve_repo_path(&req.repo_id).await?;
+
+        let fmt = ref_format_str();
+
+        let mut branches = Vec::new();
+
+        // Local branches
+        let local_stdout = run_git(
+            &repo_path,
+            &["for-each-ref", "--format", &fmt, "refs/heads/"],
+        )
+        .await?;
+        for line in local_stdout.lines().filter(|l| !l.is_empty()) {
+            if let Some(info) = parse_branch_line(line, false) {
+                branches.push(info);
+            }
+        }
+
+        // Remote branches (optional)
+        if req.include_remote {
+            let remote_stdout = run_git(
+                &repo_path,
+                &["for-each-ref", "--format", &fmt, "refs/remotes/"],
+            )
+            .await?;
+            for line in remote_stdout.lines().filter(|l| !l.is_empty()) {
+                // Skip symbolic remote HEAD refs (e.g. "origin/HEAD")
+                let name = line.split(REF_FIELD_SEP).next().unwrap_or("");
+                if name.ends_with("/HEAD") {
+                    continue;
+                }
+                if let Some(info) = parse_branch_line(line, true) {
+                    branches.push(info);
+                }
+            }
+        }
+
+        Ok(Response::new(ListBranchesResponse { branches }))
+    }
+
+    #[instrument(skip(self, request), fields(rpc = "CreateBranch"))]
+    async fn create_branch(
+        &self,
+        request: Request<CreateBranchRequest>,
+    ) -> Result<Response<BranchInfo>, Status> {
+        let req = request.into_inner();
+        let repo_path = self.resolve_repo_path(&req.repo_id).await?;
+        validate_branch_name(&req.name)?;
+
+        let mut args = vec!["branch", req.name.as_str()];
+        if !req.start_point.is_empty() {
+            // start_point can be a branch name, tag, or commit SHA -- just
+            // reject obviously dangerous values (leading dash, path traversal).
+            if req.start_point.starts_with('-') {
+                return Err(Status::invalid_argument(
+                    "start_point cannot start with a dash",
+                ));
+            }
+            if req.start_point.contains("..") {
+                return Err(Status::invalid_argument("start_point cannot contain '..'"));
+            }
+            args.push(req.start_point.as_str());
+        }
+
+        run_git(&repo_path, &args).await?;
+        info!(name = %req.name, "Branch created via gRPC");
+
+        let info = self.get_branch_info(&repo_path, &req.name, false).await?;
+        Ok(Response::new(info))
+    }
+
+    #[instrument(skip(self, request), fields(rpc = "DeleteBranch"))]
+    async fn delete_branch(
+        &self,
+        request: Request<DeleteBranchRequest>,
+    ) -> Result<Response<DeleteBranchResponse>, Status> {
+        let req = request.into_inner();
+        let repo_path = self.resolve_repo_path(&req.repo_id).await?;
+        validate_branch_name(&req.name)?;
+
+        let flag = if req.force { "-D" } else { "-d" };
+        let result = run_git(&repo_path, &["branch", flag, &req.name]).await;
+
+        match result {
+            Ok(_) => {
+                info!(name = %req.name, force = req.force, "Branch deleted via gRPC");
+                Ok(Response::new(DeleteBranchResponse { deleted: true }))
+            }
+            Err(status) => {
+                // If the branch doesn't exist or is not fully merged, git returns an error
+                let msg = status.message();
+                if msg.contains("not found") || msg.contains("not a valid branch name") {
+                    return Err(Status::not_found(format!("branch not found: {}", req.name)));
+                }
+                Err(status)
+            }
+        }
+    }
+
+    #[instrument(skip(self, request), fields(rpc = "GetBranch"))]
+    async fn get_branch(
+        &self,
+        request: Request<GetBranchRequest>,
+    ) -> Result<Response<BranchInfo>, Status> {
+        let req = request.into_inner();
+        let repo_path = self.resolve_repo_path(&req.repo_id).await?;
+        validate_branch_name(&req.name)?;
+
+        let info = self.get_branch_info(&repo_path, &req.name, false).await?;
+        Ok(Response::new(info))
     }
 }
 
@@ -1086,5 +1340,422 @@ mod tests {
         let repos = resp.into_inner().repos;
         assert_eq!(repos.len(), 1);
         assert_eq!(repos[0].name, "real-repo");
+    }
+
+    // =========================================================================
+    // Branch CRUD tests
+    // =========================================================================
+
+    /// Initialize a real git repo with an initial commit, register it, and
+    /// return the service + repo_id + tempdir.
+    async fn test_service_with_git_repo() -> (GitRepoServiceImpl, String, tempfile::TempDir) {
+        let (svc, tmp) = test_service().await;
+
+        let repo_dir = tmp.path().join("repo");
+        std::fs::create_dir_all(&repo_dir).unwrap();
+
+        // git init + initial commit (clear leaked env vars from pre-commit hooks)
+        let init = std::process::Command::new("git")
+            .args(["init"])
+            .current_dir(&repo_dir)
+            .env_remove("GIT_DIR")
+            .env_remove("GIT_INDEX_FILE")
+            .env_remove("GIT_WORK_TREE")
+            .output()
+            .unwrap();
+        assert!(init.status.success(), "git init failed");
+
+        // Configure git user for commits
+        std::process::Command::new("git")
+            .args(["config", "user.email", "test@test.com"])
+            .current_dir(&repo_dir)
+            .env_remove("GIT_DIR")
+            .output()
+            .unwrap();
+        std::process::Command::new("git")
+            .args(["config", "user.name", "Test"])
+            .current_dir(&repo_dir)
+            .env_remove("GIT_DIR")
+            .output()
+            .unwrap();
+
+        let commit = std::process::Command::new("git")
+            .args(["commit", "--allow-empty", "-m", "initial commit"])
+            .current_dir(&repo_dir)
+            .env_remove("GIT_DIR")
+            .env_remove("GIT_INDEX_FILE")
+            .env_remove("GIT_WORK_TREE")
+            .output()
+            .unwrap();
+        assert!(commit.status.success(), "git commit failed");
+
+        let resp = svc
+            .register_repo(Request::new(RegisterRepoRequest {
+                repo_path: repo_dir.to_string_lossy().into(),
+                name: "repo".into(),
+                worktree_mode: WorktreeMode::Global as i32,
+                local_subfolder: String::new(),
+                custom_path: String::new(),
+                setup_script: String::new(),
+                auto_gitignore: true,
+            }))
+            .await
+            .unwrap();
+
+        let repo_id = resp.into_inner().id;
+        (svc, repo_id, tmp)
+    }
+
+    #[tokio::test]
+    async fn list_branches_returns_initial_branch() {
+        let (svc, repo_id, _tmp) = test_service_with_git_repo().await;
+
+        let resp = svc
+            .list_branches(Request::new(ListBranchesRequest {
+                repo_id,
+                include_remote: false,
+            }))
+            .await
+            .unwrap();
+
+        let branches = resp.into_inner().branches;
+        assert_eq!(branches.len(), 1);
+        // The initial branch is HEAD
+        assert!(branches[0].is_head);
+        assert!(!branches[0].commit_sha.is_empty());
+        assert_eq!(branches[0].commit_message, "initial commit");
+        assert!(!branches[0].is_remote);
+    }
+
+    #[tokio::test]
+    async fn list_branches_empty_repo_id_returns_error() {
+        let (svc, _tmp) = test_service().await;
+
+        let result = svc
+            .list_branches(Request::new(ListBranchesRequest {
+                repo_id: String::new(),
+                include_remote: false,
+            }))
+            .await;
+
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err().code(), tonic::Code::InvalidArgument);
+    }
+
+    #[tokio::test]
+    async fn list_branches_unknown_repo_returns_not_found() {
+        let (svc, _tmp) = test_service().await;
+
+        let result = svc
+            .list_branches(Request::new(ListBranchesRequest {
+                repo_id: "nonexistent".into(),
+                include_remote: false,
+            }))
+            .await;
+
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err().code(), tonic::Code::NotFound);
+    }
+
+    #[tokio::test]
+    async fn create_and_get_branch() {
+        let (svc, repo_id, _tmp) = test_service_with_git_repo().await;
+
+        let resp = svc
+            .create_branch(Request::new(CreateBranchRequest {
+                repo_id: repo_id.clone(),
+                name: "feat/login".into(),
+                start_point: String::new(),
+            }))
+            .await
+            .unwrap();
+
+        let info = resp.into_inner();
+        assert_eq!(info.name, "feat/login");
+        assert!(!info.commit_sha.is_empty());
+        assert!(!info.is_head); // new branch is not checked out
+        assert!(!info.is_remote);
+
+        // Get the branch
+        let get_resp = svc
+            .get_branch(Request::new(GetBranchRequest {
+                repo_id,
+                name: "feat/login".into(),
+            }))
+            .await
+            .unwrap();
+
+        let got = get_resp.into_inner();
+        assert_eq!(got.name, "feat/login");
+        assert_eq!(got.commit_sha, info.commit_sha);
+    }
+
+    #[tokio::test]
+    async fn create_branch_with_start_point() {
+        let (svc, repo_id, tmp) = test_service_with_git_repo().await;
+
+        // Create a second commit so start_point differs from HEAD
+        let repo_dir = tmp.path().join("repo");
+        let commit2 = std::process::Command::new("git")
+            .args(["commit", "--allow-empty", "-m", "second commit"])
+            .current_dir(&repo_dir)
+            .env_remove("GIT_DIR")
+            .env_remove("GIT_INDEX_FILE")
+            .env_remove("GIT_WORK_TREE")
+            .output()
+            .unwrap();
+        assert!(commit2.status.success());
+
+        // Get HEAD SHA (second commit)
+        let head_sha = std::process::Command::new("git")
+            .args(["rev-parse", "HEAD~1"])
+            .current_dir(&repo_dir)
+            .env_remove("GIT_DIR")
+            .output()
+            .unwrap();
+        let first_commit_sha = String::from_utf8(head_sha.stdout).unwrap();
+        let first_commit_sha = first_commit_sha.trim();
+
+        // Create branch from first commit
+        let resp = svc
+            .create_branch(Request::new(CreateBranchRequest {
+                repo_id,
+                name: "from_first".into(),
+                start_point: first_commit_sha.to_string(),
+            }))
+            .await
+            .unwrap();
+
+        let info = resp.into_inner();
+        assert_eq!(info.name, "from_first");
+        assert_eq!(info.commit_sha, first_commit_sha);
+        assert_eq!(info.commit_message, "initial commit");
+    }
+
+    #[tokio::test]
+    async fn create_branch_empty_name_returns_error() {
+        let (svc, repo_id, _tmp) = test_service_with_git_repo().await;
+
+        let result = svc
+            .create_branch(Request::new(CreateBranchRequest {
+                repo_id,
+                name: String::new(),
+                start_point: String::new(),
+            }))
+            .await;
+
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err().code(), tonic::Code::InvalidArgument);
+    }
+
+    #[tokio::test]
+    async fn create_branch_invalid_name_returns_error() {
+        let (svc, repo_id, _tmp) = test_service_with_git_repo().await;
+
+        // Leading dash
+        let result = svc
+            .create_branch(Request::new(CreateBranchRequest {
+                repo_id: repo_id.clone(),
+                name: "-bad".into(),
+                start_point: String::new(),
+            }))
+            .await;
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err().code(), tonic::Code::InvalidArgument);
+
+        // Path traversal
+        let result = svc
+            .create_branch(Request::new(CreateBranchRequest {
+                repo_id: repo_id.clone(),
+                name: "../etc/passwd".into(),
+                start_point: String::new(),
+            }))
+            .await;
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err().code(), tonic::Code::InvalidArgument);
+
+        // Special characters
+        let result = svc
+            .create_branch(Request::new(CreateBranchRequest {
+                repo_id,
+                name: "bad name".into(),
+                start_point: String::new(),
+            }))
+            .await;
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err().code(), tonic::Code::InvalidArgument);
+    }
+
+    #[tokio::test]
+    async fn create_branch_duplicate_returns_error() {
+        let (svc, repo_id, _tmp) = test_service_with_git_repo().await;
+
+        svc.create_branch(Request::new(CreateBranchRequest {
+            repo_id: repo_id.clone(),
+            name: "dup".into(),
+            start_point: String::new(),
+        }))
+        .await
+        .unwrap();
+
+        let result = svc
+            .create_branch(Request::new(CreateBranchRequest {
+                repo_id,
+                name: "dup".into(),
+                start_point: String::new(),
+            }))
+            .await;
+
+        assert!(result.is_err());
+        // git returns non-zero for duplicate branch
+        assert_eq!(result.unwrap_err().code(), tonic::Code::Internal);
+    }
+
+    #[tokio::test]
+    async fn delete_branch() {
+        let (svc, repo_id, _tmp) = test_service_with_git_repo().await;
+
+        // Create a branch to delete
+        svc.create_branch(Request::new(CreateBranchRequest {
+            repo_id: repo_id.clone(),
+            name: "to_delete".into(),
+            start_point: String::new(),
+        }))
+        .await
+        .unwrap();
+
+        let resp = svc
+            .delete_branch(Request::new(DeleteBranchRequest {
+                repo_id: repo_id.clone(),
+                name: "to_delete".into(),
+                force: false,
+            }))
+            .await
+            .unwrap();
+
+        assert!(resp.into_inner().deleted);
+
+        // Branch should no longer exist
+        let result = svc
+            .get_branch(Request::new(GetBranchRequest {
+                repo_id,
+                name: "to_delete".into(),
+            }))
+            .await;
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err().code(), tonic::Code::NotFound);
+    }
+
+    #[tokio::test]
+    async fn delete_branch_invalid_name_returns_error() {
+        let (svc, repo_id, _tmp) = test_service_with_git_repo().await;
+
+        let result = svc
+            .delete_branch(Request::new(DeleteBranchRequest {
+                repo_id,
+                name: String::new(),
+                force: false,
+            }))
+            .await;
+
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err().code(), tonic::Code::InvalidArgument);
+    }
+
+    #[tokio::test]
+    async fn get_branch_nonexistent_returns_not_found() {
+        let (svc, repo_id, _tmp) = test_service_with_git_repo().await;
+
+        let result = svc
+            .get_branch(Request::new(GetBranchRequest {
+                repo_id,
+                name: "no_such_branch".into(),
+            }))
+            .await;
+
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err().code(), tonic::Code::NotFound);
+    }
+
+    #[tokio::test]
+    async fn list_branches_after_create() {
+        let (svc, repo_id, _tmp) = test_service_with_git_repo().await;
+
+        svc.create_branch(Request::new(CreateBranchRequest {
+            repo_id: repo_id.clone(),
+            name: "feat_a".into(),
+            start_point: String::new(),
+        }))
+        .await
+        .unwrap();
+
+        svc.create_branch(Request::new(CreateBranchRequest {
+            repo_id: repo_id.clone(),
+            name: "feat_b".into(),
+            start_point: String::new(),
+        }))
+        .await
+        .unwrap();
+
+        let resp = svc
+            .list_branches(Request::new(ListBranchesRequest {
+                repo_id,
+                include_remote: false,
+            }))
+            .await
+            .unwrap();
+
+        let branches = resp.into_inner().branches;
+        // Initial branch + feat_a + feat_b = 3
+        assert_eq!(branches.len(), 3);
+        let names: Vec<&str> = branches.iter().map(|b| b.name.as_str()).collect();
+        assert!(names.contains(&"feat_a"));
+        assert!(names.contains(&"feat_b"));
+
+        // Exactly one should be HEAD
+        let head_count = branches.iter().filter(|b| b.is_head).count();
+        assert_eq!(head_count, 1);
+    }
+
+    #[tokio::test]
+    async fn get_branch_invalid_name_returns_error() {
+        let (svc, repo_id, _tmp) = test_service_with_git_repo().await;
+
+        let result = svc
+            .get_branch(Request::new(GetBranchRequest {
+                repo_id,
+                name: "-invalid".into(),
+            }))
+            .await;
+
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err().code(), tonic::Code::InvalidArgument);
+    }
+
+    #[tokio::test]
+    async fn create_branch_bad_start_point_returns_error() {
+        let (svc, repo_id, _tmp) = test_service_with_git_repo().await;
+
+        // Leading dash in start_point
+        let result = svc
+            .create_branch(Request::new(CreateBranchRequest {
+                repo_id: repo_id.clone(),
+                name: "ok_name".into(),
+                start_point: "-bad".into(),
+            }))
+            .await;
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err().code(), tonic::Code::InvalidArgument);
+
+        // Path traversal in start_point
+        let result = svc
+            .create_branch(Request::new(CreateBranchRequest {
+                repo_id,
+                name: "ok_name2".into(),
+                start_point: "../../etc".into(),
+            }))
+            .await;
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err().code(), tonic::Code::InvalidArgument);
     }
 }

@@ -20,22 +20,22 @@ use betcode_proto::v1::worktree_service_server::WorktreeService as WorktreeServi
 use betcode_proto::v1::{
     AddPluginRequest, AgentRequest, CancelSubagentRequest, CancelTurnRequest, CancelTurnResponse,
     ClearSessionGrantsRequest, ClearSessionGrantsResponse, CompactSessionRequest,
-    CompactSessionResponse, CreateOrchestrationRequest, CreateWorktreeRequest,
-    DeleteSessionRequest, DeleteSessionResponse, DisablePluginRequest, EnablePluginRequest,
-    EncryptedPayload, ExecuteServiceCommandRequest, FrameType, GetCommandRegistryRequest,
-    GetIssueRequest, GetMergeRequestRequest, GetPermissionsRequest, GetPipelineRequest,
-    GetPluginStatusRequest, GetRepoRequest, GetSettingsRequest, GetVersionRequest,
-    GetWorktreeRequest, InputLockRequest, InputLockResponse, KeyExchangeRequest,
-    KeyExchangeResponse, ListAgentsRequest, ListIssuesRequest, ListMcpServersRequest,
-    ListMergeRequestsRequest, ListPathRequest, ListPipelinesRequest, ListPluginsRequest,
-    ListReposRequest, ListSessionGrantsRequest, ListSessionGrantsResponse, ListSessionsRequest,
-    ListSessionsResponse, ListSubagentsRequest, ListWorktreesRequest, NegotiateRequest,
-    RegisterRepoRequest, RemovePluginRequest, RemoveWorktreeRequest, RenameSessionRequest,
-    RenameSessionResponse, ResumeSessionRequest, RevokeAutoApproveRequest, ScanReposRequest,
-    SendToSubagentRequest, SessionSummary, SetSessionGrantRequest, SetSessionGrantResponse,
-    SpawnSubagentRequest, StreamPayload, TunnelError, TunnelErrorCode, TunnelFrame,
-    UnregisterRepoRequest, UpdateRepoRequest, UpdateSettingsRequest, WatchOrchestrationRequest,
-    WatchSubagentRequest,
+    CompactSessionResponse, CreateBranchRequest, CreateOrchestrationRequest, CreateWorktreeRequest,
+    DeleteBranchRequest, DeleteSessionRequest, DeleteSessionResponse, DisablePluginRequest,
+    EnablePluginRequest, EncryptedPayload, ExecuteServiceCommandRequest, FrameType,
+    GetBranchRequest, GetCommandRegistryRequest, GetIssueRequest, GetMergeRequestRequest,
+    GetPermissionsRequest, GetPipelineRequest, GetPluginStatusRequest, GetRepoRequest,
+    GetSettingsRequest, GetVersionRequest, GetWorktreeRequest, InputLockRequest, InputLockResponse,
+    KeyExchangeRequest, KeyExchangeResponse, ListAgentsRequest, ListBranchesRequest,
+    ListIssuesRequest, ListMcpServersRequest, ListMergeRequestsRequest, ListPathRequest,
+    ListPipelinesRequest, ListPluginsRequest, ListReposRequest, ListSessionGrantsRequest,
+    ListSessionGrantsResponse, ListSessionsRequest, ListSessionsResponse, ListSubagentsRequest,
+    ListWorktreesRequest, NegotiateRequest, RegisterRepoRequest, RemovePluginRequest,
+    RemoveWorktreeRequest, RenameSessionRequest, RenameSessionResponse, ResumeSessionRequest,
+    RevokeAutoApproveRequest, ScanReposRequest, SendToSubagentRequest, SessionSummary,
+    SetSessionGrantRequest, SetSessionGrantResponse, SpawnSubagentRequest, StreamPayload,
+    TunnelError, TunnelErrorCode, TunnelFrame, UnregisterRepoRequest, UpdateRepoRequest,
+    UpdateSettingsRequest, WatchOrchestrationRequest, WatchSubagentRequest,
 };
 
 use betcode_crypto::{CryptoSession, IdentityKeyPair, KeyExchangeState};
@@ -52,16 +52,17 @@ use crate::storage::Database;
 // and any other in-crate consumers continue to see them at the same path.
 pub use betcode_proto::methods::{
     METHOD_ADD_PLUGIN, METHOD_CANCEL_SUBAGENT, METHOD_CANCEL_TURN, METHOD_CLEAR_SESSION_GRANTS,
-    METHOD_COMPACT_SESSION, METHOD_CONVERSE, METHOD_CREATE_ORCHESTRATION, METHOD_CREATE_WORKTREE,
-    METHOD_DELETE_SESSION, METHOD_DISABLE_PLUGIN, METHOD_ENABLE_PLUGIN, METHOD_EXCHANGE_KEYS,
-    METHOD_EXECUTE_SERVICE_COMMAND, METHOD_GET_COMMAND_REGISTRY, METHOD_GET_ISSUE,
-    METHOD_GET_MERGE_REQUEST, METHOD_GET_PERMISSIONS, METHOD_GET_PIPELINE,
-    METHOD_GET_PLUGIN_STATUS, METHOD_GET_REPO, METHOD_GET_SETTINGS, METHOD_GET_VERSION,
-    METHOD_GET_WORKTREE, METHOD_LIST_AGENTS, METHOD_LIST_ISSUES, METHOD_LIST_MCP_SERVERS,
-    METHOD_LIST_MERGE_REQUESTS, METHOD_LIST_PATH, METHOD_LIST_PIPELINES, METHOD_LIST_PLUGINS,
-    METHOD_LIST_REPOS, METHOD_LIST_SESSION_GRANTS, METHOD_LIST_SESSIONS, METHOD_LIST_SUBAGENTS,
-    METHOD_LIST_WORKTREES, METHOD_NEGOTIATE_CAPABILITIES, METHOD_REGISTER_REPO,
-    METHOD_REMOVE_PLUGIN, METHOD_REMOVE_WORKTREE, METHOD_RENAME_SESSION, METHOD_REQUEST_INPUT_LOCK,
+    METHOD_COMPACT_SESSION, METHOD_CONVERSE, METHOD_CREATE_BRANCH, METHOD_CREATE_ORCHESTRATION,
+    METHOD_CREATE_WORKTREE, METHOD_DELETE_BRANCH, METHOD_DELETE_SESSION, METHOD_DISABLE_PLUGIN,
+    METHOD_ENABLE_PLUGIN, METHOD_EXCHANGE_KEYS, METHOD_EXECUTE_SERVICE_COMMAND, METHOD_GET_BRANCH,
+    METHOD_GET_COMMAND_REGISTRY, METHOD_GET_ISSUE, METHOD_GET_MERGE_REQUEST,
+    METHOD_GET_PERMISSIONS, METHOD_GET_PIPELINE, METHOD_GET_PLUGIN_STATUS, METHOD_GET_REPO,
+    METHOD_GET_SETTINGS, METHOD_GET_VERSION, METHOD_GET_WORKTREE, METHOD_LIST_AGENTS,
+    METHOD_LIST_BRANCHES, METHOD_LIST_ISSUES, METHOD_LIST_MCP_SERVERS, METHOD_LIST_MERGE_REQUESTS,
+    METHOD_LIST_PATH, METHOD_LIST_PIPELINES, METHOD_LIST_PLUGINS, METHOD_LIST_REPOS,
+    METHOD_LIST_SESSION_GRANTS, METHOD_LIST_SESSIONS, METHOD_LIST_SUBAGENTS, METHOD_LIST_WORKTREES,
+    METHOD_NEGOTIATE_CAPABILITIES, METHOD_REGISTER_REPO, METHOD_REMOVE_PLUGIN,
+    METHOD_REMOVE_WORKTREE, METHOD_RENAME_SESSION, METHOD_REQUEST_INPUT_LOCK,
     METHOD_RESUME_SESSION, METHOD_REVOKE_AUTO_APPROVE, METHOD_SCAN_REPOS, METHOD_SEND_TO_SUBAGENT,
     METHOD_SET_SESSION_GRANT, METHOD_SPAWN_SUBAGENT, METHOD_UNREGISTER_REPO, METHOD_UPDATE_REPO,
     METHOD_UPDATE_SETTINGS, METHOD_WATCH_ORCHESTRATION, METHOD_WATCH_SUBAGENT,
@@ -434,7 +435,11 @@ impl TunnelRequestHandler {
             | METHOD_LIST_REPOS
             | METHOD_GET_REPO
             | METHOD_UPDATE_REPO
-            | METHOD_SCAN_REPOS => {
+            | METHOD_SCAN_REPOS
+            | METHOD_LIST_BRANCHES
+            | METHOD_CREATE_BRANCH
+            | METHOD_DELETE_BRANCH
+            | METHOD_GET_BRANCH => {
                 self.dispatch_repo_rpc(&request_id, payload.method.as_str(), &data, relay_forwarded)
                     .await
             }
@@ -2004,6 +2009,7 @@ impl TunnelRequestHandler {
         }
     }
 
+    #[allow(clippy::too_many_lines)]
     async fn dispatch_repo_rpc(
         &self,
         request_id: &str,
@@ -2072,6 +2078,42 @@ impl TunnelRequestHandler {
                 relay_forwarded,
                 ScanReposRequest,
                 scan_repos
+            ),
+            METHOD_LIST_BRANCHES => dispatch_rpc!(
+                self,
+                svc,
+                request_id,
+                data,
+                relay_forwarded,
+                ListBranchesRequest,
+                list_branches
+            ),
+            METHOD_CREATE_BRANCH => dispatch_rpc!(
+                self,
+                svc,
+                request_id,
+                data,
+                relay_forwarded,
+                CreateBranchRequest,
+                create_branch
+            ),
+            METHOD_DELETE_BRANCH => dispatch_rpc!(
+                self,
+                svc,
+                request_id,
+                data,
+                relay_forwarded,
+                DeleteBranchRequest,
+                delete_branch
+            ),
+            METHOD_GET_BRANCH => dispatch_rpc!(
+                self,
+                svc,
+                request_id,
+                data,
+                relay_forwarded,
+                GetBranchRequest,
+                get_branch
             ),
             _ => vec![Self::error_response(
                 request_id,

@@ -138,6 +138,18 @@ pub const METHOD_UPDATE_REPO: &str = "GitRepoService/UpdateRepo";
 /// `GitRepoService/ScanRepos`
 pub const METHOD_SCAN_REPOS: &str = "GitRepoService/ScanRepos";
 
+/// `GitRepoService/ListBranches`
+pub const METHOD_LIST_BRANCHES: &str = "GitRepoService/ListBranches";
+
+/// `GitRepoService/CreateBranch`
+pub const METHOD_CREATE_BRANCH: &str = "GitRepoService/CreateBranch";
+
+/// `GitRepoService/DeleteBranch`
+pub const METHOD_DELETE_BRANCH: &str = "GitRepoService/DeleteBranch";
+
+/// `GitRepoService/GetBranch`
+pub const METHOD_GET_BRANCH: &str = "GitRepoService/GetBranch";
+
 // ---------------------------------------------------------------------------
 // ConfigService
 // ---------------------------------------------------------------------------
