@@ -5,11 +5,7 @@ pub fn systemd_unit(config: &RelaySetupConfig) -> String {
     let domain = &config.domain;
     let port = config.addr.port();
 
-    let addr_flag = if port == 443 {
-        String::new()
-    } else {
-        format!(" \\\n  --addr {}", config.addr)
-    };
+    let addr_flag = format!(" \\\n  --addr {}", config.addr);
 
     let cap_lines = if port < 1024 {
         "AmbientCapabilities=CAP_NET_BIND_SERVICE\nCapabilityBoundingSet=CAP_NET_BIND_SERVICE"
@@ -171,12 +167,12 @@ mod tests {
     }
 
     #[test]
-    fn systemd_unit_default_port_omits_addr() {
+    fn systemd_unit_default_port_includes_addr() {
         let config = test_config("0.0.0.0:443".parse().unwrap());
         let unit = systemd_unit(&config);
         assert!(
-            !unit.contains("--addr"),
-            "default port should not emit --addr"
+            unit.contains("--addr 0.0.0.0:443"),
+            "unit must always contain --addr (relay binary defaults to 8443)"
         );
     }
 

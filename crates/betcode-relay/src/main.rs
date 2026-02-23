@@ -43,7 +43,7 @@ use betcode_relay::tls::TlsMode;
 )]
 struct Args {
     /// Address to listen on.
-    #[arg(long, default_value = "0.0.0.0:8443")]
+    #[arg(long, default_value = "0.0.0.0:443")]
     addr: SocketAddr,
 
     /// Path to `SQLite` database file.
